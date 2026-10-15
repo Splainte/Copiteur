@@ -36,7 +36,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis",
+      "dmg",
+      "app"
+    ],
     "externalBin": [
       "binaries/rclone"
     ],
