@@ -655,7 +655,7 @@ export function humanConnError(raw: string): string {
       s.includes("no route to host") ||
       s.includes("network is down"))
   )
-    return "macOS empêche Copiteur d'accéder au réseau local. Ouvrez Réglages Système > Confidentialité et sécurité > Réseau local, activez Copiteur (ou désactivez puis réactivez-le), puis réessayez. Si c'est déjà le cas, vérifiez que le VPN est connecté et le serveur allumé.";
+    return "Serveur injoignable depuis ce Mac : vérifiez que le VPN est connecté et que le serveur (ou son VPN) est bien démarré. Si le serveur répond par ailleurs, macOS bloque peut-être Copiteur : Réglages Système > Confidentialité et sécurité > Réseau local, activez Copiteur.";
   if (s.includes("identité du serveur non vérifiée"))
     return "Identité du serveur non vérifiée : reconnectez-vous et acceptez son empreinte.";
   if (
