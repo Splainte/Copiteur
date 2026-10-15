@@ -39,10 +39,10 @@ pub struct Rclone {
     base: Mutex<String>,
     auth: Mutex<Auth>,
     http: reqwest::Client,
-    /// Binaire + fichier de config, memorises au premier demarrage : sans eux on
-    /// ne saurait pas RELANCER le daemon s'il meurt (port pris au vol, crash,
-    /// process tue de l'exterieur).
-    paths: Mutex<Option<(PathBuf, PathBuf)>>,
+    /// Binaire rclone, memorise au premier demarrage : sans lui on ne saurait
+    /// pas RELANCER le daemon s'il meurt (port pris au vol, crash, process tue
+    /// de l'exterieur).
+    paths: Mutex<Option<PathBuf>>,
     /// Derniere erreur de lancement, pour dire POURQUOI le moteur est absent au
     /// lieu d'un laconique « rclone n'est pas démarré » impossible a diagnostiquer.
     error: Mutex<String>,
@@ -156,19 +156,27 @@ fn resolve_rclone(app: &AppHandle) -> PathBuf {
         return dev;
     }
 
-    // 3. Repli : nom court (resolu par l'OS via PATH).
-    PathBuf::from(exe)
+    // 3. Developpement uniquement : nom court (resolu par l'OS via PATH). En
+    //    version livree, jamais : un `rclone` quelconque trouve dans le PATH
+    //    (vieux, ou depose la par un tiers) piloterait les transferts. Sans
+    //    sidecar, on echoue en nommant le binaire attendu.
+    if cfg!(debug_assertions) {
+        PathBuf::from(exe)
+    } else {
+        dirs.first()
+            .map(|d| d.join(&sidecar_name))
+            .unwrap_or_else(|| PathBuf::from(sidecar_name))
+    }
 }
 
-/// Chemin du fichier de config rclone (remotes memorises), dans le dossier de
-/// config de l'app. Cree le dossier au besoin.
-fn config_path(app: &AppHandle) -> PathBuf {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .unwrap_or_else(|_| std::env::temp_dir());
-    let _ = std::fs::create_dir_all(&dir);
-    dir.join("rclone.conf")
+/// La config rclone vit desormais en MEMOIRE (`--config ""`) : le remote du
+/// serveur courant, mot de passe compris, n'est plus jamais ecrit sur le disque.
+/// Les versions precedentes l'ecrivaient dans `rclone.conf` (mot de passe
+/// « obscurci », c.-a-d. reversible par n'importe qui) : on efface ce reliquat.
+fn forget_legacy_config(app: &AppHandle) {
+    if let Ok(dir) = app.path().app_config_dir() {
+        let _ = std::fs::remove_file(dir.join("rclone.conf"));
+    }
 }
 
 /// Reserve un port TCP libre sur la loopback en GARDANT le listener ouvert.
@@ -197,13 +205,14 @@ fn free_port() -> u16 {
 
 /// Construit la commande du daemon RC. Utilisee par `start` ET par les tests :
 /// si l'authentification disparaissait d'ici, les tests le verraient.
-fn rcd_command(bin: &Path, addr: &str, conf: &Path, auth: &Auth) -> Command {
+fn rcd_command(bin: &Path, addr: &str, auth: &Auth) -> Command {
     let mut cmd = Command::new(bin);
+    // `--config ""` = config en memoire : rien n'est ecrit sur le disque.
     cmd.arg("rcd")
         .arg("--rc-addr")
         .arg(addr)
         .arg("--config")
-        .arg(conf);
+        .arg("");
 
     // Le secret passe par l'ENVIRONNEMENT (rclone lit RCLONE_RC_USER/PASS),
     // JAMAIS en argument : la ligne de commande d'un process est lisible par
@@ -229,7 +238,7 @@ fn spawn_daemon(state: &Rclone) -> Result<(), String> {
     if state.stopping.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("Copiteur est en train de se fermer".into());
     }
-    let Some((bin, conf)) = lock(&state.paths).clone() else {
+    let Some(bin) = lock(&state.paths).clone() else {
         return Err("rclone n'a pas été initialisé".into());
     };
 
@@ -239,7 +248,7 @@ fn spawn_daemon(state: &Rclone) -> Result<(), String> {
         user: "copiteur".into(),
         pass: random_secret(),
     };
-    let mut cmd = rcd_command(&bin, &addr, &conf, &auth);
+    let mut cmd = rcd_command(&bin, &addr, &auth);
 
     // Le port n'est relache qu'ici, juste avant le spawn : la fenetre pendant
     // laquelle un autre process pourrait le prendre est reduite au minimum.
@@ -289,7 +298,8 @@ fn ensure_alive(state: &Rclone) -> Result<bool, String> {
 /// des le premier appel, et `ensure_alive` retentera.
 pub fn start(app: &AppHandle) {
     let state = app.state::<Rclone>();
-    *lock(&state.paths) = Some((resolve_rclone(app), config_path(app)));
+    forget_legacy_config(app);
+    *lock(&state.paths) = Some(resolve_rclone(app));
     let _ = spawn_daemon(&state);
 }
 
@@ -343,7 +353,111 @@ async fn rc_post(
     Err(format!("rclone injoignable : {last}"))
 }
 
-/// Passe-plat generique vers l'API RC de rclone.
+// ------------------------------------------------------------------
+//  Liste blanche de l'API RC
+// ------------------------------------------------------------------
+//
+// L'API RC de rclone peut bien plus que ce dont l'app a besoin : `core/command`
+// lance n'importe quelle commande rclone, et le backend SFTP a une option `ssh`
+// qui EXECUTE un programme externe — via `config/create`, `options/set` ou une
+// chaine de connexion a la volee (":sftp,ssh=...:" passee en `fs`). Le front ne
+// devrait jamais envoyer ca, mais si une faille d'affichage permettait un jour
+// d'injecter du code dans l'interface, ce passe-plat en ferait une execution
+// de programme sur le poste. On ne laisse donc passer que ce dont l'app se sert,
+// sous la forme ou elle s'en sert.
+
+/// Nom du remote du serveur courant (cf. `REMOTE` dans `files.ts`).
+const REMOTE_NAME: &str = "serveur";
+
+/// Methodes RC utilisees par le front. Tout le reste est refuse.
+const ALLOWED_METHODS: &[&str] = &[
+    "config/create",
+    "core/stats",
+    "core/version",
+    "fs/cache/clear",
+    "job/status",
+    "job/stop",
+    "operations/copyfile",
+    "operations/deletefile",
+    "operations/list",
+    "operations/mkdir",
+    "operations/movefile",
+    "operations/purge",
+    "operations/size",
+    "operations/stat",
+    "options/set",
+    "sync/move",
+];
+
+/// Parametres SFTP que le front a le droit de poser sur le remote. Surtout pas
+/// `ssh` (programme externe), `key_file`/`known_hosts_file` (chemins
+/// arbitraires), `md5sum_command`/`sha1sum_command` (commandes distantes).
+const ALLOWED_SFTP_PARAMS: &[&str] =
+    &["host", "user", "pass", "port", "concurrency", "disable_hashcheck"];
+
+/// Un `fs` acceptable : le remote du serveur (`serveur:...`) ou un chemin local
+/// SANS syntaxe de remote. rclone interprete `xxx:` (avant le premier
+/// separateur) comme un remote et `:backend,opt=...:` comme un remote cree a
+/// la volee, avec des options arbitraires — c'est ce qu'il faut barrer. Seule
+/// exception : la lettre de lecteur Windows (`C:`), que rclone traite en local.
+fn is_safe_fs(fs: &str) -> bool {
+    if let Some(rest) = fs.strip_prefix(REMOTE_NAME) {
+        return rest.starts_with(':');
+    }
+    let head = fs.split(['/', '\\']).next().unwrap_or("");
+    if !head.contains(':') {
+        return true;
+    }
+    let b = head.as_bytes();
+    b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+}
+
+/// Verifie qu'un appel RC est l'un de ceux que l'app emet. Rend la raison du
+/// refus, journalisee cote front comme n'importe quelle erreur rclone.
+fn check_call(method: &str, params: &Value) -> Result<(), String> {
+    if !ALLOWED_METHODS.contains(&method) {
+        return Err(format!("appel rclone refusé : {method}"));
+    }
+    if let Some(obj) = params.as_object() {
+        for key in ["fs", "srcFs", "dstFs"] {
+            if let Some(v) = obj.get(key) {
+                let ok = v.as_str().is_some_and(is_safe_fs);
+                if !ok {
+                    return Err(format!("appel rclone refusé : {key} non autorisé"));
+                }
+            }
+        }
+    }
+    match method {
+        "config/create" => {
+            let name = params.get("name").and_then(Value::as_str);
+            let kind = params.get("type").and_then(Value::as_str);
+            if name != Some(REMOTE_NAME) || kind != Some("sftp") {
+                return Err("appel rclone refusé : remote non autorisé".into());
+            }
+            let Some(p) = params.get("parameters").and_then(Value::as_object) else {
+                return Err("appel rclone refusé : paramètres manquants".into());
+            };
+            if let Some(bad) = p.keys().find(|k| !ALLOWED_SFTP_PARAMS.contains(&k.as_str())) {
+                return Err(format!("appel rclone refusé : paramètre « {bad} »"));
+            }
+        }
+        // Le front ne regle que le bloc `main` (transferts) — jamais les options
+        // d'un backend (ex. `sftp.ssh`) ni celles du serveur RC lui-meme.
+        "options/set" => {
+            let only_main = params
+                .as_object()
+                .is_some_and(|o| o.keys().all(|k| k == "main"));
+            if !only_main {
+                return Err("appel rclone refusé : options non autorisées".into());
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Passe-plat vers l'API RC de rclone, restreint par `check_call`.
 /// `method` = chemin RC (ex. "core/version", "operations/list").
 /// `params` = corps JSON de la requete.
 #[tauri::command]
@@ -353,6 +467,7 @@ pub async fn rc_call(
     method: String,
     params: Value,
 ) -> Result<Value, String> {
+    check_call(&method, &params)?;
     // On relache les verrous avant d'attendre le reseau (ils ne sont pas Send).
     let (base, auth, http, err, relance) = {
         // Le daemon a pu mourir depuis le demarrage : on le relance au besoin.
@@ -416,11 +531,9 @@ mod tests {
             user: "copiteur".into(),
             pass: random_secret(),
         };
-        let conf = std::env::temp_dir().join("copiteur-test-rclone.conf");
-
         // On lance le daemon avec la commande CONSTRUITE PAR L'APP : si
         // l'authentification en disparaissait, ce test tomberait.
-        let mut child = rcd_command(&bin, &addr, &conf, &auth)
+        let mut child = rcd_command(&bin, &addr, &auth)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -489,10 +602,8 @@ mod tests {
             bin.exists(),
             "binaire rclone absent ({bin:?}) : lancer `node scripts/prepare-bins.mjs`"
         );
-        let conf = std::env::temp_dir().join("copiteur-test-relance.conf");
-
         let st = Rclone::default();
-        *lock(&st.paths) = Some((bin, conf));
+        *lock(&st.paths) = Some(bin);
         spawn_daemon(&st).expect("premier lancement");
         let premiere = lock(&st.base).clone();
         assert!(!premiere.is_empty());
@@ -516,10 +627,7 @@ mod tests {
     #[test]
     fn l_echec_de_lancement_est_conserve() {
         let st = Rclone::default();
-        *lock(&st.paths) = Some((
-            PathBuf::from("rclone-qui-n-existe-pas-copiteur"),
-            std::env::temp_dir().join("copiteur-test-absent.conf"),
-        ));
+        *lock(&st.paths) = Some(PathBuf::from("rclone-qui-n-existe-pas-copiteur"));
         let err = spawn_daemon(&st).expect_err("un binaire absent doit echouer");
         assert!(err.contains("rclone-qui-n-existe-pas-copiteur"), "{err}");
         assert_eq!(*lock(&st.error), err, "la cause doit rester dans l'etat");
@@ -531,10 +639,7 @@ mod tests {
     #[test]
     fn la_fermeture_interdit_toute_relance() {
         let st = Rclone::default();
-        *lock(&st.paths) = Some((
-            rclone_bin(),
-            std::env::temp_dir().join("copiteur-test-fermeture.conf"),
-        ));
+        *lock(&st.paths) = Some(rclone_bin());
         st.shutdown();
         assert!(ensure_alive(&st).is_err(), "aucune relance apres shutdown");
         assert!(lock(&st.child).is_none());
@@ -558,12 +663,7 @@ mod tests {
             user: "copiteur".into(),
             pass: random_secret(),
         };
-        let cmd = rcd_command(
-            Path::new("rclone"),
-            "127.0.0.1:5572",
-            Path::new("rclone.conf"),
-            &auth,
-        );
+        let cmd = rcd_command(Path::new("rclone"), "127.0.0.1:5572", &auth);
 
         let args: Vec<String> = cmd
             .get_args()
@@ -585,5 +685,65 @@ mod tests {
             has_secret_in_env,
             "le secret doit etre transmis par l'environnement"
         );
+    }
+
+    /// Ce que l'app emet vraiment doit passer.
+    #[test]
+    fn la_liste_blanche_laisse_passer_les_appels_de_l_app() {
+        use serde_json::json;
+        let ok = [
+            ("core/version", json!({})),
+            ("operations/list", json!({ "fs": "serveur:", "remote": "a/b" })),
+            ("operations/list", json!({ "fs": "serveur:/share/x", "remote": "" })),
+            ("operations/list", json!({ "fs": "/home/alice/Rushs", "remote": "" })),
+            ("operations/list", json!({ "fs": "C:\\Users\\alice", "remote": "" })),
+            ("operations/list", json!({ "fs": "\\\\nas\\partage", "remote": "" })),
+            ("operations/copyfile", json!({ "srcFs": "serveur:/a", "srcRemote": "x:y.mp4", "dstFs": "D:\\", "dstRemote": "x.mp4" })),
+            ("sync/move", json!({ "srcFs": "/a", "dstFs": "/b/c:d" })),
+            ("options/set", json!({ "main": { "Inplace": true } })),
+            ("config/create", json!({ "name": "serveur", "type": "sftp", "parameters": { "host": "h", "user": "u", "pass": "p", "port": "22", "concurrency": "64", "disable_hashcheck": "true" }, "opt": { "obscure": true } })),
+        ];
+        for (m, p) in ok {
+            assert!(check_call(m, &p).is_ok(), "{m} {p} devrait passer : {:?}", check_call(m, &p));
+        }
+    }
+
+    /// Tout ce qui permettrait d'executer un programme ou de sortir du cadre
+    /// doit etre refuse AVANT d'atteindre rclone.
+    #[test]
+    fn la_liste_blanche_bloque_les_appels_dangereux() {
+        use serde_json::json;
+        let ko = [
+            ("core/command", json!({ "command": "ls" })),
+            ("config/dump", json!({})),
+            ("backend/command", json!({})),
+            ("rc/noop", json!({})),
+            // Remote a la volee avec programme externe.
+            ("operations/list", json!({ "fs": ":sftp,host=h,ssh='calc.exe':", "remote": "" })),
+            ("operations/list", json!({ "fs": "serveur,ssh='calc.exe':", "remote": "" })),
+            ("operations/list", json!({ "fs": "autre:", "remote": "" })),
+            ("operations/copyfile", json!({ "srcFs": "/a", "dstFs": ":local:" })),
+            ("operations/list", json!({ "fs": 3, "remote": "" })),
+            // Parametres SFTP qui executent une commande ou lisent un fichier.
+            ("config/create", json!({ "name": "serveur", "type": "sftp", "parameters": { "host": "h", "ssh": "calc.exe" } })),
+            ("config/create", json!({ "name": "serveur", "type": "sftp", "parameters": { "host": "h", "md5sum_command": "rm -rf /" } })),
+            ("config/create", json!({ "name": "serveur", "type": "local", "parameters": {} })),
+            ("config/create", json!({ "name": "autre", "type": "sftp", "parameters": { "host": "h" } })),
+            ("options/set", json!({ "sftp": { "ssh": "calc.exe" } })),
+            ("options/set", json!({ "main": {}, "rc": { "NoAuth": true } })),
+        ];
+        for (m, p) in ko {
+            assert!(check_call(m, &p).is_err(), "{m} {p} devrait etre refuse");
+        }
+    }
+
+    /// La config rclone (mot de passe du serveur compris) reste en memoire.
+    #[test]
+    fn la_config_rclone_n_est_jamais_ecrite_sur_le_disque() {
+        let auth = Auth { user: "copiteur".into(), pass: random_secret() };
+        let cmd = rcd_command(Path::new("rclone"), "127.0.0.1:5572", &auth);
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let i = args.iter().position(|a| a == "--config").expect("--config present");
+        assert_eq!(args.get(i + 1).map(String::as_str), Some(""), "{args:?}");
     }
 }
