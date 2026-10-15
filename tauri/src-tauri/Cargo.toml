@@ -36,6 +36,10 @@ getrandom = "0.3"
 # Materiaux natifs : Mica (Windows 11) + Vibrancy/NSVisualEffectView (macOS).
 window-vibrancy = "0.6"
 
+# Lecture de la cle d'hote d'un serveur SFTP (verification d'identite, cf.
+# hostkeys.rs). `ring` plutot qu'aws-lc-rs : pas de cmake/nasm a la compilation.
+russh = { version = "0.64", default-features = false, features = ["ring", "rsa"] }
+
 # macOS : messages Obj-C dynamiques pour stabiliser le contenu au resize/zoom.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

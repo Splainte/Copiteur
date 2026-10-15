@@ -1,0 +1,10 @@
+# Configuration de `cargo audit`.
+[advisories]
+ignore = [
+    # « Marvin attack » (crate rsa) : fuite par minutage lors d'une operation
+    # avec une cle PRIVEE RSA (dechiffrement/signature). Copiteur n'en possede
+    # aucune : russh ne sert qu'a LIRE la cle publique d'un serveur (cf.
+    # src/hostkeys.rs). La feature `rsa` reste necessaire pour joindre les
+    # serveurs qui n'ont qu'une cle RSA.
+    "RUSTSEC-2023-0071",
+]

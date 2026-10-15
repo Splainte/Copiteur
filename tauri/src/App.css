@@ -1179,8 +1179,10 @@
   background: color-mix(in srgb, var(--cp-accent) 18%, transparent);
 }
 
-/* Bouton de confirmation destructif. */
-.btn-danger {
+/* Bouton de confirmation destructif. Specificite renforcee : `.btn-accent`,
+   declare plus bas, repeignait sinon le bouton en bleu. */
+.btn-danger,
+.btn-accent.btn-danger {
   background: var(--cp-err);
 }
 
@@ -1265,6 +1267,32 @@
 }
 .btn-accent:hover {
   filter: brightness(1.08);
+}
+
+/* ---- Identite du serveur (empreinte de cle d'hote) ---------------------- */
+.modal-hostkey {
+  width: min(500px, 92vw);
+}
+.hostkey-label {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--cp-text-muted);
+}
+.hostkey-fp {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--cp-radius);
+  border: 1px solid var(--cp-stroke);
+  background: var(--cp-control);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  user-select: text;
+}
+.hostkey-fp.is-old {
+  text-decoration: line-through;
+  color: var(--cp-text-muted);
 }
 
 /* ---- Fenetre parametres ------------------------------------------------- */

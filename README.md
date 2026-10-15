@@ -141,6 +141,12 @@ lancer un programme par rclone (option SFTP `ssh`, remotes créés à la volée 
 `core/command`…). Même une faille d'affichage future ne donnerait pas d'exécution de code.
 Couvert par des tests.
 
+**L'identité de chaque serveur est vérifiée**, comme dans FileZilla. À la première connexion,
+Copiteur affiche l'empreinte de la clé du serveur et la mémorise si on l'accepte ; si elle
+change ensuite, une alerte s'affiche avant tout envoi du mot de passe. rclone est configuré
+pour exiger la clé mémorisée (`known_hosts_file`) : un intrus qui s'intercalerait entre la
+vérification et la connexion serait refusé. Testé contre un vrai serveur SSH.
+
 **La config rclone reste en mémoire** (`--config ""`) : le mot de passe du serveur courant
 n'est jamais écrit dans un `rclone.conf`.
 
