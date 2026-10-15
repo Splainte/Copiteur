@@ -26,13 +26,18 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            git tag -l --format='%(contents)' "$TAG" > notes.md
-            gh release create "$TAG" --draft --verify-tag \
-              --title "Copiteur ${TAG#v}" --notes-file notes.md
-          fi
+          # Brouillon déjà là (workflow relancé) : on le reprend.
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
             --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -1)
+          if [ -z "$id" ]; then
+            git tag -l --format='%(contents)' "$TAG" > notes.md
+            # L'id vient de la réponse de création : relire la liste juste après
+            # ne montre pas toujours le nouveau brouillon (délai de GitHub).
+            id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$TAG" -f name="Copiteur ${TAG#v}" \
+              -F draft=true -F body=@notes.md --jq .id)
+          fi
+          test -n "$id" || { echo "Release introuvable"; exit 1; }
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
   build:
