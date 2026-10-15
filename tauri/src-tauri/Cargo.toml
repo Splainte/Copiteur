@@ -40,8 +40,16 @@ window-vibrancy = "0.6"
 # hostkeys.rs). `ring` plutot qu'aws-lc-rs : pas de cmake/nasm a la compilation.
 russh = { version = "0.64", default-features = false, features = ["ring", "rsa"] }
 
+# Chiffrement des mots de passe memorises (cf. vault.rs). Deja tire par russh.
+ring = "0.17"
+
+# Cle de chiffrement des mots de passe dans le trousseau du systeme.
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6", features = ["windows-native"] }
+
 # macOS : messages Obj-C dynamiques pour stabiliser le contenu au resize/zoom.
 [target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", features = ["apple-native"] }
 objc2 = "0.6"
 # `defaults read` (couleur d'accent) lance depuis une commande async : il faut la
 # version non bloquante de Command, sinon on gele un thread de l'executor.

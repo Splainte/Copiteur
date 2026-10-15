@@ -6,6 +6,7 @@ mod engine;
 mod hostkeys;
 mod journal;
 mod rclone;
+mod vault;
 
 // « Il y a du travail en cours » (transferts, dossiers en cours d'eclatement,
 // editions pas renvoyees), tenu a jour par le front. Cote Rust uniquement pour

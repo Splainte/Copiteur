@@ -491,11 +491,82 @@ fn servers_path(app: &AppHandle) -> PathBuf {
     dir.join("serveurs.json")
 }
 
-fn read_servers(app: &AppHandle) -> Vec<Server> {
+// Forme SUR LE DISQUE d'un serveur : le mot de passe y est chiffre (`passEnc`,
+// cf. vault.rs). `pass` en clair n'existe plus que dans les fichiers ecrits par
+// les anciennes versions, convertis a la premiere lecture.
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct StoredServer {
+    label: String,
+    host: String,
+    user: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pass: String,
+    #[serde(default, rename = "passEnc", skip_serializing_if = "String::is_empty")]
+    pass_enc: String,
+    port: String,
+    #[serde(default, rename = "startDir")]
+    start_dir: String,
+}
+
+fn config_dir(app: &AppHandle) -> PathBuf {
+    servers_path(app)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+fn read_stored(app: &AppHandle) -> Vec<StoredServer> {
     std::fs::read_to_string(servers_path(app))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+// Le trousseau est inaccessible (acces refuse, trousseau verrouille) : on le
+// dit une fois, et on continue sans les mots de passe chiffres — l'utilisateur
+// peut les retaper, rien n'est efface.
+fn vault_key(app: &AppHandle) -> Option<[u8; 32]> {
+    match crate::vault::key(&config_dir(app)) {
+        Ok(k) => Some(k),
+        Err(e) => {
+            let _ = app.emit(
+                "copiteur://backend-error",
+                format!("Trousseau du système inaccessible, mots de passe non déchiffrés — {e}"),
+            );
+            None
+        }
+    }
+}
+
+fn read_servers(app: &AppHandle) -> Vec<Server> {
+    let stored = read_stored(app);
+    if stored.is_empty() {
+        return Vec::new();
+    }
+    let key = vault_key(app);
+    let list: Vec<Server> = stored
+        .iter()
+        .map(|s| Server {
+            label: s.label.clone(),
+            host: s.host.clone(),
+            user: s.user.clone(),
+            pass: if !s.pass_enc.is_empty() {
+                key.as_ref()
+                    .and_then(|k| crate::vault::decrypt(k, &s.pass_enc))
+                    .unwrap_or_default()
+            } else {
+                s.pass.clone()
+            },
+            port: s.port.clone(),
+            start_dir: s.start_dir.clone(),
+        })
+        .collect();
+    // Conversion d'un fichier d'une ancienne version : des mots de passe en
+    // clair et un trousseau disponible -> on reecrit tout de suite chiffre.
+    if key.is_some() && stored.iter().any(|s| !s.pass.is_empty()) {
+        write_servers(app, &list);
+    }
+    list
 }
 
 // Ecriture ATOMIQUE. `fs::write` tronque le fichier a zero AVANT d'ecrire : un
@@ -503,16 +574,10 @@ fn read_servers(app: &AppHandle) -> Vec<Server> {
 // coupe en deux, et tous les serveurs memorises (avec leurs mots de passe) sont
 // perdus au prochain demarrage. On ecrit donc a cote, on force le vidage sur le
 // disque, puis on renomme : le rename est atomique, le fichier final est soit
-// l'ancien soit le nouveau, jamais un entre-deux.
+// l'ancien soit le nouveau, jamais un entre-deux. Fichier prive (0600 sous Unix).
 fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
-    use std::io::Write;
     let tmp = path.with_extension("json.tmp");
-    let write = |tmp: &Path| -> std::io::Result<()> {
-        let mut f = std::fs::File::create(tmp)?;
-        f.write_all(data.as_bytes())?;
-        f.sync_all()
-    };
-    if let Err(e) = write(&tmp) {
+    if let Err(e) = crate::vault::write_private(&tmp, data.as_bytes()) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
@@ -523,12 +588,51 @@ fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Forme disque d'une liste de serveurs. Avec une cle : mots de passe chiffres.
+/// Sans cle (trousseau refuse) : on ne PERD rien — un serveur dont on n'a pas
+/// pu dechiffrer le mot de passe garde son ancien `passEnc` ; un mot de passe
+/// tape pendant cette session reste en clair, faute de mieux, jusqu'a la
+/// prochaine ecriture avec cle.
+fn to_stored(
+    list: &[Server],
+    key: Option<&[u8; 32]>,
+    previous: &[StoredServer],
+) -> Result<Vec<StoredServer>, String> {
+    list.iter()
+        .map(|s| {
+            let (pass, pass_enc) = match key {
+                Some(k) if !s.pass.is_empty() => (String::new(), crate::vault::encrypt(k, &s.pass)?),
+                Some(_) => (String::new(), String::new()),
+                None => {
+                    let kept = previous
+                        .iter()
+                        .find(|p| p.label == s.label && s.pass.is_empty())
+                        .map(|p| p.pass_enc.clone())
+                        .unwrap_or_default();
+                    (s.pass.clone(), kept)
+                }
+            };
+            Ok(StoredServer {
+                label: s.label.clone(),
+                host: s.host.clone(),
+                user: s.user.clone(),
+                pass,
+                pass_enc,
+                port: s.port.clone(),
+                start_dir: s.start_dir.clone(),
+            })
+        })
+        .collect()
+}
+
 // Un echec d'enregistrement ne doit pas etre silencieux : sinon l'utilisateur
 // croit son serveur memorise et le retrouve disparu au redemarrage, sans le
 // moindre indice. On previent le front, qui le journalise.
 fn write_servers(app: &AppHandle, list: &[Server]) {
-    let res = serde_json::to_string_pretty(list)
-        .map_err(|e| e.to_string())
+    let key = vault_key(app);
+    let previous = if key.is_none() { read_stored(app) } else { Vec::new() };
+    let res = to_stored(list, key.as_ref(), &previous)
+        .and_then(|stored| serde_json::to_string_pretty(&stored).map_err(|e| e.to_string()))
         .and_then(|json| write_atomic(&servers_path(app), &json).map_err(|e| e.to_string()));
     if let Err(e) = res {
         let _ = app.emit(
@@ -538,14 +642,17 @@ fn write_servers(app: &AppHandle, list: &[Server]) {
     }
 }
 
+// Commandes `async` : le premier acces au trousseau peut afficher une demande
+// d'autorisation du systeme (macOS) ; une commande synchrone tournerait sur le
+// thread principal et figerait la fenetre le temps de la reponse.
 #[tauri::command]
-pub fn list_servers(app: AppHandle) -> Vec<Server> {
+pub async fn list_servers(app: AppHandle) -> Vec<Server> {
     read_servers(&app)
 }
 
 // Ajoute ou met a jour (par label) un serveur memorise.
 #[tauri::command]
-pub fn save_server(app: AppHandle, server: Server) -> Vec<Server> {
+pub async fn save_server(app: AppHandle, server: Server) -> Vec<Server> {
     let mut list = read_servers(&app);
     if let Some(existing) = list.iter_mut().find(|s| s.label == server.label) {
         *existing = server;
@@ -557,7 +664,7 @@ pub fn save_server(app: AppHandle, server: Server) -> Vec<Server> {
 }
 
 #[tauri::command]
-pub fn delete_server(app: AppHandle, label: String) -> Vec<Server> {
+pub async fn delete_server(app: AppHandle, label: String) -> Vec<Server> {
     let mut list = read_servers(&app);
     list.retain(|s| s.label != label);
     write_servers(&app, &list);
@@ -569,7 +676,7 @@ pub fn delete_server(app: AppHandle, label: String) -> Vec<Server> {
 // pas. Si le nouveau nom est vide ou deja pris par un AUTRE serveur, on ne change
 // rien (l'appelant garde alors l'ancien nom).
 #[tauri::command]
-pub fn rename_server(app: AppHandle, old_label: String, new_label: String) -> Vec<Server> {
+pub async fn rename_server(app: AppHandle, old_label: String, new_label: String) -> Vec<Server> {
     let new_label = new_label.trim().to_string();
     let mut list = read_servers(&app);
     let taken = list
@@ -769,6 +876,53 @@ mod open_tests {
 
         std::fs::set_permissions(&bloque, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn srv(label: &str, pass: &str) -> Server {
+        Server {
+            label: label.into(),
+            host: "h".into(),
+            user: "u".into(),
+            pass: pass.into(),
+            port: "22".into(),
+            start_dir: String::new(),
+        }
+    }
+
+    /// Avec une cle : aucun mot de passe en clair sur le disque, et il se relit.
+    #[test]
+    fn les_mots_de_passe_sont_chiffres_sur_le_disque() {
+        let mut key = [0u8; 32];
+        getrandom::fill(&mut key).unwrap();
+        let stored = to_stored(&[srv("nas", "hunter2"), srv("vide", "")], Some(&key), &[]).unwrap();
+        let json = serde_json::to_string(&stored).unwrap();
+        assert!(!json.contains("hunter2"), "{json}");
+        assert!(!json.contains("\"pass\""), "plus de champ en clair : {json}");
+        assert_eq!(crate::vault::decrypt(&key, &stored[0].pass_enc).as_deref(), Some("hunter2"));
+        assert!(stored[1].pass_enc.is_empty());
+    }
+
+    /// Un fichier d'une ancienne version (mot de passe en clair) se relit.
+    #[test]
+    fn l_ancien_format_en_clair_se_relit() {
+        let old = r#"[{"label":"nas","host":"h","user":"u","pass":"hunter2","port":"22"}]"#;
+        let s: Vec<StoredServer> = serde_json::from_str(old).unwrap();
+        assert_eq!(s[0].pass, "hunter2");
+        assert!(s[0].pass_enc.is_empty());
+    }
+
+    /// Trousseau refuse : on ne perd pas le mot de passe chiffre d'un serveur
+    /// qu'on n'a pas pu dechiffrer (il revient vide au front).
+    #[test]
+    fn sans_trousseau_rien_n_est_perdu() {
+        let previous = vec![StoredServer {
+            label: "nas".into(),
+            pass_enc: "v1:abcd".into(),
+            ..Default::default()
+        }];
+        let stored = to_stored(&[srv("nas", ""), srv("neuf", "tape")], None, &previous).unwrap();
+        assert_eq!(stored[0].pass_enc, "v1:abcd");
+        assert_eq!(stored[1].pass, "tape");
     }
 
     #[test]

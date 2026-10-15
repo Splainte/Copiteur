@@ -147,6 +147,12 @@ change ensuite, une alerte s'affiche avant tout envoi du mot de passe. rclone es
 pour exiger la clé mémorisée (`known_hosts_file`) : un intrus qui s'intercalerait entre la
 vérification et la connexion serait refusé. Testé contre un vrai serveur SSH.
 
+**Les mots de passe sont chiffrés** dans `serveurs.json` (ChaCha20-Poly1305), avec une clé
+rangée dans le trousseau du système — Gestionnaire d'identifiants sous Windows, Trousseau
+sous macOS. Un fichier d'une ancienne version (mots de passe en clair) est converti au
+premier lancement. Sous macOS, l'app n'étant pas signée par un compte développeur Apple, le
+Trousseau redemande l'autorisation après chaque mise à jour (« Toujours autoriser »).
+
 **La config rclone reste en mémoire** (`--config ""`) : le mot de passe du serveur courant
 n'est jamais écrit dans un `rclone.conf`.
 
