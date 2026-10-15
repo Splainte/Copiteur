@@ -31,6 +31,21 @@ fn force_quit(app: tauri::AppHandle, state: tauri::State<Busy>) {
     app.exit(0);
 }
 
+// Juste avant d'installer une mise a jour : on arrete le daemon rclone (et on
+// interdit sa relance). Sous Windows, l'installeur doit pouvoir remplacer
+// `rclone.exe`, impossible tant qu'il tourne ; et l'app quitte ensuite par un
+// chemin qui ne passe pas par `RunEvent::Exit`, ou on le tue d'habitude.
+#[tauri::command]
+fn prepare_update(app: tauri::AppHandle) {
+    app.state::<rclone::Rclone>().shutdown();
+}
+
+// L'installation a echoue apres `prepare_update` : rclone peut redemarrer.
+#[tauri::command]
+fn cancel_update(app: tauri::AppHandle) {
+    app.state::<rclone::Rclone>().resume();
+}
+
 // L'entree « Tout selectionner » du menu macOS. On la garde sous la main pour
 // pouvoir la GRISER quand aucun panneau n'a le focus : sans cible, l'action n'a
 // aucun sens. Reste vide hors macOS (pas de barre de menus), ou la commande
@@ -120,6 +135,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(rclone::Rclone::default())
         .manage(edits::Edits::default())
         .manage(hostkeys::HostKeys::default())
@@ -275,6 +292,8 @@ pub fn run() {
             hostkeys::host_key_trust,
             set_busy,
             force_quit,
+            prepare_update,
+            cancel_update,
             set_pane_active,
         ])
         // Menu macOS. « Quitter » : s'il reste du travail, on ne quitte pas —

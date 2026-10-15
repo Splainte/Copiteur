@@ -118,15 +118,19 @@ function CheckRow({
 
 export function SettingsDialog({
   settings,
+  appVersion,
+  onCheckUpdates,
   onSave,
   onClose,
 }: {
   settings: Settings;
+  appVersion: string;
+  onCheckUpdates: () => void;
   onSave: (s: Settings) => void;
   onClose: () => void;
 }) {
   const [s, setS] = useState<Settings>(settings);
-  const [tab, setTab] = useState<"affichage" | "vitesse" | "connexion">(
+  const [tab, setTab] = useState<"affichage" | "vitesse" | "connexion" | "maj">(
     "affichage",
   );
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) =>
@@ -141,6 +145,7 @@ export function SettingsDialog({
     ["affichage", "Affichage"],
     ["vitesse", "Vitesse"],
     ["connexion", "Connexion"],
+    ["maj", "Mises à jour"],
   ] as const;
 
   // Reglages appartenant a chaque onglet : « Réinitialiser » ne touche que
@@ -149,6 +154,7 @@ export function SettingsDialog({
     affichage: ["showHidden", "showNetworkDrives"],
     vitesse: ["parallel", "streams", "uploadStreams", "cutoff", "chunkSize"],
     connexion: ["sftpConcurrency", "retries", "bwlimit"],
+    maj: ["checkUpdates"],
   };
   const tabLabel = TABS.find(([k]) => k === tab)![1];
 
@@ -270,6 +276,29 @@ export function SettingsDialog({
                 value={s.bwlimit}
                 placeholder="illimité"
                 onChange={(v) => set("bwlimit", v)}
+              />
+            </>
+          )}
+
+          {tab === "maj" && (
+            <>
+              <div className="set-row">
+                <span className="set-label">
+                  Copiteur {appVersion}
+                  <span className="set-hint">
+                    Les mises à jour sont signées : une version dont la
+                    signature ne correspond pas est refusée.
+                  </span>
+                </span>
+                <button className="btn-ghost" onClick={onCheckUpdates}>
+                  Rechercher
+                </button>
+              </div>
+              <CheckRow
+                label="Vérifier au démarrage"
+                hint="Copiteur regarde s'il existe une nouvelle version à chaque lancement et propose de l'installer. Rien n'est installé sans votre accord."
+                value={s.checkUpdates}
+                onChange={(v) => set("checkUpdates", v)}
               />
             </>
           )}

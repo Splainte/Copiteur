@@ -77,6 +77,8 @@ export type Settings = {
   // volet de navigation local : evite de meler par erreur une copie SFTP vers
   // un NAS avec le meme NAS monte en lecteur reseau (boucle absurde).
   showNetworkDrives: boolean;
+  // Verifier au demarrage si une nouvelle version est publiee (cf. Updater.tsx).
+  checkUpdates: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -90,6 +92,7 @@ export const DEFAULT_SETTINGS: Settings = {
   retries: 10,
   showHidden: false,
   showNetworkDrives: false,
+  checkUpdates: true,
 };
 
 export function loadSettings(): Settings {

@@ -30,6 +30,10 @@ jobs:
 
       - name: Build Tauri (x86_64-pc-windows-msvc)
         run: npx tauri build --target x86_64-pc-windows-msvc
+        env:
+          # Les installeurs embarquent une mise à jour signée (cf. release.yml).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Uploader l'installeur NSIS
         uses: actions/upload-artifact@v4
@@ -37,3 +41,6 @@ jobs:
           name: Copiteur-windows-x64
           path: tauri/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           if-no-files-found: error
+          # Stockage des artefacts plafonné au mois (500 Mo, tous dépôts privés confondus) :
+          # deux jours suffisent pour récupérer le build.
+          retention-days: 2

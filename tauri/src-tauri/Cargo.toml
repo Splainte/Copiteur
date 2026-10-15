@@ -1,6 +1,6 @@
 [package]
 name = "copiteur"
-version = "0.1.0"
+version = "1.0.0"
 description = "Copiteur — client de transfert de fichiers natif (rclone)"
 authors = ["Splainte"]
 edition = "2021"
@@ -22,6 +22,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# Mise a jour integree (manifeste + installeurs signes dans les Releases GitHub)
+# et relance de l'app apres installation.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
