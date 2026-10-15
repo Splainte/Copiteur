@@ -81,6 +81,15 @@ function backoff(attempts: number): number {
   return Math.min(60_000, 3_000 * 2 ** Math.max(0, attempts - 1));
 }
 
+// Reponse de `host_key_check` (cf. hostkeys.rs).
+type HostKeyStatus = {
+  status: "known" | "new" | "changed";
+  algo: string;
+  fingerprint: string;
+  previous: string | null;
+};
+type HostKeyAsk = HostKeyStatus & { host: string; port: string };
+
 export default function App() {
   const [active, setActive] = useState<Side | null>("local");
   const [connected, setConnected] = useState(false);
@@ -203,6 +212,20 @@ export default function App() {
   editsPendingRef.current = edits.filter((e) => e.state !== "watching").length;
   // Confirmation avant fermeture quand des transferts tournent encore.
   const [closeAsk, setCloseAsk] = useState(false);
+  // Identite du serveur a confirmer (1re connexion, ou cle qui a change). La
+  // connexion attend la reponse : `hostKeyResolve` debloque sa promesse.
+  const [hostKeyAsk, setHostKeyAsk] = useState<HostKeyAsk | null>(null);
+  const hostKeyResolve = useRef<((ok: boolean) => void) | null>(null);
+  const askHostKey = (a: HostKeyAsk) =>
+    new Promise<boolean>((resolve) => {
+      hostKeyResolve.current = resolve;
+      setHostKeyAsk(a);
+    });
+  const answerHostKey = (ok: boolean) => {
+    hostKeyResolve.current?.(ok);
+    hostKeyResolve.current = null;
+    setHostKeyAsk(null);
+  };
 
   // macOS : l'app tourne encore depuis son .dmg monte (pas glissee dans
   // Applications) — on propose de la deplacer. `null` = pas concerne (autre
@@ -237,6 +260,7 @@ export default function App() {
     !!conflict ||
     !!renameAsk ||
     closeAsk ||
+    !!hostKeyAsk ||
     !!editAsk ||
     !!conflictAsk ||
     !!dmgMount;
@@ -526,6 +550,29 @@ export default function App() {
     setNoHashReady(false);
     lastConnRef.current = { label, host: h, user: u, pass: p, port: pt };
     try {
+      // Identite du serveur AVANT tout envoi du mot de passe : sa cle doit etre
+      // celle deja acceptee, sinon l'utilisateur tranche (cf. hostkeys.rs).
+      const hk = await invoke<HostKeyStatus>("host_key_check", { host: h, port: pt });
+      if (!current()) return;
+      if (hk.status !== "known") {
+        const ok = await askHostKey({ ...hk, host: h, port: pt || "22" });
+        if (!current()) return;
+        if (!ok) {
+          setConnErr("Connexion annulée : identité du serveur non acceptée.");
+          logEvent(
+            "warn",
+            "connexion",
+            `Connexion à ${h} annulée — empreinte ${hk.status === "changed" ? "CHANGÉE" : "nouvelle"} refusée (${hk.fingerprint})`,
+          );
+          return;
+        }
+        await invoke("host_key_trust", { host: h, port: pt });
+        logEvent(
+          hk.status === "changed" ? "warn" : "info",
+          "connexion",
+          `${hk.status === "changed" ? "Nouvelle clé acceptée" : "Clé mémorisée"} pour ${h} : ${hk.algo} ${hk.fingerprint}`,
+        );
+      }
       await rc("config/create", {
         name: "serveur",
         type: "sftp",
@@ -2075,6 +2122,75 @@ export default function App() {
                 onClick={() => invoke("force_quit").catch(() => appWindow.destroy())}
               >
                 Fermer quand même
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Identite du serveur : 1re connexion (empreinte a accepter) ou cle qui
+          a change depuis la derniere fois (alerte). */}
+      {hostKeyAsk && (
+        <div className="modal-backdrop">
+          <div className="modal modal-hostkey">
+            <div className="modal-title">
+              {hostKeyAsk.status === "changed"
+                ? "Attention : l'identité du serveur a changé"
+                : "Première connexion à ce serveur"}
+            </div>
+            <div className="modal-body">
+              {hostKeyAsk.status === "changed" ? (
+                <>
+                  La clé présentée par{" "}
+                  <strong>
+                    {hostKeyAsk.host}:{hostKeyAsk.port}
+                  </strong>{" "}
+                  ne correspond pas à celle mémorisée. C'est normal après une
+                  réinstallation ou une mise à jour du serveur, mais cela peut
+                  aussi signifier que quelqu'un se fait passer pour lui afin
+                  d'intercepter votre mot de passe.
+                  <div className="hostkey-label">Empreinte mémorisée</div>
+                  <code className="hostkey-fp is-old">{hostKeyAsk.previous}</code>
+                  <div className="hostkey-label">Empreinte présentée</div>
+                  <code className="hostkey-fp">
+                    {hostKeyAsk.algo} {hostKeyAsk.fingerprint}
+                  </code>
+                  <div className="modal-hint">
+                    Dans le doute, annulez et vérifiez auprès de la personne qui
+                    gère le serveur.
+                  </div>
+                </>
+              ) : (
+                <>
+                  Copiteur ne connaît pas encore{" "}
+                  <strong>
+                    {hostKeyAsk.host}:{hostKeyAsk.port}
+                  </strong>
+                  . Voici l'empreinte de sa clé d'identité :
+                  <code className="hostkey-fp">
+                    {hostKeyAsk.algo} {hostKeyAsk.fingerprint}
+                  </code>
+                  <div className="modal-hint">
+                    Si vous pouvez, comparez-la à celle donnée par la personne
+                    qui gère le serveur. Copiteur la mémorise et vous alertera si
+                    elle change un jour.
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button className="btn-ghost" onClick={() => answerHostKey(false)}>
+                Annuler
+              </button>
+              <button
+                className={
+                  hostKeyAsk.status === "changed" ? "btn-accent btn-danger" : "btn-accent"
+                }
+                onClick={() => answerHostKey(true)}
+              >
+                {hostKeyAsk.status === "changed"
+                  ? "Faire confiance à la nouvelle clé"
+                  : "Faire confiance et se connecter"}
               </button>
             </div>
           </div>

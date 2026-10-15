@@ -3,6 +3,7 @@ use tauri::{Emitter, Manager};
 
 mod edits;
 mod engine;
+mod hostkeys;
 mod journal;
 mod rclone;
 
@@ -120,6 +121,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(rclone::Rclone::default())
         .manage(edits::Edits::default())
+        .manage(hostkeys::HostKeys::default())
         .manage(Busy::default())
         .manage(SelectAllItem::default())
         .setup(|app| {
@@ -268,6 +270,8 @@ pub fn run() {
             edits::edit_list,
             edits::edit_poll_now,
             rclone::rc_call,
+            hostkeys::host_key_check,
+            hostkeys::host_key_trust,
             set_busy,
             force_quit,
             set_pane_active,

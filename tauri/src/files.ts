@@ -639,6 +639,12 @@ export async function resolveRemoteStart(startDir?: string): Promise<string> {
 // illisibles pour un utilisateur : on rattrape les cas courants.
 export function humanConnError(raw: string): string {
   const s = raw.toLowerCase();
+  // En premier : l'erreur de cle de rclone contient aussi « handshake failed »,
+  // qu'on prendrait sinon pour un mauvais mot de passe.
+  if (s.includes("knownhosts") || s.includes("host key") || s.includes("hostkey"))
+    return "L'identité du serveur ne correspond pas à celle mémorisée : connexion refusée par sécurité. Reconnectez-vous pour voir l'empreinte présentée.";
+  if (s.includes("identité du serveur non vérifiée"))
+    return "Identité du serveur non vérifiée : reconnectez-vous et acceptez son empreinte.";
   if (
     s.includes("too many authentication failures") ||
     s.includes("unable to authenticate")
@@ -651,8 +657,6 @@ export function humanConnError(raw: string): string {
     s.includes("auth") // authentication failed, no auth methods…
   )
     return "Identifiant ou mot de passe refusé par le serveur. Vérifiez aussi la casse de l'identifiant (« Alice » ≠ « alice »).";
-  if (s.includes("knownhosts") || s.includes("host key") || s.includes("hostkey"))
-    return "La clé d'identité du serveur n'est pas reconnue (ou a changé).";
   if (
     s.includes("no route to host") ||
     s.includes("connection refused") ||

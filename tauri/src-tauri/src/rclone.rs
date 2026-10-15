@@ -465,9 +465,20 @@ pub async fn rc_call(
     app: AppHandle,
     state: State<'_, Rclone>,
     method: String,
-    params: Value,
+    mut params: Value,
 ) -> Result<Value, String> {
     check_call(&method, &params)?;
+    // Le remote du serveur n'est cree que pour un serveur dont l'identite a ete
+    // reconnue, et rclone doit alors EXIGER la cle memorisee (cf. hostkeys.rs).
+    if method == "config/create" {
+        if let Some(p) = params.get_mut("parameters").and_then(Value::as_object_mut) {
+            let field = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            let (file, algos) =
+                crate::hostkeys::rclone_params(&app, &field("host"), &field("port"))?;
+            p.insert("known_hosts_file".into(), Value::String(file));
+            p.insert("host_key_algorithms".into(), Value::String(algos));
+        }
+    }
     // On relache les verrous avant d'attendre le reseau (ils ne sont pas Send).
     let (base, auth, http, err, relance) = {
         // Le daemon a pu mourir depuis le demarrage : on le relance au besoin.
