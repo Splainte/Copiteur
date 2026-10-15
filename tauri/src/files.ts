@@ -646,6 +646,16 @@ export function humanConnError(raw: string): string {
   // qu'on prendrait sinon pour un mauvais mot de passe.
   if (s.includes("knownhosts") || s.includes("host key") || s.includes("hostkey"))
     return "L'identité du serveur ne correspond pas à celle mémorisée : connexion refusée par sécurité. Reconnectez-vous pour voir l'empreinte présentée.";
+  // macOS « Réseau local » : une app sans cette autorisation ne peut pas
+  // joindre une adresse privee (LAN, WireGuard) ; la connexion echoue aussitot,
+  // avec une erreur reseau trompeuse. Tailscale (100.x) n'est pas concerne.
+  if (
+    navigator.userAgent.includes("Macintosh") &&
+    (s.includes("network is unreachable") ||
+      s.includes("no route to host") ||
+      s.includes("network is down"))
+  )
+    return "macOS empêche Copiteur d'accéder au réseau local. Ouvrez Réglages Système > Confidentialité et sécurité > Réseau local, activez Copiteur (ou désactivez puis réactivez-le), puis réessayez. Si c'est déjà le cas, vérifiez que le VPN est connecté et le serveur allumé.";
   if (s.includes("identité du serveur non vérifiée"))
     return "Identité du serveur non vérifiée : reconnectez-vous et acceptez son empreinte.";
   if (
