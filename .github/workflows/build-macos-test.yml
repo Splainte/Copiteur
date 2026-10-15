@@ -40,6 +40,10 @@ jobs:
 
       - name: Build Tauri (${{ matrix.target }})
         run: npx tauri build --target ${{ matrix.target }}
+        env:
+          # Les installeurs embarquent une mise à jour signée (cf. release.yml).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Vérifier Xcode + SDK lié
         run: |
@@ -53,3 +57,6 @@ jobs:
           name: Copiteur-macos-${{ matrix.label }}
           path: tauri/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
+          # Stockage des artefacts plafonné au mois (500 Mo, tous dépôts privés confondus) :
+          # deux jours suffisent pour récupérer le build.
+          retention-days: 2

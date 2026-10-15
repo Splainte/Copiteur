@@ -96,6 +96,13 @@ impl Rclone {
         self.kill();
     }
 
+    /// Annule `shutdown` : une mise a jour a echoue apres l'arret du daemon, il
+    /// doit pouvoir redemarrer (au prochain appel, via `ensure_alive`).
+    pub fn resume(&self) {
+        self.stopping
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Tue le daemon (idempotent).
     ///
     /// L'attente est BORNEE (~200 ms) : on veut recuperer le process pour ne pas
@@ -654,6 +661,18 @@ mod tests {
         st.shutdown();
         assert!(ensure_alive(&st).is_err(), "aucune relance apres shutdown");
         assert!(lock(&st.child).is_none());
+    }
+
+    /// Mise a jour echouee apres l'arret du daemon : il doit pouvoir repartir.
+    #[test]
+    fn une_mise_a_jour_echouee_laisse_rclone_repartir() {
+        let st = Rclone::default();
+        *lock(&st.paths) = Some(rclone_bin());
+        st.shutdown();
+        assert!(ensure_alive(&st).is_err());
+        st.resume();
+        assert!(ensure_alive(&st).expect("relance apres resume"));
+        st.kill();
     }
 
     /// Deux lancements ne doivent jamais reutiliser le meme secret.

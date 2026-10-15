@@ -33,6 +33,8 @@ import { SettingsDialog } from "./SettingsDialog";
 import { TransfersPanel, isStalled, type Tab } from "./TransfersPanel";
 import { JournalDialog } from "./JournalDialog";
 import { logEvent } from "./journal";
+import { useUpdater } from "./Updater";
+import { getVersion } from "@tauri-apps/api/app";
 import { UiIcon } from "./icons";
 
 const appWindow = getCurrentWindow();
@@ -248,23 +250,6 @@ export default function App() {
   // librement avant de valider.
   const renameAllRef = useRef(false);
 
-  // Une modale/dialogue est ouverte : tant que c'est le cas, AUCUNE action ne
-  // doit passer au clavier (ouvrir un fichier, supprimer, copier/coller,
-  // naviguer…). La souris est deja bloquee par le fond des modales ; on coupe le
-  // clavier des panneaux (prop passee aux FilePane) et les raccourcis globaux
-  // ci-dessous. La confirmation de suppression, interne au FilePane, se garde
-  // toute seule via un ecouteur `window`.
-  const anyModal =
-    showSettings ||
-    showJournal ||
-    !!conflict ||
-    !!renameAsk ||
-    closeAsk ||
-    !!hostKeyAsk ||
-    !!editAsk ||
-    !!conflictAsk ||
-    !!dmgMount;
-
   // Miroir pour lire l'etat courant depuis les timers sans les recreer.
   const xfersRef = useRef(xfers);
   xfersRef.current = xfers;
@@ -352,6 +337,38 @@ export default function App() {
   useEffect(() => {
     invoke("set_busy", { busy: anyBusy }).catch(() => {});
   }, [anyBusy]);
+
+  // Version de l'app (tauri.conf.json), affichee dans la barre de titre.
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
+
+  // Mise a jour integree : verification au demarrage + bouton des parametres.
+  const updater = useUpdater({
+    current: appVersion,
+    busy: anyBusy,
+    autoCheck: settings.checkUpdates,
+    log: (level, msg) => logEvent(level, "app", msg),
+  });
+
+  // Une modale/dialogue est ouverte : tant que c'est le cas, AUCUNE action ne
+  // doit passer au clavier (ouvrir un fichier, supprimer, copier/coller,
+  // naviguer…). La souris est deja bloquee par le fond des modales ; on coupe le
+  // clavier des panneaux (prop passee aux FilePane) et les raccourcis globaux
+  // ci-dessous. La confirmation de suppression, interne au FilePane, se garde
+  // toute seule via un ecouteur `window`.
+  const anyModal =
+    showSettings ||
+    showJournal ||
+    !!conflict ||
+    !!renameAsk ||
+    closeAsk ||
+    !!hostKeyAsk ||
+    !!editAsk ||
+    !!conflictAsk ||
+    !!dmgMount ||
+    updater.open;
 
   useEffect(() => {
     const unlisten = listen("copiteur://close-ask", () => setCloseAsk(true));
@@ -1856,7 +1873,7 @@ export default function App() {
       <div className="titlebar" data-tauri-drag-region>
         <span className="brandwrap">
           <span className="brand">Copiteur</span>
-          <span className="version">0.1.0</span>
+          <span className="version">{appVersion}</span>
         </span>
         {!isMac && (
           <div className="win-buttons">
@@ -1905,7 +1922,7 @@ export default function App() {
         <button
           className="gear-btn"
           aria-label="Paramètres"
-          title="Paramètres de transfert"
+          title="Paramètres"
           onClick={() => setShowSettings(true)}
         >
           &#x2699;
@@ -1988,6 +2005,8 @@ export default function App() {
       {showSettings && (
         <SettingsDialog
           settings={settings}
+          appVersion={appVersion}
+          onCheckUpdates={updater.checkNow}
           onSave={(s) => {
             setSettings(s);
             saveSettings(s);
@@ -2127,6 +2146,8 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {updater.dialog}
 
       {/* Identite du serveur : 1re connexion (empreinte a accepter) ou cle qui
           a change depuis la derniere fois (alerte). */}

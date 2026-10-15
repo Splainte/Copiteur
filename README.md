@@ -159,6 +159,20 @@ n'est jamais écrit dans un `rclone.conf`.
 **Politique de sécurité du contenu (CSP) stricte** : l'interface ne charge que ses propres
 fichiers, aucun script ni ressource extérieure.
 
+## Publier une version
+
+1. Monter la version dans `tauri/src-tauri/tauri.conf.json`, `tauri/src-tauri/Cargo.toml` et
+   `tauri/package.json`, fusionner sur `main`.
+2. Poser un tag **annoté** dont le message sert de notes de version (affichées dans l'app) :
+   `git tag -a v1.2.0 -m "…notes…" && git push origin v1.2.0`.
+3. Le workflow *Release* construit Windows + macOS, signe les mises à jour et prépare une
+   release **brouillon** avec son `latest.json`. Tester les installeurs du brouillon, puis le
+   publier : c'est la publication qui déclenche la mise à jour dans les apps installées.
+
+Les mises à jour sont signées avec une clé privée (secrets `TAURI_SIGNING_PRIVATE_KEY` et
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` du dépôt) ; la clé publique est dans `tauri.conf.json`.
+**Perdre la clé privée = plus aucune mise à jour possible** pour les apps déjà installées.
+
 ## Licence
 
 [MIT](LICENSE). rclone est distribué sous licence MIT, cf.
