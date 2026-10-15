@@ -1,0 +1,39 @@
+name: Build Windows
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Installer les dépendances npm
+        run: npm install
+
+      - name: Télécharger rclone (sidecar)
+        run: node scripts/prepare-bins.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Tauri (x86_64-pc-windows-msvc)
+        run: npx tauri build --target x86_64-pc-windows-msvc
+
+      - name: Uploader l'installeur NSIS
+        uses: actions/upload-artifact@v4
+        with:
+          name: Copiteur-windows-x64
+          path: tauri/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          if-no-files-found: error

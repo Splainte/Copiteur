@@ -1,0 +1,137 @@
+/* ============================================================
+   Reset global + transparence native
+   Le fond doit etre TOTALEMENT transparent pour laisser transparaitre
+   le materiau natif de l'OS :
+     - Mica     sur Windows 11
+     - Vibrancy sur macOS (NSVisualEffectView)
+   Aucune fausse transparence CSS : on ne peint RIEN derriere.
+   (Herite de Robloader-Tauri.)
+   ============================================================ */
+
+:root {
+  color-scheme: light dark;
+
+  --cp-text: #1c1c1e;
+  --cp-text-muted: rgba(28, 28, 30, 0.55);
+  --cp-stroke: rgba(0, 0, 0, 0.12);
+  --cp-stroke-strong: rgba(0, 0, 0, 0.28);
+  --cp-control: rgba(0, 0, 0, 0.04);
+  --cp-control-hover: rgba(0, 0, 0, 0.08);
+  --cp-control-active: rgba(0, 0, 0, 0.12);
+  --cp-field: rgba(255, 255, 255, 0.7);
+  --cp-field-hover: rgba(255, 255, 255, 0.85);
+  /* Surface des deux explorateurs : doit RESSORTIR du fond (facon file
+     d'attente de Robloader en clair) => blanc translucide en mode clair, pas
+     du noir comme --cp-control qui les enfoncerait. */
+  --cp-surface: rgba(255, 255, 255, 0.45);
+  /* AccentColor : mot-cle CSS systeme (exact + dynamique sur WebView2).
+     Sur macOS le backend injecte --cp-accent via get_accent_color. */
+  --cp-accent: AccentColor;
+  --cp-accent-text: #ffffff;
+
+  /* Teintes de l'icone dossier. Par defaut (Windows/Linux) : le jaune manille
+     classique. Surchargees sur macOS pour suivre l'accent systeme (cf. App.css)
+     comme le fait le Finder depuis Big Sur. */
+  --cp-folder-back: #f2c14e;
+  --cp-folder-front: #ffd766;
+
+  --cp-ok: #1a8a4a;
+  --cp-warn: #b35e00;
+  --cp-err: #c0392b;
+
+  --cp-radius: 7px;
+  --cp-radius-sm: 6px;
+
+  /* Menus (select, contextuel, modales) : fond 100% OPAQUE. Sur une fenetre
+     transparente (Mica), un fond translucide + backdrop-filter donne un rendu
+     "baveux" (flou melange a du net) => on reste opaque, net et lisible. */
+  --cp-menu-bg: #f7f7f9;
+  --cp-menu-stroke: rgba(0, 0, 0, 0.12);
+  --cp-menu-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --cp-text: #f5f5f7;
+    --cp-text-muted: rgba(245, 245, 247, 0.55);
+    --cp-stroke: rgba(255, 255, 255, 0.12);
+    --cp-stroke-strong: rgba(255, 255, 255, 0.4);
+    --cp-control: rgba(255, 255, 255, 0.06);
+    --cp-control-hover: rgba(255, 255, 255, 0.12);
+    --cp-control-active: rgba(255, 255, 255, 0.18);
+    --cp-field: rgba(255, 255, 255, 0.06);
+    --cp-field-hover: rgba(255, 255, 255, 0.1);
+    /* En sombre, le voile blanc eclaircit deja : on garde la valeur d'origine
+       (ex-.explorer) pour ne rien changer au rendu deja valide. */
+    --cp-surface: rgba(255, 255, 255, 0.06);
+
+    --cp-ok: #2ecc71;
+    --cp-warn: #e67e22;
+    --cp-err: #e74c3c;
+
+    --cp-menu-bg: #2b2b2e;
+    --cp-menu-stroke: rgba(255, 255, 255, 0.16);
+    --cp-menu-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  /* LA cle : fond 100% transparent => le materiau natif est visible */
+  background-color: rgba(0, 0, 0, 0);
+}
+
+#root {
+  background-color: transparent;
+}
+
+body {
+  color: var(--cp-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Les champs texte doivent rester SELECTIONNABLES : sous WebKit (macOS), le
+   `user-select: none` herite du body deteint sur les <input> et bloque la
+   selection — donc plus de Cmd+A, ni de copie (Cmd+C) du contenu. On le
+   reactive explicitement pour tous les champs de saisie. */
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.app[data-os="macos"] {
+  font-family: "SF Pro Text", "SF Pro Display", -apple-system,
+    BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+.app[data-os="windows"] {
+  font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
+    system-ui, sans-serif;
+}
+.app[data-os="linux"] {
+  font-family: system-ui, "Cantarell", "Ubuntu", sans-serif;
+}
+
+/* Scrollbars discretes facon DA maison (1px, thumb transparent sauf au survol). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover {
+  scrollbar-color: var(--cp-stroke-strong) transparent;
+}

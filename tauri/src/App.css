@@ -1,0 +1,1897 @@
+/* ============================================================
+   Copiteur — mise en page double explorateur (cf. docs/maquette-copiteur.png)
+   Colonne : titlebar / barre de connexion / explorateurs / barre transferts.
+   ============================================================ */
+
+.app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-size: 13px;
+}
+
+/* Assombrissement du fond en mode sombre, macOS UNIQUEMENT (niveau retenu :
+   30%) : le Vibrancy y est trop clair pour la lisibilite. Windows (Mica) garde
+   son rendu d'origine, deja valide — ne pas etendre sans test sur Win11.
+   PAS de voile en pseudo-element : un ::before positionne se peindrait
+   AU-DESSUS des enfants en flux normal (titlebar, panneaux, footer) et
+   obscurcirait textes et boutons. Le background d'un element, lui, est
+   toujours peint DERRIERE ses enfants => le contenu ne peut pas etre
+   affecte. Le rgba semi-transparent laisse passer le Vibrancy natif. */
+@media (prefers-color-scheme: dark) {
+  .app[data-os="macos"] {
+    background-color: rgba(0, 0, 0, 0.3);
+  }
+}
+
+/* macOS : les dossiers suivent la couleur d'accent systeme, comme le Finder
+   depuis Big Sur (accent rouge => dossiers rouges). Deux tons derives de
+   --cp-accent : le dos legerement assombri, la face avant eclaircie. Windows
+   et Linux gardent le jaune manille par defaut (cf. styles.css). */
+.app[data-os="macos"] {
+  --cp-folder-back: color-mix(in srgb, var(--cp-accent) 88%, #000);
+  --cp-folder-front: color-mix(in srgb, var(--cp-accent) 74%, #fff);
+}
+
+/* ---- Barre de titre (drag) ------------------------------------------------ */
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 0 0 12px; /* pas de padding a droite : le bouton Fermer touche le coin */
+  flex: 0 0 auto;
+}
+/* macOS : le titre se centre sur la FENETRE, pas sur l'espace restant a droite
+   des feux tricolores. Un simple justify-content:center le centrerait dans la
+   zone amputee du padding reserve aux feux => decale vers la droite. On le sort
+   donc du flux pour l'ancrer au milieu reel de la barre. */
+.app[data-os="macos"] .titlebar {
+  position: relative;
+  padding-left: 78px; /* place pour les feux tricolores natifs */
+}
+.app[data-os="macos"] .brandwrap {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.brandwrap {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.brand {
+  font-weight: 600;
+}
+.version {
+  color: var(--cp-text-muted);
+  font-size: 11px;
+}
+.win-buttons {
+  margin-left: auto;
+  display: flex;
+  height: 100%;
+}
+.win-btn {
+  width: 44px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--cp-text);
+  font-family: "Segoe MDL2 Assets", "Segoe Fluent Icons", sans-serif;
+  font-size: 10px;
+  cursor: default;
+}
+.win-btn:hover {
+  background: var(--cp-control-hover);
+}
+.win-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+/* ---- Barre de connexion --------------------------------------------------- */
+.connect-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 10px;
+  flex: 0 0 auto;
+}
+.conn-field {
+  height: 32px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: var(--cp-radius);
+  background: var(--cp-field);
+  color: var(--cp-text);
+  padding: 0 11px;
+  font: inherit;
+  outline: none;
+  /* SANS ca, un <input> en flex garde sa largeur intrinseque (~170 px) : il
+     refuse de retrecir, la barre deborde et pousse le bouton + les icones hors
+     de la fenetre. min-width: 0 autorise le retrecissement selon les flex-basis. */
+  min-width: 0;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease,
+    background-color 0.14s ease;
+}
+.conn-field:hover {
+  background: var(--cp-field-hover);
+}
+.conn-field::placeholder {
+  color: var(--cp-text-muted);
+}
+/* Focus facon Robloader : macOS = anneau d'accent tout autour. */
+.app[data-os="macos"] .conn-field:focus {
+  border-color: var(--cp-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cp-accent) 35%, transparent);
+}
+/* Windows 11 = liseret d'accent uniquement en bas (Fluent TextBox). */
+.app[data-os="windows"] .conn-field:focus,
+.app[data-os="linux"] .conn-field:focus {
+  border-color: var(--cp-stroke);
+  box-shadow: inset 0 -2px 0 0 var(--cp-accent);
+}
+.conn-field.cname {
+  flex: 1 1 0;
+}
+/* Hote : meme largeur que Nom (avant : flex 2 puis 1.3, encore trop large). */
+.conn-field.host {
+  flex: 1 1 0;
+}
+/* user et mdp reduits (~28 %) par rapport au nom/hote. */
+.conn-field.user {
+  flex: 0.72 1 0;
+}
+.conn-field.pwd {
+  flex: 0.72 1 0;
+}
+/* Port : largeur fixe confortable pour le libelle « Port » et un numero. */
+.conn-field.port {
+  flex: 0 0 72px;
+  padding: 0 10px;
+}
+.conn-saved {
+  flex: 0 0 auto;
+}
+.conn-btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--cp-radius);
+  background: var(--cp-accent);
+  color: var(--cp-accent-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: default;
+  /* Ne jamais passer « Se connecter » sur deux lignes ni le laisser retrecir :
+     c'est le texte des CHAMPS qui doit ceder la place, pas le bouton. */
+  flex: 0 0 auto;
+  white-space: nowrap;
+  /* Le sizer invisible se superpose au libelle visible ; le bouton se
+     dimensionne sur le plus large des deux, donc taille figee entre etats. */
+  display: inline-grid;
+  place-items: center;
+}
+.conn-btn-sizer,
+.conn-btn-label {
+  grid-area: 1 / 1;
+}
+.conn-btn-sizer {
+  visibility: hidden;
+}
+.conn-btn:hover {
+  filter: brightness(1.08);
+}
+/* Tentative de connexion en cours : le bouton reste cliquable (recliquer relance
+   immediatement), on signale juste l'attente par une pulsation discrete. */
+.conn-btn.is-connecting {
+  opacity: 0.7;
+  animation: conn-pulse 1.1s ease-in-out infinite;
+}
+@keyframes conn-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.gear-btn {
+  flex: 0 0 auto;
+  /* Centrage flex : sinon le SVG (icone journal) s'aligne sur la ligne de base
+     et parait remonte, contrairement au glyphe engrenage. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: var(--cp-radius);
+  background: var(--cp-control);
+  color: var(--cp-text);
+  font-size: 15px;
+  cursor: default;
+}
+.gear-btn:hover {
+  background: var(--cp-control-hover);
+}
+
+/* ---- Select custom (serveurs memorises), look Robloader ------------------- */
+.select {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 32px;
+}
+.select__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  min-width: 160px;
+  max-width: 220px;
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: var(--cp-radius);
+  background: var(--cp-field);
+  color: var(--cp-text);
+  font: inherit;
+  cursor: default;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease,
+    background-color 0.14s ease;
+}
+.select__trigger:hover {
+  background: var(--cp-field-hover);
+}
+.select__value {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.select__value.is-placeholder {
+  color: var(--cp-text-muted);
+}
+.select__chevron {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  color: var(--cp-text-muted);
+  transition: transform 0.15s ease;
+}
+.select.is-open .select__chevron {
+  transform: rotate(180deg);
+}
+.select.is-open .select__trigger {
+  background: var(--cp-field-hover);
+}
+.app[data-os="macos"] .select.is-open .select__trigger {
+  border-color: var(--cp-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cp-accent) 35%, transparent);
+}
+.app[data-os="windows"] .select.is-open .select__trigger,
+.app[data-os="linux"] .select.is-open .select__trigger {
+  box-shadow: inset 0 -2px 0 0 var(--cp-accent);
+}
+.select__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 100%;
+  z-index: 50;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-radius: 8px;
+  background: var(--cp-menu-bg);
+  border: 1px solid var(--cp-menu-stroke);
+  box-shadow: var(--cp-menu-shadow);
+}
+.select__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--cp-text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: default;
+  border-radius: 6px;
+}
+.select__option:hover {
+  background: var(--cp-control-hover);
+}
+.select__option-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.select__option-del,
+.select__option-rename {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--cp-text-muted);
+  cursor: default;
+  opacity: 0;
+  font-size: 11px;
+  line-height: 1;
+}
+.select__option:hover .select__option-del,
+.select__option:hover .select__option-rename {
+  opacity: 1;
+}
+.select__option-del:hover {
+  background: var(--cp-err);
+  color: #fff;
+}
+.select__option-rename:hover {
+  background: var(--cp-control-hover);
+  color: var(--cp-text);
+}
+/* Champ de renommage inline, a la place du libelle. */
+.select__option.is-editing {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  height: 32px;
+}
+.select__rename {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 24px;
+  border: 1px solid var(--cp-accent);
+  border-radius: 5px;
+  background: var(--cp-field);
+  color: var(--cp-text);
+  padding: 0 7px;
+  font: inherit;
+  outline: none;
+}
+.select__empty {
+  padding: 8px 10px;
+  color: var(--cp-text-muted);
+  font-size: 12px;
+}
+
+/* ---- Zone des deux explorateurs ------------------------------------------- */
+.explorers {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 10px;
+  padding: 0 12px 10px;
+  min-height: 0;
+}
+
+.explorer {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--cp-stroke);
+  border-radius: 10px;
+  overflow: hidden;
+  outline: none;
+  background: var(--cp-surface);
+}
+/* Panneau actif : lisere couleur d'accent => on sait ou colle un Ctrl+V. */
+.explorer.is-active {
+  border-color: var(--cp-accent);
+  box-shadow: 0 0 0 1px var(--cp-accent);
+}
+/* Cible d'un glisser-deposer en cours. */
+.explorer.is-drop {
+  border-color: var(--cp-accent);
+  box-shadow: 0 0 0 2px var(--cp-accent);
+  background: color-mix(in srgb, var(--cp-accent) 10%, var(--cp-surface));
+}
+
+.explorer-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--cp-stroke);
+  flex: 0 0 auto;
+}
+.explorer-title {
+  font-weight: 600;
+  padding: 0 2px;
+  flex: 0 0 auto;
+}
+.nav-btns,
+.view-btns {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.nav-btn,
+.view-btn {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cp-text);
+  cursor: default;
+  padding: 0;
+}
+.nav-btn:hover:not(:disabled),
+.view-btn:hover {
+  background: var(--cp-control-hover);
+}
+.nav-btn:disabled {
+  opacity: 0.35;
+}
+.view-btn.on {
+  background: color-mix(in srgb, var(--cp-accent) 22%, transparent);
+  border-color: var(--cp-accent);
+}
+.uicon {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+/* Conteneur de la barre d'adresse : porte la largeur (flex-basis 0 => espace
+   restant, jamais la taille du contenu) et sert d'ancre au spinner en overlay. */
+.addr-wrap {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+}
+.url-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: 6px;
+  background: var(--cp-field);
+  color: var(--cp-text);
+  padding: 0 8px;
+  font: inherit;
+  outline: none;
+}
+.url-bar:focus {
+  border-color: var(--cp-accent);
+}
+
+/* Bouton de navigation en etat actif (la loupe quand la recherche est ouverte). */
+.nav-btn.on {
+  background: color-mix(in srgb, var(--cp-accent) 22%, transparent);
+  border-color: var(--cp-accent);
+}
+
+/* Barre de recherche : deployee par la loupe. Repliee, largeur nulle ; ouverte,
+   une part de la barre d'en-tete. C'est la largeur animee qui, en poussant la
+   barre d'adresse (flex:1), fait se replier le fil d'Ariane. Transition courte
+   pour un ressenti « fluide mais rapide ». */
+.search-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition:
+    width 170ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 140ms ease;
+}
+.search-wrap.open {
+  width: clamp(150px, 30%, 320px);
+  opacity: 1;
+  pointer-events: auto;
+}
+.search-bar {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: 6px;
+  background: var(--cp-field);
+  color: var(--cp-text);
+  /* Marge a droite = place du bouton d'effacement. */
+  padding: 0 24px 0 8px;
+  font: inherit;
+  outline: none;
+}
+.search-bar:focus {
+  border-color: var(--cp-accent);
+}
+.search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--cp-text-muted);
+  cursor: default;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+}
+.search-clear:hover {
+  background: var(--cp-control-hover);
+  color: var(--cp-text);
+}
+/* Fil d'Ariane cliquable (chaque dossier du chemin = un bouton).
+   flex-basis 0 : cf. .url-bar — indispensable pour que les boutons de vue ne
+   bougent pas quand le chemin change. */
+.crumbs {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  /* Marge a droite = place reservee au spinner (le dossier courant, prioritaire,
+     est le dernier segment et passerait sinon dessous). */
+  padding: 0 24px 0 8px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: 6px;
+  background: var(--cp-field);
+  /* Le debordement est gere en amont : les parents lointains sont replies dans
+     le menu « … » (cf. hiddenCrumbs), donc rien ne doit deborder ici. */
+  overflow: hidden;
+  cursor: text;
+}
+/* Miroir de mesure : meme rendu que .crumbs mais hors flux et invisible, avec
+   TOUS les segments => sert a calculer le repli (cf. recomputeCrumbs). */
+.crumbs-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+  border-color: transparent;
+}
+
+/* Filet de securite : si le dossier courant est A LUI SEUL trop large, il ne
+   doit JAMAIS deborder de la barre => il retrecit et s'ellipse. Les autres
+   segments gardent leur largeur naturelle (le calcul garantit qu'ils tiennent). */
+.crumbs > .crumb-wrap:last-child {
+  min-width: 0;
+  flex-shrink: 1;
+}
+.crumbs > .crumb-wrap:last-child .crumb {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crumbs-mirror > .crumb-wrap:last-child {
+  flex-shrink: 0;
+}
+
+/* Bouton « … » : ouvre la liste des dossiers parents replies. */
+.crumb-more {
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--cp-text-muted);
+}
+.crumb-more:hover:not(:disabled) {
+  color: var(--cp-text);
+}
+.crumb-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--cp-menu-stroke);
+  background: var(--cp-menu-bg);
+  box-shadow: var(--cp-menu-shadow);
+}
+.crumb-wrap {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.crumb {
+  border: 0;
+  background: transparent;
+  color: var(--cp-text);
+  font: inherit;
+  padding: 2px 5px;
+  border-radius: 4px;
+  cursor: default;
+  white-space: nowrap;
+}
+.crumb:hover:not(:disabled) {
+  background: var(--cp-control-hover);
+}
+.crumb-sep {
+  color: var(--cp-text-muted);
+  padding: 0 1px;
+  flex: 0 0 auto;
+}
+
+.explorer-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+/* ---- Volet de navigation (arbre) ---------------------------------------- */
+.nav-pane {
+  flex: 0 0 200px;
+  min-width: 150px;
+  /* Colonne : l'arbre (.nav-scroll) defile, la barre d'etat reste en pied. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-size: 12.5px;
+  /* LE trait vertical de separation (rejoint le trait de l'en-tete au coin). */
+  border-right: 1px solid var(--cp-stroke);
+}
+/* Poignee de redimensionnement : superposee au trait, transparente au repos. */
+.pane-splitter {
+  flex: 0 0 auto;
+  position: relative;
+  width: 8px;
+  margin: 0 -4px;
+  cursor: col-resize;
+  z-index: 3;
+}
+.pane-splitter::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 1px;
+  height: 100%;
+  transform: translateX(-0.5px);
+  background: transparent;
+}
+.pane-splitter:hover::after {
+  background: var(--cp-accent);
+}
+.tree-section + .tree-section {
+  margin-top: 8px;
+}
+.tree-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cp-text-muted);
+  padding: 2px 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.tree-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+  padding-right: 6px;
+  border-radius: 6px;
+  cursor: default;
+  white-space: nowrap;
+  user-select: none;
+}
+.tree-row:hover {
+  background: var(--cp-control-hover);
+}
+.tree-row.is-current {
+  background: color-mix(in srgb, var(--cp-accent) 22%, transparent);
+}
+/* Indicateur de depot (reordonnancement) : trait fin qui s'estompe aux bouts,
+   place PILE entre les deux dossiers ou l'element va s'inserer. */
+.tree-row.drop-before::after,
+.tree-row.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--cp-accent) 20%,
+    var(--cp-accent) 80%,
+    transparent
+  );
+}
+.tree-row.drop-before::after {
+  top: -1px;
+}
+.tree-row.drop-after::after {
+  bottom: -1px;
+}
+.tree-chevron {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  color: var(--cp-text-muted);
+  transition: transform 0.12s ease;
+}
+.tree-chevron.open {
+  transform: rotate(90deg);
+}
+.tree-chevron .uicon {
+  width: 11px;
+  height: 11px;
+}
+.tree-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+}
+.tree-icon .ficon {
+  width: 17px;
+  height: 17px;
+}
+.tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-loading {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--cp-accent);
+  border-right-color: transparent;
+  animation: cp-spin 0.7s linear infinite;
+}
+
+/* ---- Zone fichiers : etats + icones ------------------------------------- */
+.files-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+/* En-tete de colonnes : HORS du defilement (rien ne passe derriere), fond
+   transparent comme la barre d'URL. */
+.files-head {
+  flex: 0 0 auto;
+  display: flex;
+  border-bottom: 1px solid var(--cp-stroke);
+  font-size: 12.5px;
+  color: var(--cp-text-muted);
+  user-select: none;
+  /* Reserve la meme gouttiere que le corps => colonnes alignees au defilement.
+     On le fait par un PADDING mesure (cf. --cp-sbw, calcule au demarrage), pas
+     par un `overflow-y: scroll` factice : cette fausse barre existait vraiment
+     et certaines plateformes y dessinaient leurs fleches de pas — deux chevrons
+     parasites au bout de la ligne d'en-tetes. Les masquer via
+     `::-webkit-scrollbar-button` n'a pas suffi ; ne plus creer de barre du tout
+     regle la question. Sur macOS la mesure vaut 0 (barres en surimpression, qui
+     ne decalent rien) : le padding disparait de lui-meme. */
+  overflow: hidden;
+  padding-right: var(--cp-sbw, 0px);
+}
+.fh-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+.fh-cell:hover {
+  color: var(--cp-text);
+}
+.fh-cell.c-size {
+  justify-content: flex-end;
+}
+/* Seul le corps de la liste defile. */
+.files-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+.files-empty {
+  color: var(--cp-text-muted);
+  padding: 24px;
+  text-align: center;
+}
+.files-error {
+  color: var(--cp-err);
+  white-space: pre-wrap;
+  text-align: left;
+}
+.files-banner {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 4px 8px;
+  border-radius: 0 0 6px 6px;
+  background: color-mix(in srgb, var(--cp-warn) 18%, var(--cp-control));
+  color: var(--cp-warn);
+  font-size: 11.5px;
+}
+/* Echec d'une operation (creation / renommage / deplacement) : rouge, et
+   refermable — contrairement au bandeau de listage, il ne part pas tout seul. */
+.files-banner-err {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--cp-err) 16%, var(--cp-control));
+  color: var(--cp-err);
+}
+.banner-close {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: default;
+}
+.banner-close:hover {
+  background: color-mix(in srgb, var(--cp-err) 30%, transparent);
+}
+
+/* Poids de ce qu'on s'apprete a supprimer, dans la confirmation. */
+.modal-weight {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 0 16px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--cp-err) 12%, var(--cp-control));
+  color: var(--cp-err);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Renommage sur place -------------------------------------------------- */
+.rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid var(--cp-accent);
+  border-radius: 3px;
+  background: var(--cp-field);
+  color: var(--cp-text);
+  font: inherit;
+  outline: none;
+}
+.tile .rename-input {
+  width: 100%;
+  text-align: center;
+}
+
+/* ---- Cible d'un depot SUR un dossier --------------------------------------
+   Le surlignage se pose sur l'icone + le nom (`.name-cell` / `.tile-target`),
+   pas sur la ligne ou la tuile entiere : c'est exactement la zone qui accepte
+   le lacher, et le liseré doit donc la dessiner sans deborder. Partout ailleurs
+   le lacher retombe sur le panneau (copie dans le dossier affiche). */
+.files-table tbody tr.row-drop .name-cell,
+.tile.tile-drop .tile-target {
+  background: color-mix(in srgb, var(--cp-accent) 26%, transparent);
+  outline: 1px solid var(--cp-accent);
+  /* Trace le liseré vers l'INTERIEUR. En vue liste, la cible occupe desormais
+     toute la hauteur de sa cellule, et `td` est en `overflow: hidden` : une
+     outline posee par defaut (donc a l'exterieur de la boite) voyait ses traits
+     du haut et du bas rognes, alors que les cotes survivaient grace aux 8 px de
+     retrait horizontal de la cellule. Verifie au pixel : sans ce decalage, les
+     scanlines n'ont que les bords verticaux ; avec, les deux traits
+     horizontaux sont bien la. */
+  outline-offset: -1px;
+  border-radius: 5px;
+}
+/* Spinner de chargement : en OVERLAY dans la barre d'adresse (hors du flux),
+   sinon son apparition/disparition a chaque navigation decale les boutons de
+   vue. Pastille de fond opaque => reste lisible si le chemin passe dessous.
+   PIEGE : centrer avec transform: translateY(-50%) entre en conflit avec
+   l'animation qui anime elle aussi `transform` (rotate) => l'animation ecrase
+   le centrage et la pastille descend puis se teleporte a chaque tour. On
+   centre donc avec margin-top (moitie de la hauteur), transform reste libre. */
+.loading-dot {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  margin-top: -4.5px;
+  z-index: 1;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--cp-accent);
+  border-right-color: transparent;
+  animation: cp-spin 0.7s linear infinite;
+  box-shadow: 0 0 0 3px var(--cp-field);
+}
+@keyframes cp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ficon {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ---- Vue liste (details, colonnes triables) ----------------------------- */
+.files-table {
+  width: 100%;
+  table-layout: auto;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+/* WebKit (macOS) : le user-select:none herite du body ne bloque pas toujours
+   l'extension de selection texte native au Shift+clic entre lignes => on le
+   repose explicitement (avec le prefixe) sur les lignes elles-memes. */
+.files-table tbody tr,
+.tiles .tile {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.th-label {
+  vertical-align: middle;
+}
+.sort-caret {
+  color: var(--cp-accent);
+  font-size: 10px;
+  margin-left: 3px;
+}
+/* Poignee de redimensionnement de colonne (bord droit de l'en-tete). */
+.col-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+.files-table td {
+  padding: 2px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.files-table tbody tr {
+  cursor: default;
+  user-select: none;
+}
+.files-table tbody tr:hover {
+  background: var(--cp-control-hover);
+}
+.files-table tbody tr.row-selected {
+  background: color-mix(in srgb, var(--cp-accent) 26%, transparent);
+}
+.name-cell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  /* Colle au contenu au lieu d'occuper toute la colonne : c'est cette boite qui
+     recoit un depot sur le dossier, elle ne doit pas manger la largeur restante
+     (sinon plus moyen de viser le panneau dans un dossier bien rempli). */
+  width: fit-content;
+  max-width: 100%;
+  /* En HAUTEUR, au contraire, elle occupe toute la ligne : les cibles de deux
+     dossiers voisins se TOUCHENT. Sans ca, la bande morte entre deux lignes
+     rendait la main au panneau, et promener un fichier de haut en bas faisait
+     clignoter la surbrillance entre « ce dossier » et « le panneau ».
+     On y arrive en DEPLACANT le retrait vertical du `td` vers cette boite (cf.
+     `td.c-name` ci-dessous) : la hauteur de ligne ne change pas, mais la cible
+     va bien d'un bord a l'autre. `min-height` rattrape le cas ou une autre
+     colonne serait plus haute. */
+  min-height: 100%;
+  padding: 2px 3px;
+}
+/* Le retrait vertical passe dans `.name-cell` : sans ca il resterait une bande
+   morte entre deux cibles (cf. ci-dessus). L'horizontal, lui, ne bouge pas. */
+.files-table td.c-name {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.cell-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+.cell-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-date,
+.c-type {
+  color: var(--cp-text-muted);
+}
+.c-size {
+  text-align: right;
+  color: var(--cp-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Vue tuiles (miniatures) -------------------------------------------- */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 4px;
+  padding: 8px;
+  align-content: start;
+}
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  border-radius: 8px;
+  cursor: default;
+  user-select: none;
+}
+.tile:hover {
+  background: var(--cp-control-hover);
+}
+/* Zone qui accepte le depot dans une tuile : l'icone + le nom, sans les marges
+   de la tuile — il reste ainsi du vide entre les tuiles pour viser le panneau. */
+/* Cible de depot d'une tuile. Volontairement PLUS ETROITE que la tuile : en
+   vue miniatures les tuiles sont larges et jointives, une cible pleine largeur
+   ne laisserait quasiment plus de vide pour viser le panneau. On rend donc une
+   bande de chaque cote au depot global. (Vue liste : c'est l'inverse, les
+   cibles doivent se toucher en hauteur — cf. `.name-cell`.) */
+.tile-target {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 84%;
+  min-width: 0;
+  padding: 2px 0;
+  border-radius: 6px;
+}
+.tile.tile-selected {
+  background: color-mix(in srgb, var(--cp-accent) 26%, transparent);
+}
+.tile-icon {
+  width: 56px;
+  height: 56px;
+}
+.tile-name {
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.25;
+  max-width: 100%;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+/* ---- Menu contextuel ---------------------------------------------------- */
+.ctx-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 170px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--cp-menu-stroke);
+  background: var(--cp-menu-bg);
+  box-shadow: var(--cp-menu-shadow);
+}
+/* Taille de l'element, en tete du menu contextuel (pas un bouton : une info). */
+.ctx-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  color: var(--cp-text-muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Rouleau de chargement : le calcul de la taille d'un dossier oblige rclone a
+   parcourir toute l'arborescence, ce n'est pas instantane sur un gros dossier. */
+.ctx-spinner {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--cp-stroke-strong);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: ctx-spin 0.7s linear infinite;
+}
+@keyframes ctx-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--cp-text);
+  font: inherit;
+  cursor: default;
+}
+.ctx-item:hover:not(:disabled) {
+  background: var(--cp-accent);
+  color: var(--cp-accent-text);
+}
+.ctx-item:disabled {
+  opacity: 0.4;
+}
+.ctx-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--cp-stroke);
+}
+.ctx-item.ctx-danger {
+  color: var(--cp-err);
+}
+.ctx-item.ctx-danger:hover:not(:disabled) {
+  background: var(--cp-err);
+  color: #fff;
+}
+
+/* Rectangle de selection au lasso (rubber-band). */
+.rubber-band {
+  position: fixed;
+  z-index: 20;
+  pointer-events: none;
+  border: 1px solid var(--cp-accent);
+  background: color-mix(in srgb, var(--cp-accent) 18%, transparent);
+}
+
+/* Bouton de confirmation destructif. */
+.btn-danger {
+  background: var(--cp-err);
+}
+
+/* ---- Dialogue modal (conflit de copie) ---------------------------------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+/* Les modales sont des freres a z-index egal : la DERNIERE du DOM gagne. La
+   confirmation de fermeture est declaree avant celle d'edition, elle passait
+   donc dessous quand les deux s'ouvraient ensemble (fermer avec une edition
+   modifiee en attente). Elle prime sur tout : c'est la decision la plus urgente. */
+.modal-backdrop.is-top {
+  z-index: 110;
+}
+.modal {
+  width: min(440px, 90vw);
+  padding: 18px 20px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--cp-menu-stroke);
+  background: var(--cp-menu-bg);
+  box-shadow: var(--cp-menu-shadow);
+}
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.modal-body {
+  color: var(--cp-text);
+  font-size: 13px;
+  line-height: 1.4;
+  margin-bottom: 12px;
+}
+.modal-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--cp-text-muted);
+}
+.modal-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--cp-text-muted);
+  margin-bottom: 16px;
+  cursor: default;
+}
+.modal-check input {
+  accent-color: var(--cp-accent);
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.btn-ghost,
+.btn-accent {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: var(--cp-radius);
+  font: inherit;
+  font-weight: 600;
+  cursor: default;
+}
+.btn-ghost {
+  border: 1px solid var(--cp-stroke);
+  background: var(--cp-control);
+  color: var(--cp-text);
+}
+.btn-ghost:hover {
+  background: var(--cp-control-hover);
+}
+.btn-accent {
+  border: 0;
+  background: var(--cp-accent);
+  color: var(--cp-accent-text);
+}
+.btn-accent:hover {
+  filter: brightness(1.08);
+}
+
+/* ---- Fenetre parametres ------------------------------------------------- */
+.modal-settings {
+  width: min(520px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+}
+/* Onglets des parametres : contenu compact, boutons du bas toujours visibles. */
+.set-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0 4px;
+  border-bottom: 1px solid var(--cp-stroke);
+}
+.set-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--cp-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 12px;
+  cursor: default;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.set-tab:hover {
+  color: var(--cp-text);
+}
+.set-tab.is-active {
+  color: var(--cp-accent);
+  border-bottom-color: var(--cp-accent);
+}
+/* Hauteur mini pour que la fenetre ne saute pas d'un onglet a l'autre. */
+.set-body {
+  min-height: 232px;
+  padding-top: 4px;
+}
+/* Les deux liens « Réinitialiser » / « Réinitialiser tout » a gauche du pied. */
+.set-reset-group {
+  display: flex;
+  gap: 14px;
+}
+.set-section {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cp-text-muted);
+  margin: 14px 0 6px;
+}
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+/* Case a cocher des reglages (accent systeme, comme le reste). */
+.set-check {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--cp-accent);
+  cursor: default;
+}
+
+/* Rappel du cout reel des reglages (transferts x decoupe = canaux SFTP). */
+.set-note {
+  margin-top: 6px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: var(--cp-control);
+  color: var(--cp-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.set-note.is-warn {
+  background: color-mix(in srgb, var(--cp-warn) 18%, var(--cp-control));
+  color: var(--cp-warn);
+}
+.set-label {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.set-hint {
+  color: var(--cp-text-muted);
+  font-size: 11.5px;
+}
+.set-input {
+  flex: 0 0 auto;
+  width: 110px;
+  height: 32px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: var(--cp-radius);
+  background: var(--cp-field);
+  color: var(--cp-text);
+  padding: 0 10px;
+  font: inherit;
+  outline: none;
+}
+/* Spinner natif masque (il dessine un carre sombre non stylable) : on met nos
+   propres fleches a la place. */
+.set-input::-webkit-inner-spin-button,
+.set-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+.num-input {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.num-field {
+  position: relative;
+  flex: 0 0 auto;
+  width: 110px;
+}
+.num-input {
+  width: 100%;
+  padding-right: 22px;
+}
+.num-steppers {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  right: 1px;
+  width: 20px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--cp-stroke);
+}
+.num-step {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--cp-text-muted);
+  cursor: default;
+  font-size: 7px;
+  line-height: 1;
+  padding: 0;
+}
+.num-step:hover {
+  background: var(--cp-control-hover);
+  color: var(--cp-text);
+}
+.app[data-os="macos"] .set-input:focus {
+  border-color: var(--cp-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cp-accent) 35%, transparent);
+}
+.app[data-os="windows"] .set-input:focus,
+.app[data-os="linux"] .set-input:focus {
+  box-shadow: inset 0 -2px 0 0 var(--cp-accent);
+}
+.modal-actions-split {
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.conn-error {
+  margin: -4px 12px 6px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--cp-err) 15%, transparent);
+  color: var(--cp-err);
+  font-size: 12px;
+}
+
+/* ---- File de transferts --------------------------------------------------- */
+.transfers-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 200px;
+  /* AUCUN retrait horizontal ici : il est descendu sur les enfants (barre
+     d'onglets et lignes de transfert). C'est ce qui permet a la teinte de
+     progression d'aller VRAIMENT d'un bord a l'autre de la fenetre : elle est
+     posee en absolu sur la ligne, donc elle ne peut atteindre le bord que si la
+     ligne elle-meme y touche. Deborder par une marge negative n'etait pas une
+     option : la liste est en `overflow-y: auto`, ce qui la fait aussi rogner
+     horizontalement. */
+  padding: 4px 0;
+  border-top: 1px solid var(--cp-stroke);
+}
+/* Onglets + actions en haut, toujours visibles ; aucun fond. Meme recette que
+   .files-head : gouttiere reservee par un padding MESURE, jamais par une fausse
+   barre de defilement (qui affichait ses fleches de pas sur certaines
+   plateformes). */
+.transfers-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 12px 4px;
+  overflow: hidden;
+  /* Aligne son bord droit sur celui des lignes (12 px + la gouttiere). */
+  padding-right: calc(12px + var(--cp-sbw, 0px));
+}
+.transfers-tabs {
+  display: flex;
+  gap: 2px;
+}
+.transfers-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+/* Onglets « File d'attente » / « Terminés » : soulignes en couleur d'accent. */
+.tab-btn {
+  border: 0;
+  background: transparent;
+  color: var(--cp-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+  padding: 4px 8px;
+  border-radius: 5px 5px 0 0;
+  border-bottom: 2px solid transparent;
+}
+.tab-btn:hover {
+  color: var(--cp-text);
+}
+.tab-btn.is-active {
+  color: var(--cp-text);
+  border-bottom-color: var(--cp-accent);
+}
+/* « Analyse de N éléments… » pendant l'eclatement d'un dossier depose. */
+.xfer-prep {
+  color: var(--cp-text-muted);
+  font-size: 12px;
+}
+.xfer-empty {
+  /* Meme retrait horizontal que les lignes : il vivait sur le panneau, qui n'en
+     porte plus depuis que la teinte de progression va bord a bord. Sans ca, le
+     message se collait au bord de la fenetre. */
+  padding: 10px 12px;
+  color: var(--cp-text-muted);
+  font-size: 12px;
+}
+/* macOS : les barres de defilement sont en SURIMPRESSION. Elles ne prennent
+   aucune place dans la mise en page — `scrollbar-gutter` n'a donc aucun effet —
+   et elles S'ELARGISSENT au survol (~15 px de large), passant par-dessus les
+   boutons ✕ / ↻ de la colonne de droite. Seul un vrai retrait les degage.
+   (Windows/Linux : barres classiques qui prennent leur place => la gouttiere
+   suffit, cf. .transfers-list.) */
+.app[data-os="macos"] .xfer-row,
+.app[data-os="macos"] .transfers-actions {
+  /* 12 px de marge + 18 px degages pour la barre macOS. */
+  padding-right: 30px;
+}
+/* Seules les lignes defilent, sous les actions. La barre de defilement doit
+   rester HORS du contenu : sans gouttiere reservee, elle se dessine par-dessus
+   la colonne de droite et recouvre les boutons ✕ / ↻ de chaque ligne. Le
+   padding ajoute en plus un peu d'air entre la barre et les boutons. */
+.transfers-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  /* Ni retrait ni gouttiere : les lignes occupent toute la largeur, sinon la
+     teinte s'arreterait avant le bord. Le degagement de la barre de defilement
+     est porte par le retrait droit des lignes (cf. `.xfer-row`). */
+}
+/* Liste virtualisee : chaque ligne a une hauteur FIXE et exacte, seule facon
+   de calculer de maniere fiable quelles lignes sont visibles a partir de la
+   position de defilement. La constante ROW_H (TransfersPanel.tsx) doit valoir
+   cette hauteur. `border-box` : padding compris, donc la ligne fait pile 26 px.
+   (L'onglet Édition n'est pas virtualise et garde une hauteur libre.) */
+.transfers-list.is-virtual .xfer-row {
+  height: 26px;
+  box-sizing: border-box;
+}
+.xfer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Le retrait horizontal vit ICI, plus sur le panneau : la ligne touche les
+     deux bords de la fenetre, seul son CONTENU est rentre. La teinte, posee en
+     absolu, se cale donc sur la largeur totale. A droite on degage en plus la
+     largeur d'une barre de defilement pour que le bouton ✕ ne passe jamais
+     dessous. */
+  padding: 3px 12px;
+  padding-right: calc(12px + var(--cp-sbw, 0px));
+  font-size: 12px;
+  /* Ancre la teinte de progression, qui est en position absolue. */
+  position: relative;
+}
+.xfer-row.is-done {
+  color: var(--cp-text-muted);
+}
+.xfer-name {
+  flex: 1 1 40%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Progression = TEINTE DE FOND de la ligne, plus une barre dans une colonne.
+   Le nom recupere la place liberee, et l'avancement se lit de loin sans avoir a
+   comparer des barres. Pleine hauteur et SANS arrondi : deux lignes voisines
+   forment une colonne continue, et la hauteur de ligne ne bouge pas d'un pixel
+   (elle est fixee par le texte, pas par la teinte). */
+.xfer-wash {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--cp-accent) 22%, transparent);
+  transition: width 0.3s ease;
+  pointer-events: none;
+}
+/* Le contenu passe AU-DESSUS de la teinte (elle est posee en premier). */
+.xfer-row > :not(.xfer-wash) {
+  position: relative;
+}
+/* (L'air entre le bord de la teinte et le nom est desormais fourni par le
+   retrait de 12 px de la ligne elle-meme — plus besoin d'un decalage dedie.) */
+/* En attente de reprise : teinte qui respire, pour distinguer d'un vrai echec. */
+.xfer-wash.is-retry {
+  background: color-mix(in srgb, var(--cp-warn) 26%, transparent);
+  animation: xfer-pulse 1.4s ease-in-out infinite;
+}
+.xfer-wash.is-err {
+  background: color-mix(in srgb, var(--cp-err) 24%, transparent);
+}
+@keyframes xfer-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+/* Sous-dossier d'origine, devant le nom du fichier (copie de dossier eclatee). */
+.xfer-rel {
+  color: var(--cp-text-muted);
+}
+/* Onglet « Terminés » : la taille prend la place de la barre de progression. */
+.xfer-size {
+  flex: 1 1 40%;
+  text-align: right;
+  padding-right: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--cp-text-muted);
+}
+.xfer-stat {
+  flex: 0 0 92px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--cp-text-muted);
+  /* Toujours sur UNE ligne : « Reprise dans 12 s » ou « Figé 12s » se coupaient
+     en deux, laissant l'unite toute seule en dessous. Mieux vaut tronquer
+     proprement que renvoyer a la ligne dans une liste dense. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xfer-stat.is-retry {
+  color: var(--cp-warn);
+}
+.xfer-stat.is-err {
+  color: var(--cp-err);
+}
+/* Nombre de flux multi-thread, juste a gauche du debit. Largeur auto (ne prend
+   que « 16 flux »), donc n'entame la place du nom que quand il est present (les
+   lignes sans debit n'ont pas cette colonne). Le compte passe en couleur
+   d'alerte quand l'envoi a du se rabattre sur moins de connexions. */
+.xfer-streams {
+  flex: 0 0 auto;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--cp-text-muted);
+  white-space: nowrap;
+}
+.xfer-streams.is-retry {
+  color: var(--cp-warn);
+}
+.xfer-act {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--cp-text-muted);
+  cursor: default;
+  font-size: 11px;
+  line-height: 1;
+}
+.xfer-act:hover {
+  background: var(--cp-control-active);
+  color: var(--cp-text);
+}
+.xfer-cancel:hover {
+  background: var(--cp-err);
+  color: #fff;
+}
+/* « Arrêter de surveiller » : lisible mais FIN — l'onglet Édition peut aligner
+   plusieurs fichiers, la hauteur de ligne ne doit pas enfler. */
+.btn-stop-watch {
+  flex: 0 0 auto;
+  height: 20px;
+  padding: 0 9px;
+  border: 1px solid var(--cp-accent);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--cp-accent);
+  cursor: default;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.btn-stop-watch:hover {
+  background: var(--cp-accent);
+  color: var(--cp-accent-text);
+}
+.xfer-act-spacer {
+  flex: 0 0 auto;
+  width: 20px;
+}
+.link-btn {
+  border: 0;
+  background: transparent;
+  color: var(--cp-accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+  padding: 2px 4px;
+}
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* ---- Barre de transferts -------------------------------------------------- */
+.transfer-bar {
+  flex: 0 0 auto;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-top: 1px solid var(--cp-stroke);
+  color: var(--cp-text-muted);
+  font-size: 12px;
+}
+.rclone-ver {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+  /* Ne se fait jamais tronquer ni ecraser : c'est le resume a sa gauche qui
+     cede la place. */
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.transfer-bar {
+  gap: 12px;
+}
+.xfer-progress {
+  flex: 0 0 140px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--cp-control-active);
+  overflow: hidden;
+}
+.xfer-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--cp-accent);
+  transition: width 0.3s ease;
+}
+.xfer-text {
+  flex: 1 1 auto;
+  color: var(--cp-text);
+  font-variant-numeric: tabular-nums;
+  /* Un element flex refuse par defaut de descendre sous la taille de son
+     contenu (`min-width: auto`) : le resume debordait donc du retrait de la
+     barre et venait toucher le bord de la fenetre quand elle est etroite. On
+     l'autorise a retrecir, et on tronque proprement. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Lien tombe : la file n'est pas perdue, elle attend le retour du reseau. */
+.xfer-text.is-retry {
+  color: var(--cp-warn);
+}
+.xfer-progress-fill.is-retry {
+  background: var(--cp-warn);
+}
+.xfer-err {
+  flex: 1 1 auto;
+  color: var(--cp-err);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Fenetre Journal ------------------------------------------------------ */
+.modal-journal {
+  width: min(760px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+.journal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.journal-filters {
+  display: flex;
+  gap: 4px;
+}
+.journal-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.link-danger {
+  color: var(--cp-err);
+}
+.link-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  text-decoration: none;
+}
+.journal-fbtn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: var(--cp-radius);
+  background: var(--cp-control);
+  color: var(--cp-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+}
+.journal-fbtn:hover {
+  background: var(--cp-control-hover);
+}
+.journal-fbtn.is-on {
+  border-color: var(--cp-accent);
+  background: color-mix(in srgb, var(--cp-accent) 16%, var(--cp-control));
+  color: var(--cp-text);
+}
+.journal-list {
+  flex: 1 1 auto;
+  min-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--cp-stroke);
+  border-radius: var(--cp-radius);
+  background: var(--cp-control);
+  padding: 4px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.journal-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--cp-text-muted);
+}
+.journal-row {
+  display: grid;
+  grid-template-columns: 132px 84px 1fr;
+  gap: 8px;
+  padding: 2px 12px;
+  font-variant-numeric: tabular-nums;
+}
+.journal-row:hover {
+  background: var(--cp-control-hover);
+}
+.journal-time {
+  color: var(--cp-text-muted);
+  white-space: nowrap;
+}
+.journal-cat {
+  color: var(--cp-text-muted);
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  align-self: center;
+}
+.journal-msg {
+  color: var(--cp-text);
+  word-break: break-word;
+}
+.journal-row.lvl-warn .journal-msg {
+  color: var(--cp-warn);
+}
+.journal-row.lvl-error .journal-msg {
+  color: var(--cp-err);
+}
+
+/* ---- Barre d'etat du volet de navigation -------------------------------- */
+.nav-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 4px;
+}
+.nav-status {
+  flex: 0 0 auto;
+  padding: 5px 10px 6px;
+  border-top: 1px solid var(--cp-stroke);
+  font-size: 11.5px;
+  color: var(--cp-text-muted);
+  /* Volet etroit : la partie « selectionnes » passe a la ligne, jamais coupee. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.nav-status-sep {
+  width: 1px;
+  height: 11px;
+  background: var(--cp-stroke-strong);
+}

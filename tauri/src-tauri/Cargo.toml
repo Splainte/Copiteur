@@ -1,0 +1,50 @@
+[package]
+name = "copiteur"
+version = "0.1.0"
+description = "Copiteur — client de transfert de fichiers natif (rclone)"
+authors = ["Splainte"]
+edition = "2021"
+
+[lib]
+# Le suffixe `_lib` evite un conflit de nom lib/bin sur Windows.
+name = "copiteur_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dev-dependencies]
+# Tests : `#[tokio::test]` (l'app, elle, n'a besoin que de `time`).
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[dependencies]
+# macos-private-api : requis pour une fenetre transparente sur macOS (Vibrancy)
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Client HTTP pour parler a l'API RC locale de rclone (rcd). Pas de TLS :
+# on ne tape que http://127.0.0.1 => on desactive les features par defaut.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+# Deja tire par Tauri ; on n'active que `time` pour temporiser les retries RC.
+tokio = { version = "1", features = ["time"] }
+# Entropie systeme : secret de l'API RC, tire au hasard a chaque lancement.
+getrandom = "0.3"
+
+# Materiaux natifs : Mica (Windows 11) + Vibrancy/NSVisualEffectView (macOS).
+window-vibrancy = "0.6"
+
+# macOS : messages Obj-C dynamiques pour stabiliser le contenu au resize/zoom.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+# `defaults read` (couleur d'accent) lance depuis une commande async : il faut la
+# version non bloquante de Command, sinon on gele un thread de l'executor.
+tokio = { version = "1", features = ["process"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -1,0 +1,55 @@
+name: Build macOS
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            # Image « macOS 26 + Xcode 27 » : le look des fenêtres (feux tricolores…)
+            # dépend du SDK avec lequel l'app est liée. Lié à un vieux SDK, macOS garde
+            # l'ancien design par compatibilité.
+            runner: xcode-27
+            label: apple-silicon
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Installer les dépendances npm
+        run: npm install
+
+      - name: Télécharger rclone (sidecar)
+        run: node scripts/prepare-bins.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Tauri (${{ matrix.target }})
+        run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Vérifier Xcode + SDK lié
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+          vtool -show-build src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app/Contents/MacOS/Copiteur
+
+      - name: Uploader le .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: Copiteur-macos-${{ matrix.label }}
+          path: tauri/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
