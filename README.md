@@ -135,8 +135,17 @@ ligne de commande, que `ps` et le Gestionnaire des tâches exposent. Verrouillé
 `scripts/prepare-bins.mjs` refuse une archive qui ne correspond pas — utile même si le serveur
 de téléchargement est un jour compromis, puisque ce binaire finit dans l'installeur signé.
 
-*Avant toute distribution* : mots de passe SFTP dans le trousseau système (aujourd'hui en clair
-dans `serveurs.json`), vérification de la clé d'hôte SFTP (`known_hosts`), CSP.
+**Seules les commandes rclone dont l'app se sert passent.** Le pont entre l'interface et
+rclone n'accepte que 16 méthodes de l'API, et refuse tout paramètre ou chemin qui ferait
+lancer un programme par rclone (option SFTP `ssh`, remotes créés à la volée `:sftp,…:`,
+`core/command`…). Même une faille d'affichage future ne donnerait pas d'exécution de code.
+Couvert par des tests.
+
+**La config rclone reste en mémoire** (`--config ""`) : le mot de passe du serveur courant
+n'est jamais écrit dans un `rclone.conf`.
+
+**Politique de sécurité du contenu (CSP) stricte** : l'interface ne charge que ses propres
+fichiers, aucun script ni ressource extérieure.
 
 ## Licence
 
