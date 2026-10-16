@@ -15,6 +15,7 @@ import {
   type EditItem,
   type Settings,
 } from "./files";
+import { t, tn, useT, type Key } from "./i18n";
 
 export type Tab = "queue" | "done" | "failed" | "cancelled" | "edition";
 
@@ -106,9 +107,9 @@ export const isStalled = (x: Xfer, now: number): boolean =>
 function statusText(x: Xfer, now: number): string {
   switch (x.status) {
     case "queued":
-      return "En attente";
+      return t("panels.xfer.queued");
     case "starting":
-      return "Démarrage…";
+      return t("panels.xfer.starting");
     case "running":
       // Le debit affiche est une moyenne glissante : il decroit doucement au
       // lieu de tomber a zero, donc il ne revele pas un lien tombe. On le dit.
@@ -116,31 +117,29 @@ function statusText(x: Xfer, now: number): string {
       // passait a la ligne et coupait le « s » des secondes.
       if (isStalled(x, now)) {
         const s = Math.round((now - (x.movedAt ?? now)) / 1000);
-        return `Figé ${s}s`;
+        return t("panels.xfer.stalled", { s });
       }
-      return `${humanSize(x.speed)}/s`;
+      return t("common.perSecond", { size: humanSize(x.speed) });
     case "retry": {
       const s = Math.max(0, Math.ceil((x.nextTry - now) / 1000));
-      return `Reprise dans ${s} s`;
+      return t("panels.xfer.retryIn", { s });
     }
     case "done":
-      return "Terminé";
+      return t("panels.xfer.done");
     case "error":
-      return "Échec";
+      return t("panels.xfer.error");
     case "cancelled":
-      return "Annulé";
+      return t("panels.xfer.cancelled");
   }
 }
 
 // Bulle d'aide de la colonne « flux » : l'explication longue tient dans le
 // `title` natif (aucune place a l'ecran, visible au survol seulement).
 function streamsTitle(x: Xfer, n: number, fallback: boolean, s: Settings): string {
-  const dir = x.dstFs.startsWith(REMOTE) ? "Envoi" : "Téléchargement";
-  if (fallback)
-    return `${dir} rabaissé à ${n} flux après un refus de connexions du serveur (repli automatique).`;
-  if (n === 1)
-    return `${dir} en flux unique : fichier sous le seuil de découpe (${s.cutoff}).`;
-  return `${dir} découpé en ${n} flux parallèles.`;
+  const dir = t(x.dstFs.startsWith(REMOTE) ? "panels.xfer.upload" : "panels.xfer.download");
+  if (fallback) return tn("panels.xfer.tipFallback", n, { dir });
+  if (n === 1) return t("panels.xfer.tipSingle", { dir, cutoff: s.cutoff });
+  return t("panels.xfer.tipSplit", { dir, n });
 }
 
 function Row({
@@ -199,7 +198,7 @@ function Row({
           className={"xfer-streams" + (streams.fallback ? " is-retry" : "")}
           title={streamsTitle(x, streams.n, streams.fallback, settings)}
         >
-          {streams.n} flux
+          {tn("panels.xfer.streams", streams.n)}
         </span>
       )}
       <span
@@ -217,8 +216,8 @@ function Row({
         <button
           className="xfer-act"
           onClick={() => onRetry(x)}
-          title={x.error || "Relancer ce transfert"}
-          aria-label="Relancer"
+          title={x.error || t("panels.xfer.retryTitle")}
+          aria-label={t("panels.xfer.retry")}
         >
           ↻
         </button>
@@ -228,8 +227,8 @@ function Row({
         <button
           className="xfer-act xfer-cancel"
           onClick={() => onCancel(x)}
-          title="Annuler ce transfert"
-          aria-label="Annuler"
+          title={t("panels.xfer.cancelTitle")}
+          aria-label={t("common.cancel")}
         >
           ✕
         </button>
@@ -238,18 +237,18 @@ function Row({
   );
 }
 
-const EMPTY: Record<Tab, string> = {
-  queue: "Aucun transfert en attente.",
-  done: "Aucun transfert terminé.",
-  failed: "Aucun échec.",
-  cancelled: "Aucun transfert annulé.",
-  edition: "Aucun fichier en cours d'édition.",
+const EMPTY: Record<Tab, Key> = {
+  queue: "panels.xfer.empty.queue",
+  done: "panels.xfer.empty.done",
+  failed: "panels.xfer.empty.failed",
+  cancelled: "panels.xfer.empty.cancelled",
+  edition: "panels.xfer.empty.edition",
 };
 
-const EDIT_STATE: Record<EditItem["state"], string> = {
-  watching: "Surveillé",
-  changed: "Modifié",
-  uploading: "Renvoi…",
+const EDIT_STATE: Record<EditItem["state"], Key> = {
+  watching: "panels.edit.watching",
+  changed: "panels.edit.changed",
+  uploading: "panels.edit.uploading",
 };
 
 // Une ligne de l'onglet « En cours d'édition » : nom, état, et actions
@@ -273,15 +272,15 @@ function EditRow({
           "xfer-stat" + (e.state === "changed" ? " is-retry" : "")
         }
       >
-        {EDIT_STATE[e.state]}
+        {t(EDIT_STATE[e.state])}
       </span>
       {e.state === "changed" ? (
         <button
           className="link-btn"
           onClick={() => onResend(e)}
-          title="Renvoyer sur le serveur"
+          title={t("panels.edit.resendTitle")}
         >
-          Renvoyer
+          {t("panels.edit.resend")}
         </button>
       ) : (
         <span className="xfer-act-spacer" />
@@ -293,9 +292,9 @@ function EditRow({
       <button
         className="btn-stop-watch"
         onClick={() => onStop(e.id)}
-        title="Ne plus surveiller ce fichier"
+        title={t("panels.edit.stopTitle")}
       >
-        Arrêter de surveiller
+        {t("panels.edit.stop")}
       </button>
     </div>
   );
@@ -340,6 +339,7 @@ export function TransfersPanel({
   onEditResend: (e: EditItem) => void;
   onEditStop: (id: number) => void;
 }) {
+  useT();
   const rows =
     tab === "queue"
       ? queue
@@ -366,42 +366,42 @@ export function TransfersPanel({
     <div className="transfers-panel">
       <div className="transfers-actions">
         <div className="transfers-tabs">
-          <Tabs id="queue" label="File d'attente" n={queue.length} />
-          <Tabs id="done" label="Terminés" n={done.length} />
-          <Tabs id="failed" label="Échoués" n={failed.length} />
-          <Tabs id="cancelled" label="Annulés" n={cancelled.length} />
+          <Tabs id="queue" label={t("panels.tab.queue")} n={queue.length} />
+          <Tabs id="done" label={t("panels.tab.done")} n={done.length} />
+          <Tabs id="failed" label={t("panels.tab.failed")} n={failed.length} />
+          <Tabs id="cancelled" label={t("panels.tab.cancelled")} n={cancelled.length} />
           {/* N'apparait qu'une fois qu'on edite au moins un fichier. */}
           {edits.length > 0 && (
-            <Tabs id="edition" label="En cours d'édition" n={edits.length} />
+            <Tabs id="edition" label={t("panels.tab.edition")} n={edits.length} />
           )}
         </div>
         <div className="transfers-tools">
           {preparing > 0 && (
             <span className="xfer-prep">
-              Analyse de {preparing} élément{preparing > 1 ? "s" : ""}…
+              {tn("panels.xfer.preparing", preparing)}
             </span>
           )}
           {tab === "queue" && queue.length > 0 && (
             <button className="link-btn" onClick={onCancelAll}>
-              Tout annuler
+              {t("panels.xfer.cancelAll")}
             </button>
           )}
           {tab === "failed" && retryable > 0 && (
             <button className="link-btn" onClick={onRetryFailed}>
-              Tout relancer ({retryable})
+              {t("panels.xfer.retryAll", { n: retryable })}
             </button>
           )}
           {/* Annulés : relance en lot (choix explicite — éviter de cliquer une
               à une sur des centaines de ↻). */}
           {tab === "cancelled" && cancelled.length > 0 && (
             <button className="link-btn" onClick={onRetryCancelled}>
-              Tout relancer ({cancelled.length})
+              {t("panels.xfer.retryAll", { n: cancelled.length })}
             </button>
           )}
           {(tab === "done" || tab === "failed" || tab === "cancelled") &&
             rows.length > 0 && (
               <button className="link-btn" onClick={() => onClear(tab)}>
-                Nettoyer
+                {t("panels.xfer.clear")}
               </button>
             )}
         </div>
@@ -414,7 +414,7 @@ export function TransfersPanel({
       {tab === "edition" ? (
         <div className="transfers-list">
           {edits.length === 0 ? (
-            <div className="xfer-empty">{EMPTY.edition}</div>
+            <div className="xfer-empty">{t(EMPTY.edition)}</div>
           ) : (
             edits.map((e) => (
               <EditRow
@@ -428,7 +428,7 @@ export function TransfersPanel({
         </div>
       ) : rows.length === 0 ? (
         <div className="transfers-list">
-          <div className="xfer-empty">{EMPTY[tab]}</div>
+          <div className="xfer-empty">{t(EMPTY[tab])}</div>
         </div>
       ) : (
         <VirtualRows

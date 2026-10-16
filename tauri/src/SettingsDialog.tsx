@@ -3,6 +3,8 @@
 // ============================================================
 import { useState } from "react";
 import { DEFAULT_SETTINGS, type Settings } from "./files";
+import { getLang, setLang, tx, useT, type Lang } from "./i18n";
+import { LanguageChoice } from "./i18n/LanguagePicker";
 
 function NumberRow({
   label,
@@ -17,6 +19,7 @@ function NumberRow({
   min?: number;
   onChange: (v: number) => void;
 }) {
+  const t = useT();
   const clamp = (v: number) => Math.max(min, v);
   return (
     <label className="set-row">
@@ -38,7 +41,7 @@ function NumberRow({
             type="button"
             className="num-step"
             tabIndex={-1}
-            aria-label="Augmenter"
+            aria-label={t("panels.set.increase")}
             onClick={() => onChange(value + 1)}
           >
             ▲
@@ -47,7 +50,7 @@ function NumberRow({
             type="button"
             className="num-step"
             tabIndex={-1}
-            aria-label="Diminuer"
+            aria-label={t("panels.set.decrease")}
             onClick={() => onChange(clamp(value - 1))}
           >
             ▼
@@ -129,7 +132,10 @@ export function SettingsDialog({
   onSave: (s: Settings) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [s, setS] = useState<Settings>(settings);
+  // Langue : appliquee a l'enregistrement, comme le reste des reglages.
+  const [lang, setLangDraft] = useState<Lang>(getLang);
   const [tab, setTab] = useState<"affichage" | "vitesse" | "connexion" | "maj">(
     "affichage",
   );
@@ -142,10 +148,10 @@ export function SettingsDialog({
   const overloaded = peak > s.sftpConcurrency;
 
   const TABS = [
-    ["affichage", "Affichage"],
-    ["vitesse", "Vitesse"],
-    ["connexion", "Connexion"],
-    ["maj", "Mises à jour"],
+    ["affichage", t("panels.set.tab.display")],
+    ["vitesse", t("panels.set.tab.speed")],
+    ["connexion", t("panels.set.tab.connection")],
+    ["maj", t("panels.set.tab.updates")],
   ] as const;
 
   // Reglages appartenant a chaque onglet : « Réinitialiser » ne touche que
@@ -179,7 +185,7 @@ export function SettingsDialog({
         className="modal modal-settings"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="modal-title">Paramètres</div>
+        <div className="modal-title">{t("panels.set.title")}</div>
 
         {/* Onglets : le contenu tient sans defiler, les boutons du bas restent
             toujours visibles. */}
@@ -200,15 +206,22 @@ export function SettingsDialog({
         <div className="set-body">
           {tab === "affichage" && (
             <>
+              <div className="set-row">
+                <span className="set-label">
+                  {t("common.language")}
+                  <span className="set-hint">{t("common.languageHint")}</span>
+                </span>
+                <LanguageChoice value={lang} onChange={setLangDraft} />
+              </div>
               <CheckRow
-                label="Afficher les fichiers et dossiers cachés"
-                hint="Comme dans l'explorateur : masqués par défaut (noms commençant par un point, éléments marqués « caché » par Windows, dossiers système du NAS)."
+                label={t("panels.set.showHidden")}
+                hint={t("panels.set.showHiddenHint")}
                 value={s.showHidden}
                 onChange={(v) => set("showHidden", v)}
               />
               <CheckRow
-                label="Afficher les lecteurs réseau / volumes distants"
-                hint="Masqués par défaut dans le volet de navigation local, pour éviter de mélanger par erreur une copie SFTP vers un NAS avec ce même NAS monté en lecteur réseau (SMB…)."
+                label={t("panels.set.showNetworkDrives")}
+                hint={t("panels.set.showNetworkDrivesHint")}
                 value={s.showNetworkDrives}
                 onChange={(v) => set("showNetworkDrives", v)}
               />
@@ -218,39 +231,39 @@ export function SettingsDialog({
           {tab === "vitesse" && (
             <>
               <NumberRow
-                label="Transferts simultanés"
-                hint="Nombre de fichiers copiés en même temps."
+                label={t("panels.set.parallel")}
+                hint={t("panels.set.parallelHint")}
                 value={s.parallel}
                 onChange={(v) => set("parallel", v)}
               />
               <NumberRow
-                label="Découpe des gros fichiers (téléchargement)"
-                hint="Un gros fichier téléchargé est découpé en N flux parallèles : c'est ce qui casse le plafond de ~11 Mo/s par connexion."
+                label={t("panels.set.streams")}
+                hint={t("panels.set.streamsHint")}
                 value={s.streams}
                 onChange={(v) => set("streams", v)}
               />
               <NumberRow
-                label="Découpe des gros fichiers (envoi)"
-                hint="Idem à la montée (vers le serveur). Si le serveur refuse autant de connexions simultanées, le transfert réessaie tout seul avec moins de flux (jusqu'à une seule connexion), donc on peut viser haut."
+                label={t("panels.set.uploadStreams")}
+                hint={t("panels.set.uploadStreamsHint")}
                 value={s.uploadStreams}
                 onChange={(v) => set("uploadStreams", v)}
               />
               <TextRow
-                label="Seuil de découpe"
-                hint="Taille à partir de laquelle un fichier est découpé, ex. 256M."
+                label={t("panels.set.cutoff")}
+                hint={t("panels.set.cutoffHint")}
                 value={s.cutoff}
                 onChange={(v) => set("cutoff", v)}
               />
               <TextRow
-                label="Taille des morceaux"
-                hint="Taille de chaque morceau, ex. 128M."
+                label={t("panels.set.chunkSize")}
+                hint={t("panels.set.chunkSizeHint")}
                 value={s.chunkSize}
                 onChange={(v) => set("chunkSize", v)}
               />
               <div className={"set-note" + (overloaded ? " is-warn" : "")}>
                 {overloaded
-                  ? `Jusqu'à ${peak} canaux SFTP demandés en pointe, au-delà de la limite de ${s.sftpConcurrency} : baisse les transferts simultanés ou la découpe, ou augmente les connexions SFTP.`
-                  : `Jusqu'à ${peak} canaux SFTP en pointe (limite : ${s.sftpConcurrency}).`}
+                  ? t("panels.set.peakOver", { peak, max: s.sftpConcurrency })
+                  : t("panels.set.peak", { peak, max: s.sftpConcurrency })}
               </div>
             </>
           )}
@@ -258,23 +271,23 @@ export function SettingsDialog({
           {tab === "connexion" && (
             <>
               <NumberRow
-                label="Connexions SFTP"
-                hint="Requêtes SFTP simultanées. Appliqué à la prochaine connexion."
+                label={t("panels.set.sftpConcurrency")}
+                hint={t("panels.set.sftpConcurrencyHint")}
                 value={s.sftpConcurrency}
                 onChange={(v) => set("sftpConcurrency", v)}
               />
               <NumberRow
-                label="Tentatives de reprise"
-                hint="Reprises automatiques après une coupure (4G, tunnel, veille). 0 = sans limite."
+                label={t("panels.set.retries")}
+                hint={t("panels.set.retriesHint")}
                 value={s.retries}
                 min={0}
                 onChange={(v) => set("retries", v)}
               />
               <TextRow
-                label="Limite de débit"
-                hint="Bride la vitesse, ex. 10M. Vide = illimité."
+                label={t("panels.set.bwlimit")}
+                hint={t("panels.set.bwlimitHint")}
                 value={s.bwlimit}
-                placeholder="illimité"
+                placeholder={t("panels.set.unlimited")}
                 onChange={(v) => set("bwlimit", v)}
               />
             </>
@@ -285,18 +298,15 @@ export function SettingsDialog({
               <div className="set-row">
                 <span className="set-label">
                   Copiteur {appVersion}
-                  <span className="set-hint">
-                    Les mises à jour sont signées : une version dont la
-                    signature ne correspond pas est refusée.
-                  </span>
+                  <span className="set-hint">{t("panels.set.signedHint")}</span>
                 </span>
                 <button className="btn-ghost" onClick={onCheckUpdates}>
-                  Rechercher
+                  {t("panels.set.checkNow")}
                 </button>
               </div>
               <CheckRow
-                label="Vérifier au démarrage"
-                hint="Copiteur regarde s'il existe une nouvelle version à chaque lancement et propose de l'installer. Rien n'est installé sans votre accord."
+                label={t("panels.set.checkUpdates")}
+                hint={t("panels.set.checkUpdatesHint")}
                 value={s.checkUpdates}
                 onChange={(v) => set("checkUpdates", v)}
               />
@@ -309,30 +319,31 @@ export function SettingsDialog({
             <button
               className="link-btn"
               onClick={() => setConfirm("tab")}
-              title={`Restaurer les valeurs par défaut de l'onglet « ${tabLabel} »`}
+              title={t("panels.set.resetTabTitle", { tab: tabLabel })}
             >
-              Réinitialiser
+              {t("panels.set.reset")}
             </button>
             <button
               className="link-btn"
               onClick={() => setConfirm("all")}
-              title="Restaurer TOUS les réglages aux valeurs par défaut"
+              title={t("panels.set.resetAllTitle")}
             >
-              Réinitialiser tout
+              {t("panels.set.resetAll")}
             </button>
           </div>
           <div className="modal-actions">
             <button className="btn-ghost" onClick={onClose}>
-              Annuler
+              {t("common.cancel")}
             </button>
             <button
               className="btn-accent"
               onClick={() => {
+                if (lang !== getLang()) setLang(lang);
                 onSave(s);
                 onClose();
               }}
             >
-              Enregistrer
+              {t("common.save")}
             </button>
           </div>
         </div>
@@ -351,26 +362,22 @@ export function SettingsDialog({
             className="modal modal-confirm"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <div className="modal-title">Confirmation requise</div>
+            <div className="modal-title">{t("panels.set.confirmTitle")}</div>
             <div className="modal-body">
-              {confirm === "all" ? (
-                <>
-                  Réinitialiser <strong>tous les réglages</strong> à leurs
-                  valeurs par défaut ?
-                </>
-              ) : (
-                <>
-                  Réinitialiser les réglages de l'onglet{" "}
-                  <strong>« {tabLabel} »</strong> à leurs valeurs par défaut ?
-                </>
-              )}
+              {confirm === "all"
+                ? tx("panels.set.confirmAll", {
+                    all: <strong>{t("panels.set.confirmAllStrong")}</strong>,
+                  })
+                : tx("panels.set.confirmTab", {
+                    tab: <strong>{t("panels.set.quotedTab", { tab: tabLabel })}</strong>,
+                  })}
             </div>
             <div className="modal-actions">
               <button className="btn-ghost" onClick={() => setConfirm(null)}>
-                Non
+                {t("panels.set.no")}
               </button>
               <button className="btn-accent" onClick={applyReset}>
-                Oui, réinitialiser
+                {t("panels.set.yesReset")}
               </button>
             </div>
           </div>

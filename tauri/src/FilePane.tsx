@@ -48,9 +48,10 @@ import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FileIcon, UiIcon } from "./icons";
 import { NavTree, type TreeSection } from "./NavTree";
 import { logEvent } from "./journal";
+import { t, tn, tx, useLang, type Key } from "./i18n";
 
 // Libelle du cote pour le journal (« Ton PC » / « Serveur »).
-const sideLabel = (s: Side) => (s === "local" ? "Ton PC" : "Serveur");
+const sideLabel = (s: Side) => (s === "local" ? t("common.yourPc") : t("common.server"));
 
 const isWin = navigator.userAgent.includes("Windows");
 const isMac = navigator.userAgent.includes("Macintosh");
@@ -68,11 +69,12 @@ type View = "list" | "tiles";
 const DEFAULT_COLS = { name: 300, date: 132, type: 140, size: 96 };
 type ColW = typeof DEFAULT_COLS;
 
-const COLS: { key: SortKey; label: string; className: string }[] = [
-  { key: "name", label: "Nom", className: "c-name" },
-  { key: "date", label: "Modifié le", className: "c-date" },
-  { key: "type", label: "Type", className: "c-type" },
-  { key: "size", label: "Taille", className: "c-size" },
+// `label` = cle de traduction (le texte est resolu au rendu, dans la langue courante).
+const COLS: { key: SortKey; label: Key; className: string }[] = [
+  { key: "name", label: "pane.col.name", className: "c-name" },
+  { key: "date", label: "pane.col.date", className: "c-date" },
+  { key: "type", label: "pane.col.type", className: "c-type" },
+  { key: "size", label: "pane.col.size", className: "c-size" },
 ];
 
 export function FilePane({
@@ -142,6 +144,8 @@ export function FilePane({
   onSetStartDir?: (path: string) => void;
 }) {
   const isLocal = side === "local";
+  // Abonne le panneau au changement de langue (re-rendu dans la nouvelle langue).
+  const lang = useLang();
   const rootPath = isLocal ? "/" : "/";
 
   // Historique de navigation (precedent / suivant), facon explorateur.
@@ -385,7 +389,10 @@ export function FilePane({
       invoke<LocalRoot[]>("local_roots")
         .then(setRoots)
         .catch(() => setRoots([]));
-  }, [isLocal]);
+    // `lang` : les noms des lecteurs sont fabriques par le backend, dans sa
+    // langue courante ; on les redemande quand la langue change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLocal, lang]);
   useEffect(() => {
     refreshRoots();
   }, [refreshRoots]);
@@ -399,7 +406,7 @@ export function FilePane({
       pins.length > 0
         ? [
             {
-              title: "Accès rapide",
+              title: t("pane.tree.quickAccess"),
               reorderable: true,
               nodes: pins.map((p) => ({
                 label: p.label,
@@ -415,7 +422,7 @@ export function FilePane({
         {
           nodes: [
             {
-              label: "Serveur",
+              label: t("common.server"),
               path: "/",
               icon: "drive" as const,
               defaultOpen: true,
@@ -426,7 +433,7 @@ export function FilePane({
     return [
       ...quick,
       {
-        title: "Ce PC",
+        title: t("pane.tree.thisPc"),
         nodes: roots
           .filter((r) => r.kind === "drive")
           .filter((r) => showNetworkDrives || r.driveType !== "network")
@@ -439,7 +446,7 @@ export function FilePane({
           })),
       },
     ];
-  }, [isLocal, enabled, roots, pins, showNetworkDrives]);
+  }, [isLocal, enabled, roots, pins, showNetworkDrives, lang]);
 
   // Chargement resilient : garde la liste precedente sur echec transitoire,
   // retente les vides suspects tant qu'une copie tourne (SFTP sature).
@@ -613,10 +620,10 @@ export function FilePane({
     const n = sorted.length;
     const k = sorted.reduce((c, e) => c + (selected.has(e.Path) ? 1 : 0), 0);
     return {
-      count: `${n} élément${n > 1 ? "s" : ""}`,
-      sel: k > 0 ? `${k} sélectionné${k > 1 ? "s" : ""}` : "",
+      count: tn("pane.status.items", n),
+      sel: k > 0 ? tn("pane.status.selected", k) : "",
     };
-  }, [enabled, sorted, selected]);
+  }, [enabled, sorted, selected, lang]);
 
   // Fait defiler jusqu'a un element pour qu'il soit visible. Le `rAF` laisse la
   // liste se re-rendre avant qu'on cherche la ligne : apres un renommage ou un
@@ -733,13 +740,18 @@ export function FilePane({
         logEvent(
           "info",
           "operation",
-          `Suppression définitive : ${sideLabel(side)} ${entriesDir}${it.Name}${it.IsDir ? "/" : ""}`,
+          t("pane.log.deleted", {
+            path: `${sideLabel(side)} ${entriesDir}${it.Name}${it.IsDir ? "/" : ""}`,
+          }),
         );
       } catch (e) {
         logEvent(
           "error",
           "operation",
-          `Suppression impossible : ${sideLabel(side)} ${entriesDir}${it.Name} — ${e}`,
+          t("pane.log.deleteFailed", {
+            path: `${sideLabel(side)} ${entriesDir}${it.Name}`,
+            err: String(e),
+          }),
         );
         /* on continue les autres */
       }
@@ -793,13 +805,24 @@ export function FilePane({
   // l'explorateur : on tape le nom tout de suite.
   const newFolder = async () => {
     setOpErr("");
-    const name = freeName("Nouveau dossier", new Set(entries.map((e) => e.Name)));
+    const name = freeName(t("pane.newFolderName"), new Set(entries.map((e) => e.Name)));
     try {
       await rc("operations/mkdir", fileAddr(side, entriesDir, name));
-      logEvent("info", "operation", `Nouveau dossier : ${sideLabel(side)} ${entriesDir}${name}`);
+      logEvent(
+        "info",
+        "operation",
+        t("pane.log.newFolder", { path: `${sideLabel(side)} ${entriesDir}${name}` }),
+      );
     } catch (e) {
-      setOpErr(`Création impossible : ${e}`);
-      logEvent("error", "operation", `Création impossible : ${sideLabel(side)} ${entriesDir}${name} — ${e}`);
+      setOpErr(t("pane.err.create", { err: String(e) }));
+      logEvent(
+        "error",
+        "operation",
+        t("pane.log.createFailed", {
+          path: `${sideLabel(side)} ${entriesDir}${name}`,
+          err: String(e),
+        }),
+      );
       return;
     }
     await load(entriesDir);
@@ -824,7 +847,7 @@ export function FilePane({
       return;
     }
     if (entries.some((e) => e.Name === name)) {
-      setOpErr(`« ${name} » existe déjà dans ce dossier.`);
+      setOpErr(t("pane.err.exists", { name }));
       return;
     }
 
@@ -850,14 +873,21 @@ export function FilePane({
       logEvent(
         "info",
         "operation",
-        `Renommé : ${sideLabel(side)} ${entriesDir}${target.Name} → ${name}`,
+        t("pane.log.renamed", {
+          path: `${sideLabel(side)} ${entriesDir}${target.Name}`,
+          name,
+        }),
       );
     } catch (e) {
-      setOpErr(`Renommage impossible : ${e}`);
+      setOpErr(t("pane.err.rename", { err: String(e) }));
       logEvent(
         "error",
         "operation",
-        `Renommage impossible : ${sideLabel(side)} ${entriesDir}${target.Name} → ${name} — ${e}`,
+        t("pane.log.renameFailed", {
+          path: `${sideLabel(side)} ${entriesDir}${target.Name}`,
+          name,
+          err: String(e),
+        }),
       );
     }
     await load(entriesDir);
@@ -990,14 +1020,21 @@ export function FilePane({
         logEvent(
           "info",
           "operation",
-          `Déplacé : ${sideLabel(side)} ${payload.dir}${it.Name} → ${destDir}`,
+          t("pane.log.moved", {
+            path: `${sideLabel(side)} ${payload.dir}${it.Name}`,
+            dest: destDir,
+          }),
         );
       } catch (e) {
-        setOpErr(`Déplacement impossible : ${e}`);
+        setOpErr(t("pane.err.move", { err: String(e) }));
         logEvent(
           "error",
           "operation",
-          `Déplacement impossible : ${sideLabel(side)} ${payload.dir}${it.Name} → ${destDir} — ${e}`,
+          t("pane.log.moveFailed", {
+            path: `${sideLabel(side)} ${payload.dir}${it.Name}`,
+            dest: destDir,
+            err: String(e),
+          }),
         );
       }
     }
@@ -1346,7 +1383,7 @@ export function FilePane({
             className="nav-btn"
             disabled={!enabled || hist.idx === 0}
             onClick={goBack}
-            title="Précédent"
+            title={t("pane.head.back")}
           >
             <UiIcon name="back" />
           </button>
@@ -1354,7 +1391,7 @@ export function FilePane({
             className="nav-btn"
             disabled={!enabled || hist.idx >= hist.stack.length - 1}
             onClick={goForward}
-            title="Suivant"
+            title={t("pane.head.forward")}
           >
             <UiIcon name="forward" />
           </button>
@@ -1362,7 +1399,7 @@ export function FilePane({
             className="nav-btn"
             disabled={!enabled}
             onClick={goUp}
-            title="Remonter"
+            title={t("pane.head.up")}
           >
             <UiIcon name="up" />
           </button>
@@ -1370,7 +1407,7 @@ export function FilePane({
             className="nav-btn"
             disabled={!enabled}
             onClick={() => load(entriesDir)}
-            title="Rafraîchir"
+            title={t("pane.head.refresh")}
           >
             <UiIcon name="refresh" />
           </button>
@@ -1402,13 +1439,13 @@ export function FilePane({
               onBlur={() => setEditingAddr(false)}
               spellCheck={false}
               disabled={!enabled}
-              aria-label={`Chemin ${title}`}
+              aria-label={t("pane.head.pathOf", { title })}
             />
           ) : (
             <div
               className="crumbs"
               ref={crumbsRef}
-              title="Cliquer pour saisir un chemin"
+              title={t("pane.head.typePath")}
               onClick={(e) => {
                 if (e.target === e.currentTarget && enabled) {
                   setAddr(dir);
@@ -1423,7 +1460,7 @@ export function FilePane({
                   <button
                     className="crumb crumb-more"
                     disabled={!enabled}
-                    title="Dossiers parents"
+                    title={t("pane.head.parents")}
                     onClick={(e) => {
                       e.stopPropagation();
                       onFocus();
@@ -1475,7 +1512,7 @@ export function FilePane({
             </div>
           )}
 
-          {loading && <span className="loading-dot" title="Chargement…" />}
+          {loading && <span className="loading-dot" title={t("pane.head.loading")} />}
 
           {/* Menu deroulant des parents replies (du plus proche au plus loin). */}
           {crumbMenu && hiddenCrumbs > 0 && (
@@ -1507,12 +1544,12 @@ export function FilePane({
           <input
             ref={searchInputRef}
             className="search-bar"
-            placeholder="Rechercher ici…"
+            placeholder={t("pane.head.searchHere")}
             value={search}
             disabled={!enabled}
             spellCheck={false}
             tabIndex={searchOpen ? 0 : -1}
-            aria-label={`Rechercher dans ${title}`}
+            aria-label={t("pane.head.searchIn", { title })}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
@@ -1530,7 +1567,7 @@ export function FilePane({
             <button
               type="button"
               className="search-clear"
-              title="Effacer"
+              title={t("pane.head.clear")}
               tabIndex={searchOpen ? 0 : -1}
               // preventDefault : ne pas retirer le focus du champ (sinon un
               // champ vide se replierait alors qu'on voulait juste effacer).
@@ -1553,7 +1590,7 @@ export function FilePane({
           // qu'il ne soit pas ferme puis rouvert dans le meme geste.
           onMouseDown={(e) => e.preventDefault()}
           onClick={toggleSearch}
-          title="Rechercher"
+          title={t("pane.head.search")}
         >
           <UiIcon name="search" />
         </button>
@@ -1561,14 +1598,14 @@ export function FilePane({
           <button
             className={"view-btn" + (view === "list" ? " on" : "")}
             onClick={() => setViewMode("list")}
-            title="Vue liste"
+            title={t("pane.head.listView")}
           >
             <UiIcon name="list" />
           </button>
           <button
             className={"view-btn" + (view === "tiles" ? " on" : "")}
             onClick={() => setViewMode("tiles")}
-            title="Vue miniatures"
+            title={t("pane.head.tilesView")}
           >
             <UiIcon name="tiles" />
           </button>
@@ -1633,7 +1670,7 @@ export function FilePane({
           }}
         >
           {enabled && error && entries.length > 0 && (
-            <div className="files-banner">Liste non actualisée : {error}</div>
+            <div className="files-banner">{t("pane.list.stale", { err: error })}</div>
           )}
           {/* Echec d'une operation (creation, renommage, deplacement) : sans ca,
               un nom refuse par le serveur echouerait en silence. */}
@@ -1642,7 +1679,7 @@ export function FilePane({
               {opErr}
               <button
                 className="banner-close"
-                aria-label="Fermer"
+                aria-label={t("common.close")}
                 onClick={() => setOpErr("")}
               >
                 ✕
@@ -1665,7 +1702,7 @@ export function FilePane({
                       style={{ width: `${(w / total) * 100}%` }}
                       onClick={() => toggleSort(col.key)}
                     >
-                      <span className="th-label">{col.label}</span>
+                      <span className="th-label">{t(col.label)}</span>
                       {sortKey === col.key && (
                         <span className="sort-caret">
                           {sortDir === 1 ? "▲" : "▼"}
@@ -1689,24 +1726,24 @@ export function FilePane({
             onPointerDown={onBandStart}
           >
             {!enabled ? (
-              <div className="files-empty">Non connecté</div>
+              <div className="files-empty">{t("pane.list.notConnected")}</div>
             ) : sorted.length === 0 ? (
               loading ? (
-                <div className="files-empty">Chargement…</div>
+                <div className="files-empty">{t("pane.head.loading")}</div>
               ) : error ? (
                 <div className="files-empty files-error">{error}</div>
               ) : searchOpen && search ? (
                 // Filtre actif qui ne laisse rien passer.
                 <div className="files-empty">
-                  Aucun résultat pour « {search} »
+                  {t("pane.list.noResult", { query: search })}
                 </div>
               ) : entries.length > 0 ? (
                 // Le dossier n'est pas vide : tout son contenu est masque.
                 <div className="files-empty">
-                  Dossier vide (contenu masqué)
+                  {t("pane.list.emptyHidden")}
                 </div>
               ) : (
-                <div className="files-empty">Dossier vide</div>
+                <div className="files-empty">{t("pane.list.empty")}</div>
               )
             ) : view === "list" ? (
               <table
@@ -1839,9 +1876,7 @@ export function FilePane({
                     setMenu(null);
                   }}
                 >
-                  {pinned
-                    ? "Désépingler de l'accès rapide"
-                    : "Épingler à l'accès rapide"}
+                  {pinned ? t("pane.ctx.unpin") : t("pane.ctx.pin")}
                 </button>
               );
             })()
@@ -1861,14 +1896,12 @@ export function FilePane({
                     ) : sizeInfo.bytes === -1 ? (
                       <>
                         <span className="ctx-spinner" />
-                        Calcul de la taille…
+                        {t("pane.ctx.sizeComputing")}
                       </>
                     ) : sizeInfo.bytes === -2 ? (
-                      "Taille indisponible"
+                      t("pane.ctx.sizeUnavailable")
                     ) : (
-                      `${humanSize(sizeInfo.bytes)} · ${sizeInfo.count} fichier${
-                        sizeInfo.count > 1 ? "s" : ""
-                      }`
+                      `${humanSize(sizeInfo.bytes)} · ${tn("pane.count.files", sizeInfo.count)}`
                     )}
                   </div>
                   <div className="ctx-sep" />
@@ -1885,7 +1918,7 @@ export function FilePane({
                       setMenu(null);
                     }}
                   >
-                    Nouveau dossier
+                    {t("pane.ctx.newFolder")}
                   </button>
                   <div className="ctx-sep" />
                 </>
@@ -1901,7 +1934,7 @@ export function FilePane({
                       setMenu(null);
                     }}
                   >
-                    Ouvrir
+                    {t("pane.ctx.open")}
                   </button>
                   {isWin && !menu.target.IsDir && (
                     <button
@@ -1911,7 +1944,7 @@ export function FilePane({
                         setMenu(null);
                       }}
                     >
-                      Ouvrir avec…
+                      {t("pane.ctx.openWith")}
                     </button>
                   )}
                   <button
@@ -1921,7 +1954,7 @@ export function FilePane({
                       setMenu(null);
                     }}
                   >
-                    Ouvrir dans l'explorateur
+                    {t("pane.ctx.reveal")}
                   </button>
                   <div className="ctx-sep" />
                 </>
@@ -1938,7 +1971,7 @@ export function FilePane({
                       setMenu(null);
                     }}
                   >
-                    Ouvrir
+                    {t("pane.ctx.open")}
                   </button>
                   <div className="ctx-sep" />
                 </>
@@ -1951,7 +1984,7 @@ export function FilePane({
                   setMenu(null);
                 }}
               >
-                Copier
+                {t("pane.ctx.copy")}
               </button>
               <button
                 className="ctx-item"
@@ -1961,7 +1994,7 @@ export function FilePane({
                   setMenu(null);
                 }}
               >
-                Coller
+                {t("pane.ctx.paste")}
               </button>
               <div className="ctx-sep" />
               {menu.target && (
@@ -1970,7 +2003,7 @@ export function FilePane({
                   disabled={selected.size > 1}
                   title={
                     selected.size > 1
-                      ? "Sélectionne un seul élément pour le renommer"
+                      ? t("pane.ctx.renameOne")
                       : undefined
                   }
                   onClick={() => {
@@ -1978,7 +2011,7 @@ export function FilePane({
                     setMenu(null);
                   }}
                 >
-                  Renommer
+                  {t("common.rename")}
                 </button>
               )}
               <button
@@ -1989,7 +2022,7 @@ export function FilePane({
                   setMenu(null);
                 }}
               >
-                Supprimer
+                {t("common.delete")}
               </button>
               {menu.target?.IsDir &&
                 (() => {
@@ -2005,9 +2038,7 @@ export function FilePane({
                           setMenu(null);
                         }}
                       >
-                        {pinned
-                          ? "Désépingler de l'accès rapide"
-                          : "Épingler à l'accès rapide"}
+                        {pinned ? t("pane.ctx.unpin") : t("pane.ctx.pin")}
                       </button>
                     </>
                   );
@@ -2027,15 +2058,15 @@ export function FilePane({
                       className="ctx-item"
                       title={
                         isStart
-                          ? "Ne plus ouvrir ce serveur sur ce dossier au démarrage"
-                          : "Ouvrir ce serveur directement sur ce dossier à chaque connexion"
+                          ? t("pane.ctx.startHereOffHint")
+                          : t("pane.ctx.startHereHint")
                       }
                       onClick={() => {
                         onSetStartDir(isStart ? "" : p);
                         setMenu(null);
                       }}
                     >
-                      {isStart ? "Ne plus démarrer ici" : "Démarrer ici"}
+                      {isStart ? t("pane.ctx.startHereOff") : t("pane.ctx.startHere")}
                     </button>
                   );
                 })()}
@@ -2047,7 +2078,7 @@ export function FilePane({
                   setMenu(null);
                 }}
               >
-                Actualiser
+                {t("pane.ctx.refresh")}
               </button>
             </>
           )}
@@ -2080,20 +2111,23 @@ export function FilePane({
       {del && (
         <div className="modal-backdrop" onMouseDown={closeDel}>
           <div className="modal modal-confirm" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-title">Confirmation requise</div>
+            <div className="modal-title">{t("pane.del.title")}</div>
             <div className="modal-body">
-              Voulez-vous vraiment supprimer{" "}
-              <strong>
-                {del.length}{" "}
-                {(() => {
-                  const nDirs = del.filter((x) => x.IsDir).length;
-                  const nFiles = del.length - nDirs;
-                  const noun =
-                    nDirs === 0 ? "fichier" : nFiles === 0 ? "dossier" : "élément";
-                  return noun + (del.length > 1 ? "s" : "");
-                })()}
-              </strong>{" "}
-              {side === "local" ? "de « Ton PC »" : "du serveur"} ?
+              {tx(side === "local" ? "pane.del.askLocal" : "pane.del.askRemote", {
+                what: (
+                  <strong>
+                    {(() => {
+                      const nDirs = del.filter((x) => x.IsDir).length;
+                      const nFiles = del.length - nDirs;
+                      return nDirs === 0
+                        ? tn("pane.count.files", del.length)
+                        : nFiles === 0
+                          ? tn("pane.count.dirs", del.length)
+                          : tn("pane.count.items", del.length);
+                    })()}
+                  </strong>
+                ),
+              })}
             </div>
 
             {/* Le chiffre qui fait renoncer quand on visait le mauvais dossier. */}
@@ -2101,26 +2135,27 @@ export function FilePane({
               {delInfo?.computing ? (
                 <>
                   <span className="ctx-spinner" />
-                  Calcul du contenu…
+                  {t("pane.del.computing")}
                 </>
               ) : delInfo ? (
                 <>
                   <strong>
-                    {delInfo.partial && "au moins "}
-                    {delInfo.count.toLocaleString("fr-FR")} fichier
-                    {delInfo.count > 1 ? "s" : ""} · {humanSize(delInfo.bytes)}
+                    {delInfo.partial
+                      ? t("pane.del.atLeast", { what: tn("pane.count.files", delInfo.count) })
+                      : tn("pane.count.files", delInfo.count)}{" "}
+                    · {humanSize(delInfo.bytes)}
                   </strong>
-                  {delInfo.count > 0 && " — suppression définitive"}
+                  {delInfo.count > 0 && t("pane.del.permanent")}
                 </>
               ) : null}
             </div>
 
             <div className="modal-actions">
               <button className="btn-ghost" onClick={closeDel}>
-                Non
+                {t("pane.del.no")}
               </button>
               <button className="btn-accent btn-danger" onClick={doDelete}>
-                Oui, supprimer
+                {t("pane.del.yes")}
               </button>
             </div>
           </div>

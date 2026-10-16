@@ -50,7 +50,7 @@ fn load_or_create(_dir: &Path) -> Result<[u8; 32], String> {
     match e.get_secret() {
         Ok(bytes) => bytes
             .try_into()
-            .map_err(|_| "clé du trousseau illisible".to_string()),
+            .map_err(|_| crate::i18n::tr("clé du trousseau illisible", "unreadable keychain key").to_string()),
         Err(keyring::Error::NoEntry) => {
             let k = fresh_key()?;
             e.set_secret(&k).map_err(|e| e.to_string())?;
@@ -66,7 +66,7 @@ fn load_or_create(dir: &Path) -> Result<[u8; 32], String> {
     if let Ok(bytes) = std::fs::read(&f) {
         return bytes
             .try_into()
-            .map_err(|_| "fichier de clé illisible".to_string());
+            .map_err(|_| crate::i18n::tr("fichier de clé illisible", "unreadable key file").to_string());
     }
     let k = fresh_key()?;
     write_private(&f, &k).map_err(|e| e.to_string())?;

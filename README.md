@@ -1,179 +1,192 @@
 # Copiteur
 
-Client de transfert de fichiers SFTP en double explorateur, façon FileZilla, motorisé par
-**[rclone](https://rclone.org)**. Pensé pour rapatrier de gros fichiers (rushes vidéo…) depuis
-un NAS ou un serveur à pleine vitesse — y compris quand il ne reste qu'**un seul gros
-fichier**, le cas où FileZilla plafonne.
+**English** · [Français](README.fr.md)
 
-Windows et macOS (Apple Silicon). Tauri v2 + React/TypeScript, rclone embarqué.
+Dual-pane SFTP file transfer client, FileZilla-style, powered by
+**[rclone](https://rclone.org)**. Built to pull large files (video footage…) from a NAS or a
+server at full speed — including when only **one big file** is left, the case where
+FileZilla hits its ceiling.
 
-## Installer
+Windows and macOS (Apple Silicon), in English or French. Tauri v2 + React/TypeScript,
+bundled rclone.
 
-Télécharger la dernière version dans les
-[Releases](https://github.com/Splainte/Copiteur/releases/latest) :
+## Install
 
-- **Windows** : `Copiteur_x.y.z_x64-setup.exe`. L'installeur n'est pas signé : Windows
-  SmartScreen affiche « Windows a protégé votre ordinateur » → *Informations
-  complémentaires* → *Exécuter quand même*. Pas besoin de droits administrateur.
-- **macOS** : `Copiteur_x.y.z_aarch64.dmg`, glisser l'app dans Applications. L'app n'est pas
-  notariée par Apple : au premier lancement, clic droit sur l'app → *Ouvrir* → *Ouvrir*
-  (ou Réglages Système → Confidentialité et sécurité → *Ouvrir quand même*).
+Download the latest version from the
+[Releases](https://github.com/Splainte/Copiteur/releases/latest):
 
-Copiteur se met ensuite à jour tout seul : il vérifie au démarrage si une nouvelle version
-existe et propose de l'installer. Chaque mise à jour est signée ; une mise à jour dont la
-signature ne correspond pas est refusée.
+- **Windows**: `Copiteur_x.y.z_x64-setup.exe`. The installer is not signed: Windows
+  SmartScreen shows "Windows protected your PC" → *More info* → *Run anyway*. No
+  administrator rights needed.
+- **macOS**: `Copiteur_x.y.z_aarch64.dmg`, drag the app into Applications. The app is not
+  notarized by Apple: on first launch, right-click the app → *Open* → *Open*
+  (or System Settings → Privacy & Security → *Open Anyway*).
 
-## Ce que ça fait
+The language (English or French) is chosen in the installer on Windows, on first launch on
+macOS, and at any time in Settings > Display.
 
-**Transferts** — glisser-déposer entre les deux panneaux et Ctrl/Cmd+C · V, dans les deux sens.
-Lâcher sur un dossier copie dedans. Un dossier déposé est éclaté en un transfert par fichier.
-File d'attente à quatre onglets (attente / terminés / échoués / annulés), reprise automatique
-sur coupure réseau, indicateur « figé » quand plus un octet ne passe.
+Copiteur then keeps itself up to date: on startup it checks whether a new version exists and
+offers to install it. Every update is signed; an update whose signature doesn't match is
+rejected.
 
-**Navigation** — arbre + liste ou miniatures, tri, fil d'Ariane, dossiers épinglés, fichiers
-cachés masqués par défaut (y compris l'attribut caché Windows et les dossiers système Synology).
+## What it does
 
-**Fichiers** — créer, renommer, déplacer, supprimer (définitif, avec le poids annoncé),
-taille d'un dossier. Ouvrir un fichier distant l'ouvre dans l'application associée ; s'il est
-modifié, Copiteur propose de le **renvoyer sur le serveur**, en détectant les conflits.
+**Transfers** — drag and drop between the two panes and Ctrl/Cmd+C · V, in both directions.
+Dropping onto a folder copies into it. A dropped folder is split into one transfer per file.
+Four-tab queue (pending / done / failed / cancelled), automatic resume after a network drop,
+a "stalled" indicator when not a single byte is getting through.
 
-**Journal** — trace horodatée filtrable, et un « rapport » copiable qui contient versions,
-système et réglages, jamais de mot de passe.
+**Navigation** — tree + list or thumbnails, sorting, breadcrumb, pinned folders, hidden files
+hidden by default (including the Windows hidden attribute and Synology system folders).
 
-## Développer
+**Files** — create, rename, move, delete (permanent, with the total size shown), folder size.
+Opening a remote file opens it in its associated application; if it is modified, Copiteur
+offers to **send it back to the server**, detecting conflicts.
+
+**Log** — filterable timestamped trail, and a copyable "report" with versions, system and
+settings, never any password.
+
+## Development
 
 ```bash
 cd tauri
 npm install
-npm run prepare-bins      # télécharge rclone et vérifie son empreinte SHA-256
-npm run tauri dev         # lance l'app
-npm run tauri build       # installeurs
+npm run prepare-bins      # downloads rclone and checks its SHA-256 fingerprint
+npm run tauri dev         # runs the app
+npm run tauri build       # installers
 ```
 
-Vérifications :
+Checks:
 
 ```bash
 npx tsc --noEmit                    # types
-cd src-tauri && cargo test          # tests (sécurité API, journal, édition, chemins)
+cd src-tauri && cargo test          # tests (API security, log, editing, paths)
 ```
 
-## Pourquoi rclone
+### Translations
 
-Une connexion SFTP plafonne à ~11 Mo/s sur un lien à latence : c'est la limite d'**une**
-connexion, pas du réseau. FileZilla ne parallélise qu'**entre** fichiers — dès qu'il ne reste
-qu'un gros fichier, on retombe à 11 Mo/s. rclone sait découper **un seul fichier** en plusieurs
-flux sur le même serveur, sans rien installer côté NAS.
+Interface texts live in `tauri/src/i18n/locales/<language>/`, one file per area of the app,
+with the same keys in every language (TypeScript rejects a missing key). To add a language,
+copy `locales/en/` to `locales/xx/`, translate it, then declare it in `tauri/src/i18n/index.tsx`
+(`DICTS` and `LANGS`). The few texts produced by the Rust side (macOS menus, drive names, some
+errors) go through `tr()` in `tauri/src-tauri/src/i18n.rs`.
 
-Mesuré sur un NAS distant via VPN (2026-07-10, un seul gros fichier) :
+## Why rclone
 
-| Méthode | Débit | Stabilité |
+A single SFTP connection tops out at ~11 MB/s over a high-latency link: that's the limit of
+**one** connection, not of the network. FileZilla only parallelizes **across** files — as soon
+as only one big file is left, you drop back to 11 MB/s. rclone can split **a single file**
+into several streams to the same server, without installing anything on the NAS.
+
+Measured on a remote NAS over VPN (2026-07-10, one single big file):
+
+| Method | Throughput | Stability |
 |---|---|---|
-| 1 connexion (SFTP nu / SMB) | ~11 Mo/s | stable — le plafond à battre |
-| `rclone mount` + chunks | 70-90 Mo/s | erratique, inutilisable |
-| `rclone copy --multi-thread-streams 16 --multi-thread-chunk-size 128M` | **107 Mo/s** | **stable** |
+| 1 connection (plain SFTP / SMB) | ~11 MB/s | stable — the ceiling to beat |
+| `rclone mount` + chunks | 70-90 MB/s | erratic, unusable |
+| `rclone copy --multi-thread-streams 16 --multi-thread-chunk-size 128M` | **107 MB/s** | **stable** |
 
-Confirmé en usage réel : **142 Mo/s** agrégés sur une copie de 450 Go (2026-07-17).
-Ces valeurs sont les défauts de l'app, ajustables dans les réglages.
+Confirmed in real use: **142 MB/s** aggregate on a 450 GB copy (2026-07-17).
+These values are the app's defaults, adjustable in the settings.
 
-## Décisions techniques
+## Technical decisions
 
-**Pilotage par l'API de rclone** (`rclone rcd`), pas par du texte parsé. L'app parle en HTTP
-local au daemon : listages, copies asynchrones, stats par transfert, annulation propre.
+**Driven through rclone's API** (`rclone rcd`), not by parsing text output. The app talks
+HTTP locally to the daemon: listings, asynchronous copies, per-transfer stats, clean
+cancellation.
 
-**Réglages posés globalement** sur le daemon (`options/set`, bloc `main`), jamais par job.
-Un `_config` par copie faisait diverger les instances de connexion entre le transfert et le
-renommage qui suit.
+**Settings applied globally** on the daemon (`options/set`, `main` block), never per job.
+A per-copy `_config` made connection instances diverge between the transfer and the rename
+that follows it.
 
-**Écriture directe** (`--inplace`), comme FileZilla. Par défaut rclone écrit un `.partial`
-puis le renomme ; ce renommage déclenche par intermittence
+**Direct writes** (`--inplace`), like FileZilla. By default rclone writes a `.partial` file
+then renames it; that rename intermittently triggers
 [rclone#8653](https://github.com/rclone/rclone/issues/8653) (`can't move object - incompatible
-remotes`), constaté massivement sur une copie de 450 Go, tous calibres — donc pas lié au
-multi-thread, c'est le renommage lui-même. `--inplace` supprime l'étape, donc le bug.
-*Contrepartie assumée* : une copie interrompue laisse un fichier tronqué à son nom final ;
-la reprise le réécrit. À reconsidérer si rclone corrige la régression.
+remotes`), seen massively on a 450 GB copy, at every file size — so not related to
+multi-threading, it's the rename itself. `--inplace` removes that step, and therefore the bug.
+*Accepted trade-off*: an interrupted copy leaves a truncated file under its final name; the
+resume rewrites it. To revisit if rclone fixes the regression.
 
-**Vérification d'empreinte abandonnée à la volée** quand le serveur ne sait pas en produire.
-rclone calcule l'empreinte distante en lançant `md5sum` **par SSH** ; si le compte ne peut pas
-exécuter de commande, rclone prend la réponse inexploitable pour une empreinte et la compare —
-« corrupted on transfer: md5 hashes differ » avec une valeur vide d'un côté, et **tous** les
-transferts échouent. Copiteur reconnaît la signature (un md5 fait 32 hexadécimaux), bascule la
-connexion en `disable_hashcheck` et relance. La taille reste vérifiée. Par serveur, remis à
-zéro à chaque connexion : ceux dont les empreintes marchent les gardent.
+**Checksum verification dropped on the fly** when the server can't produce one.
+rclone computes the remote checksum by running `md5sum` **over SSH**; if the account can't
+run commands, rclone takes the unusable answer for a checksum and compares it —
+"corrupted on transfer: md5 hashes differ" with an empty value on one side, and **every**
+transfer fails. Copiteur recognizes the signature (an md5 is 32 hex digits), switches the
+connection to `disable_hashcheck` and retries. The size is still checked. Per server, reset
+on every connection: servers whose checksums work keep them.
 
-**Délais courts** (`Timeout` 1 min au lieu de 5) pour échouer vite sur un lien mort et laisser
-la reprise travailler, plutôt que de rester pendu.
+**Short timeouts** (`Timeout` 1 min instead of 5) to fail fast on a dead link and let the
+resume do its job, rather than hanging.
 
-## Pièges rencontrés
+## Pitfalls encountered
 
-- **Chemins Synology** : DSM affiche `/volume1/PARTAGE`, mais en SFTP l'utilisateur est posé à
-  la racine des partages — le chemin rclone correct est `remote:/PARTAGE/…`, sans `/volume1`.
-- **`operations/list` renvoie un `Path` relatif au `fs`**, pas au couple `{fs, remote}`. Le
-  re-joindre à la racine doublait le chemin et cassait toute copie de dossier depuis le serveur.
-- **`BwLimit` vide fait échouer tout le bloc `options/set`** (« empty string »), ce qui annulait
-  aussi les réglages multi-thread. On envoie `0` pour « illimité ».
-- **Windows interdit `? < > | " * :`** dans un nom. rclone les remplace par leurs équivalents
-  Unicode pleine chasse (`？` `＜`…), qui s'affichent à la largeur d'un idéogramme. Un aller-retour
-  NAS → Windows → NAS n'est donc pas neutre.
-- **Cmd+Q sur macOS ne passe pas par la fermeture de fenêtre** : le menu par défaut est câblé sur
-  `NSApp terminate:`, qui court-circuite la boucle d'événements. Il faut un menu custom pour
-  l'intercepter.
-- **`scrollbar-gutter` ne réserve rien sous macOS** (barres en surimpression) : là où il faut
-  vraiment dégager de la place, seul un retrait explicite fonctionne.
-- Hérités du template : commande Tauri synchrone = gel de l'UI (tout en async) ; `no_window()`
-  obligatoire sur les `Command` Windows ; Mica en `expect` = crash sur Windows 10.
+- **Synology paths**: DSM shows `/volume1/SHARE`, but over SFTP the user lands at the root of
+  the shares — the correct rclone path is `remote:/SHARE/…`, without `/volume1`.
+- **`operations/list` returns a `Path` relative to the `fs`**, not to the `{fs, remote}` pair.
+  Joining it back onto the root doubled the path and broke every folder copy from the server.
+- **An empty `BwLimit` makes the whole `options/set` block fail** ("empty string"), which also
+  cancelled the multi-thread settings. We send `0` for "unlimited".
+- **Windows forbids `? < > | " * :`** in a name. rclone replaces them with their full-width
+  Unicode equivalents (`？` `＜`…), which display at the width of an ideogram. A round trip
+  NAS → Windows → NAS is therefore not neutral.
+- **Cmd+Q on macOS doesn't go through window closing**: the default menu is wired to
+  `NSApp terminate:`, which bypasses the event loop. A custom menu is needed to intercept it.
+- **`scrollbar-gutter` reserves nothing on macOS** (overlay scrollbars): where space really
+  needs to be cleared, only an explicit inset works.
+- Inherited from the template: synchronous Tauri command = frozen UI (everything is async);
+  `no_window()` mandatory on Windows `Command`s; Mica with `expect` = crash on Windows 10.
 
-## Sécurité
+## Security
 
-**L'API de rclone est fermée par un secret** tiré au hasard à chaque lancement (32 octets).
-Cette API peut tout faire — lire, copier, **supprimer récursivement**, lire la config. Sans
-secret, n'importe quel programme de la session pouvait la piloter tant que Copiteur tournait,
-et une simple page web pouvait lui envoyer des requêtes « simples » qui partent sans
-pré-vérification CORS. Le secret transite par l'**environnement** du process, jamais par sa
-ligne de commande, que `ps` et le Gestionnaire des tâches exposent. Verrouillé par des tests.
+**rclone's API is locked by a secret** drawn at random on every launch (32 bytes).
+That API can do anything — read, copy, **delete recursively**, read the config. Without a
+secret, any program in the session could drive it while Copiteur was running, and a mere web
+page could send it "simple" requests that go out without a CORS preflight. The secret is
+passed through the process **environment**, never its command line, which `ps` and the Task
+Manager expose. Locked down by tests.
 
-**Le binaire rclone est épinglé et vérifié** : version figée et empreinte SHA-256 dans le dépôt.
-`scripts/prepare-bins.mjs` refuse une archive qui ne correspond pas — utile même si le serveur
-de téléchargement est un jour compromis, puisque ce binaire finit dans l'installeur signé.
+**The rclone binary is pinned and verified**: fixed version and SHA-256 fingerprint in the
+repository. `scripts/prepare-bins.mjs` rejects an archive that doesn't match — useful even if
+the download server is compromised one day, since this binary ends up in the signed installer.
 
-**Seules les commandes rclone dont l'app se sert passent.** Le pont entre l'interface et
-rclone n'accepte que 16 méthodes de l'API, et refuse tout paramètre ou chemin qui ferait
-lancer un programme par rclone (option SFTP `ssh`, remotes créés à la volée `:sftp,…:`,
-`core/command`…). Même une faille d'affichage future ne donnerait pas d'exécution de code.
-Couvert par des tests.
+**Only the rclone commands the app uses get through.** The bridge between the interface and
+rclone accepts only 16 API methods, and rejects any parameter or path that would make rclone
+launch a program (SFTP `ssh` option, on-the-fly `:sftp,…:` remotes, `core/command`…). Even a
+future display flaw would not lead to code execution. Covered by tests.
 
-**L'identité de chaque serveur est vérifiée**, comme dans FileZilla. À la première connexion,
-Copiteur affiche l'empreinte de la clé du serveur et la mémorise si on l'accepte ; si elle
-change ensuite, une alerte s'affiche avant tout envoi du mot de passe. rclone est configuré
-pour exiger la clé mémorisée (`known_hosts_file`) : un intrus qui s'intercalerait entre la
-vérification et la connexion serait refusé. Testé contre un vrai serveur SSH.
+**Each server's identity is verified**, as in FileZilla. On the first connection, Copiteur
+shows the fingerprint of the server's key and remembers it if accepted; if it changes later,
+an alert is shown before any password is sent. rclone is configured to require the stored key
+(`known_hosts_file`): an intruder slipping in between the check and the connection would be
+rejected. Tested against a real SSH server.
 
-**Les mots de passe sont chiffrés** dans `serveurs.json` (ChaCha20-Poly1305), avec une clé
-rangée dans le trousseau du système — Gestionnaire d'identifiants sous Windows, Trousseau
-sous macOS. Un fichier d'une ancienne version (mots de passe en clair) est converti au
-premier lancement. Sous macOS, l'app n'étant pas signée par un compte développeur Apple, le
-Trousseau redemande l'autorisation après chaque mise à jour (« Toujours autoriser »).
+**Passwords are encrypted** in `serveurs.json` (ChaCha20-Poly1305), with a key stored in the
+system keychain — Credential Manager on Windows, Keychain on macOS. A file from an older
+version (plaintext passwords) is converted on first launch. On macOS, since the app is not
+signed with an Apple developer account, Keychain asks for permission again after each update
+("Always Allow").
 
-**La config rclone reste en mémoire** (`--config ""`) : le mot de passe du serveur courant
-n'est jamais écrit dans un `rclone.conf`.
+**The rclone config stays in memory** (`--config ""`): the current server's password is never
+written to an `rclone.conf`.
 
-**Politique de sécurité du contenu (CSP) stricte** : l'interface ne charge que ses propres
-fichiers, aucun script ni ressource extérieure.
+**Strict Content Security Policy (CSP)**: the interface only loads its own files, no external
+script or resource.
 
-## Publier une version
+## Releasing a version
 
-1. Monter la version dans `tauri/src-tauri/tauri.conf.json`, `tauri/src-tauri/Cargo.toml` et
-   `tauri/package.json`, fusionner sur `main`.
-2. Poser un tag **annoté** dont le message sert de notes de version (affichées dans l'app) :
+1. Bump the version in `tauri/src-tauri/tauri.conf.json`, `tauri/src-tauri/Cargo.toml` and
+   `tauri/package.json`, merge into `main`.
+2. Push an **annotated** tag whose message serves as release notes (shown in the app):
    `git tag -a v1.2.0 -m "…notes…" && git push origin v1.2.0`.
-3. Le workflow *Release* construit Windows + macOS, signe les mises à jour et prépare une
-   release **brouillon** avec son `latest.json`. Tester les installeurs du brouillon, puis le
-   publier : c'est la publication qui déclenche la mise à jour dans les apps installées.
+3. The *Release* workflow builds Windows + macOS, signs the updates and prepares a **draft**
+   release with its `latest.json`. Test the draft's installers, then publish it: publishing is
+   what triggers the update in installed apps.
 
-Les mises à jour sont signées avec une clé privée (secrets `TAURI_SIGNING_PRIVATE_KEY` et
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` du dépôt) ; la clé publique est dans `tauri.conf.json`.
-**Perdre la clé privée = plus aucune mise à jour possible** pour les apps déjà installées.
+Updates are signed with a private key (repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`); the public key is in `tauri.conf.json`.
+**Losing the private key = no more updates possible** for already-installed apps.
 
-## Licence
+## License
 
-[MIT](LICENSE). rclone est distribué sous licence MIT, cf.
+[MIT](LICENSE). rclone is distributed under the MIT license, see
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

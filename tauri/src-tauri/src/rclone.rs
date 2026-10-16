@@ -25,6 +25,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
+use crate::i18n::tr;
 
 /// Identifiants de l'API RC, tires au hasard a chaque demarrage de l'app.
 #[derive(Clone, Default)]
@@ -243,10 +244,10 @@ fn rcd_command(bin: &Path, addr: &str, auth: &Auth) -> Command {
 /// l'API. Un nouveau port et un nouveau secret sont tires a chaque lancement.
 fn spawn_daemon(state: &Rclone) -> Result<(), String> {
     if state.stopping.load(std::sync::atomic::Ordering::Relaxed) {
-        return Err("Copiteur est en train de se fermer".into());
+        return Err(tr("Copiteur est en train de se fermer", "Copiteur is shutting down").into());
     }
     let Some(bin) = lock(&state.paths).clone() else {
-        return Err("rclone n'a pas été initialisé".into());
+        return Err(tr("rclone n'a pas été initialisé", "rclone has not been initialized").into());
     };
 
     let (listener, port) = reserve_port();
@@ -272,7 +273,11 @@ fn spawn_daemon(state: &Rclone) -> Result<(), String> {
         Err(e) => {
             // Le front ne doit pas avoir a deviner : on garde la cause pour la
             // remonter telle quelle au premier appel (et donc au journal).
-            let msg = format!("impossible de lancer rclone ({}) : {e}", bin.display());
+            let msg = if crate::i18n::en() {
+                format!("unable to start rclone ({}): {e}", bin.display())
+            } else {
+                format!("impossible de lancer rclone ({}) : {e}", bin.display())
+            };
             eprintln!("Copiteur: {msg}");
             lock(&state.base).clear();
             *lock(&state.error) = msg.clone();
@@ -335,7 +340,7 @@ async fn rc_post(
                 if status == reqwest::StatusCode::UNAUTHORIZED {
                     // Ne devrait jamais arriver : l'app detient le secret. Si ca
                     // arrive, autant le dire clairement plutot que "erreur inconnue".
-                    return Err("rclone a refusé l'authentification".into());
+                    return Err(tr("rclone a refusé l'authentification", "rclone rejected the authentication").into());
                 }
                 let body: Value = resp.json().await.unwrap_or(Value::Null);
                 if status.is_success() {
@@ -345,7 +350,7 @@ async fn rc_post(
                 let msg = body
                     .get("error")
                     .and_then(|e| e.as_str())
-                    .unwrap_or("erreur inconnue");
+                    .unwrap_or(tr("erreur inconnue", "unknown error"));
                 return Err(msg.to_string());
             }
             Err(e) => {
@@ -357,7 +362,11 @@ async fn rc_post(
             }
         }
     }
-    Err(format!("rclone injoignable : {last}"))
+    Err(if crate::i18n::en() {
+        format!("rclone unreachable: {last}")
+    } else {
+        format!("rclone injoignable : {last}")
+    })
 }
 
 // ------------------------------------------------------------------
@@ -505,7 +514,7 @@ pub async fn rc_call(
     }
     if base.is_empty() {
         return Err(if err.is_empty() {
-            "rclone n'est pas démarré".into()
+            tr("rclone n'est pas démarré", "rclone is not running").into()
         } else {
             err
         });

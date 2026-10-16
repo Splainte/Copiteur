@@ -5,6 +5,17 @@
 	<!-- Fusionne par Tauri dans l'Info.plist de l'app. Texte de la demande
 	     « Réseau local » de macOS : sans lui, macOS peut bloquer en silence
 	     l'acces aux NAS joints par adresse privee (LAN, WireGuard). -->
+	<!-- Langues de l'app : macOS choisit d'apres elles (et la preference
+	     AppleLanguages que l'app ecrit, cf. i18n.rs) celle de ses propres
+	     elements : boites Ouvrir, texte ci-dessous traduit dans
+	     macos/<langue>.lproj/InfoPlist.strings. -->
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>fr</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Copiteur se connecte à vos serveurs SFTP et NAS situés sur le réseau local ou derrière un VPN.</string>
 </dict>
