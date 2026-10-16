@@ -88,7 +88,7 @@ fn key_line(key: &PublicKey) -> Result<String, String> {
     let mut it = s.split_whitespace();
     match (it.next(), it.next()) {
         (Some(a), Some(b)) => Ok(format!("{a} {b}")),
-        _ => Err("clé illisible".into()),
+        _ => Err(crate::i18n::tr("clé illisible", "unreadable key").into()),
     }
 }
 
@@ -190,9 +190,18 @@ pub async fn fetch_key(host: &str, port: u16) -> Result<PublicKey, String> {
         return Ok(key);
     }
     Err(match res {
-        Err(_) => "le serveur ne répond pas (délai dépassé)".into(),
+        Err(_) => crate::i18n::tr(
+            "le serveur ne répond pas (délai dépassé)",
+            "the server is not responding (timed out)",
+        )
+        .into(),
+        Ok(Err(e)) if crate::i18n::en() => format!("unable to read the server identity: {e}"),
         Ok(Err(e)) => format!("impossible de lire l'identité du serveur : {e}"),
-        Ok(Ok(_)) => "le serveur n'a présenté aucune clé".into(),
+        Ok(Ok(_)) => crate::i18n::tr(
+            "le serveur n'a présenté aucune clé",
+            "the server did not present any key",
+        )
+        .into(),
     })
 }
 
@@ -241,7 +250,11 @@ pub fn host_key_trust(
 ) -> Result<(), String> {
     let pattern = host_pattern(&host, parse_port(&port));
     let Some(line) = lock(&state.pending).remove(&pattern) else {
-        return Err("aucune clé en attente pour ce serveur".into());
+        return Err(crate::i18n::tr(
+            "aucune clé en attente pour ce serveur",
+            "no pending key for this server",
+        )
+        .into());
     };
     store(&known_hosts_path(&app), &pattern, &line).map_err(|e| e.to_string())
 }
@@ -253,7 +266,11 @@ pub fn rclone_params(app: &AppHandle, host: &str, port: &str) -> Result<(String,
     let path = known_hosts_path(app);
     let pattern = host_pattern(host, parse_port(port));
     let Some(line) = stored(&path, &pattern) else {
-        return Err("identité du serveur non vérifiée".into());
+        return Err(crate::i18n::tr(
+            "identité du serveur non vérifiée",
+            "server identity not verified",
+        )
+        .into());
     };
     let algo = line.split(' ').next().unwrap_or("");
     Ok((path.to_string_lossy().into_owned(), rclone_algorithms(algo)))

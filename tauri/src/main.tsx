@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { initLang } from "./i18n";
 import "./styles.css";
 
 // Largeur REELLE d'une barre de defilement sur cette plateforme, mesuree une
@@ -27,8 +28,12 @@ document.documentElement.style.setProperty(
   `${measureScrollbarWidth()}px`,
 );
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+// La langue est fixee AVANT le premier rendu (et transmise au backend avant
+// qu'il ne nomme les lecteurs) : pas d'eclair dans la mauvaise langue.
+initLang().finally(() => {
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>,
+  );
+});

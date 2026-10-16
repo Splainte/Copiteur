@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
+use crate::i18n::tr;
 
 // ------------------------------------------------------------------
 //  Racines du volet de navigation local (lecteurs + acces rapide)
@@ -304,16 +305,22 @@ fn do_move_to_applications(app: AppHandle) -> Result<(), String> {
     let exe = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .map_err(|e| e.to_string())?;
-    let mount = dmg_mount_point().ok_or("L'app ne tourne pas depuis un .dmg")?;
-    let bundle = app_bundle_path(&exe).ok_or("Bundle .app introuvable")?;
-    let bundle_name = bundle.file_name().ok_or("Nom de bundle introuvable")?;
+    let mount = dmg_mount_point().ok_or(tr("L'app ne tourne pas depuis un .dmg", "The app is not running from a .dmg"))?;
+    let bundle = app_bundle_path(&exe).ok_or(tr("Bundle .app introuvable", ".app bundle not found"))?;
+    let bundle_name = bundle.file_name().ok_or(tr("Nom de bundle introuvable", "Bundle name not found"))?;
     let dest = Path::new("/Applications").join(bundle_name);
 
     // Remplace une eventuelle installation precedente (comme le ferait
     // un glisser-deposer Finder qui accepte d'ecraser).
     if dest.exists() {
         std::fs::remove_dir_all(&dest)
-            .map_err(|e| format!("Impossible de remplacer l'ancienne version : {e}"))?;
+            .map_err(|e| {
+                if crate::i18n::en() {
+                    format!("Unable to replace the previous version: {e}")
+                } else {
+                    format!("Impossible de remplacer l'ancienne version : {e}")
+                }
+            })?;
     }
 
     // `ditto` (et non une copie recursive maison) : seul outil qui
@@ -326,7 +333,7 @@ fn do_move_to_applications(app: AppHandle) -> Result<(), String> {
         .status()
         .map_err(|e| e.to_string())?;
     if !status.success() {
-        return Err("La copie vers Applications a échoué".into());
+        return Err(tr("La copie vers Applications a échoué", "Copying to Applications failed").into());
     }
 
     // Relance la copie fraiche (celle-la tourne depuis /Applications, pas
@@ -350,7 +357,7 @@ pub async fn move_to_applications(app: AppHandle) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
-        Err("Non disponible sur cette plateforme".into())
+        Err(crate::i18n::tr("Non disponible sur cette plateforme", "Not available on this platform").into())
     }
     #[cfg(target_os = "macos")]
     {
@@ -379,19 +386,19 @@ fn collect_roots() -> Vec<LocalRoot> {
         std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from);
 
     let quick = [
-        ("Desktop", "Bureau"),
-        ("Documents", "Documents"),
-        ("Downloads", "Téléchargements"),
-        ("Pictures", "Images"),
-        ("Music", "Musique"),
-        ("Videos", "Vidéos"),
+        ("Desktop", tr("Bureau", "Desktop")),
+        ("Documents", tr("Documents", "Documents")),
+        ("Downloads", tr("Téléchargements", "Downloads")),
+        ("Pictures", tr("Images", "Pictures")),
+        ("Music", tr("Musique", "Music")),
+        ("Videos", tr("Vidéos", "Videos")),
     ];
     if let Some(ref h) = home {
         roots.push(LocalRoot {
             label: h
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Accueil".into()),
+                .unwrap_or_else(|| tr("Accueil", "Home").into()),
             path: norm_dir(h),
             kind: "quick".into(),
             drive_type: String::new(),
@@ -419,15 +426,15 @@ fn collect_roots() -> Vec<LocalRoot> {
         let (name, unc) = if dtype == "network" {
             match unc_of(c) {
                 Some(u) => (network_display(&u, c), u),
-                None => (format!("Lecteur réseau ({}:)", c), String::new()),
+                None => (format!("{} ({}:)", tr("Lecteur réseau", "Network Drive"), c), String::new()),
             }
         } else {
             let label = volume_label(c);
             let name = if label.is_empty() {
                 match dtype.as_str() {
-                    "removable" => format!("Lecteur amovible ({}:)", c),
-                    "cdrom" => format!("Lecteur CD ({}:)", c),
-                    _ => format!("Disque local ({}:)", c),
+                    "removable" => format!("{} ({}:)", tr("Lecteur amovible", "Removable Drive"), c),
+                    "cdrom" => format!("{} ({}:)", tr("Lecteur CD", "CD Drive"), c),
+                    _ => format!("{} ({}:)", tr("Disque local", "Local Disk"), c),
                 }
             } else {
                 format!("{} ({}:)", label, c)
@@ -531,7 +538,11 @@ fn vault_key(app: &AppHandle) -> Option<[u8; 32]> {
         Err(e) => {
             let _ = app.emit(
                 "copiteur://backend-error",
-                format!("Trousseau du système inaccessible, mots de passe non déchiffrés — {e}"),
+                if crate::i18n::en() {
+                    format!("System keychain unavailable, passwords not decrypted — {e}")
+                } else {
+                    format!("Trousseau du système inaccessible, mots de passe non déchiffrés — {e}")
+                },
             );
             None
         }
@@ -637,7 +648,11 @@ fn write_servers(app: &AppHandle, list: &[Server]) {
     if let Err(e) = res {
         let _ = app.emit(
             "copiteur://backend-error",
-            format!("Impossible d'enregistrer les serveurs — {e}"),
+            if crate::i18n::en() {
+                format!("Unable to save the servers — {e}")
+            } else {
+                format!("Impossible d'enregistrer les serveurs — {e}")
+            },
         );
     }
 }
@@ -977,7 +992,11 @@ pub fn open_with(path: String) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         let _ = path;
-        Err("« Ouvrir avec » n'est disponible que sous Windows".into())
+        Err(crate::i18n::tr(
+            "« Ouvrir avec » n'est disponible que sous Windows",
+            "“Open with” is only available on Windows",
+        )
+        .into())
     }
 }
 

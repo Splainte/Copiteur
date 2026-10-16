@@ -53,11 +53,17 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "languages": ["English", "French"],
+        "displayLanguageSelector": true
       }
     },
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "files": {
+        "Resources/en.lproj/InfoPlist.strings": "./macos/en.lproj/InfoPlist.strings",
+        "Resources/fr.lproj/InfoPlist.strings": "./macos/fr.lproj/InfoPlist.strings"
+      }
     },
     "createUpdaterArtifacts": true
   },

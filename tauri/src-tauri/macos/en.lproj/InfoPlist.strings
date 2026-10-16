@@ -1,0 +1,2 @@
+/* Texts shown by macOS on behalf of Copiteur (English). */
+"NSLocalNetworkUsageDescription" = "Copiteur connects to your SFTP servers and NAS on the local network or behind a VPN.";

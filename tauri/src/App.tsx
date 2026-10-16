@@ -36,6 +36,8 @@ import { logEvent } from "./journal";
 import { useUpdater } from "./Updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { UiIcon } from "./icons";
+import { t, tn, tx, useLang } from "./i18n";
+import { FirstRunLanguage } from "./i18n/LanguagePicker";
 
 const appWindow = getCurrentWindow();
 const isMac = navigator.userAgent.includes("Macintosh");
@@ -93,6 +95,8 @@ type HostKeyStatus = {
 type HostKeyAsk = HostKeyStatus & { host: string; port: string };
 
 export default function App() {
+  // Re-rend toute l'app dans la nouvelle langue quand elle change.
+  const lang = useLang();
   const [active, setActive] = useState<Side | null>("local");
   const [connected, setConnected] = useState(false);
   // Incremente a chaque connexion reussie. Sert de « jeton » au panneau distant :
@@ -441,7 +445,7 @@ export default function App() {
   useEffect(() => {
     rc<{ version: string }>("core/version")
       .then((v) => setVersion(v.version))
-      .catch(() => setVersion("rclone injoignable"));
+      .catch(() => setVersion(t("app.rclone.unreachable")));
   }, []);
 
   // Reglages de transfert poses GLOBALEMENT sur le daemon (bloc « main »), une
@@ -462,7 +466,7 @@ export default function App() {
   // on repousse la config globale ci-dessus.
   useEffect(() => {
     const unlisten = listen("copiteur://rclone-relance", () => {
-      logEvent("warn", "app", "Le moteur rclone a été relancé (il s'était arrêté)");
+      logEvent("warn", "app", t("app.log.rcloneRestarted"));
       setDaemonEpoch((n) => n + 1);
     });
     return () => {
@@ -478,18 +482,38 @@ export default function App() {
   }, []);
 
   // Amorce l'accès rapide local avec les dossiers systeme (une seule fois).
+  // Leurs libelles (Bureau/Desktop…) viennent du backend, dans la langue
+  // courante : au changement de langue, on renomme les pins amorces que
+  // l'utilisateur n'a pas renommes (libelle encore egal a celui du chargement
+  // precedent, garde dans `quickRoots`).
+  const quickRoots = useRef<Pin[] | null>(null);
   useEffect(() => {
-    if (localStorage.getItem("copiteur.pins.seeded")) return;
     invoke<{ label: string; path: string; kind: string }[]>("local_roots")
       .then((rs) => {
-        const seed = rs
+        const quick = rs
           .filter((r) => r.kind === "quick")
           .map((r) => ({ label: r.label, path: r.path }));
-        setPins((p) => ({ ...p, local: seed }));
-        localStorage.setItem("copiteur.pins.seeded", "1");
+        const prev = quickRoots.current;
+        quickRoots.current = quick;
+        if (!localStorage.getItem("copiteur.pins.seeded")) {
+          setPins((p) => ({ ...p, local: quick }));
+          localStorage.setItem("copiteur.pins.seeded", "1");
+          return;
+        }
+        if (!prev) return;
+        setPins((p) => ({
+          ...p,
+          local: p.local.map((pin) => {
+            const old = prev.find((r) => r.path === pin.path);
+            const now = quick.find((r) => r.path === pin.path);
+            return old && now && pin.label === old.label
+              ? { ...pin, label: now.label }
+              : pin;
+          }),
+        }));
       })
       .catch(() => {});
-  }, []);
+  }, [lang]);
   useEffect(() => {
     localStorage.setItem("copiteur.pins.local", JSON.stringify(pins.local));
   }, [pins.local]);
@@ -575,11 +599,15 @@ export default function App() {
         const ok = await askHostKey({ ...hk, host: h, port: pt || "22" });
         if (!current()) return;
         if (!ok) {
-          setConnErr("Connexion annulée : identité du serveur non acceptée.");
+          setConnErr(t("app.conn.hostKeyRefused"));
           logEvent(
             "warn",
             "connexion",
-            `Connexion à ${h} annulée — empreinte ${hk.status === "changed" ? "CHANGÉE" : "nouvelle"} refusée (${hk.fingerprint})`,
+            t("app.log.hostKeyRefused", {
+              host: h,
+              kind: t(hk.status === "changed" ? "app.log.kindChanged" : "app.log.kindNew"),
+              fp: hk.fingerprint,
+            }),
           );
           return;
         }
@@ -587,7 +615,11 @@ export default function App() {
         logEvent(
           hk.status === "changed" ? "warn" : "info",
           "connexion",
-          `${hk.status === "changed" ? "Nouvelle clé acceptée" : "Clé mémorisée"} pour ${h} : ${hk.algo} ${hk.fingerprint}`,
+          t(hk.status === "changed" ? "app.log.keyAccepted" : "app.log.keyStored", {
+            host: h,
+            algo: hk.algo,
+            fp: hk.fingerprint,
+          }),
         );
       }
       await rc("config/create", {
@@ -629,7 +661,7 @@ export default function App() {
       let timer: ReturnType<typeof setTimeout>;
       const timeout = new Promise<never>((_, rej) => {
         timer = setTimeout(
-          () => rej(new Error("Le serveur ne répond pas (délai dépassé).")),
+          () => rej(new Error(t("app.conn.timeout"))),
           14000,
         );
       });
@@ -650,7 +682,7 @@ export default function App() {
       setConnected(true);
       setConnKey((k) => k + 1);
       setActive("remote");
-      logEvent("info", "connexion", `Connecté à ${u}@${h}:${pt || "22"}`);
+      logEvent("info", "connexion", t("app.log.connected", { target: `${u}@${h}:${pt || "22"}` }));
       // Enregistre / met a jour le serveur (label = nom donne, ou user@host).
       // Charge l'acces rapide PROPRE a ce serveur (cloisonne par label). Sans
       // ca, on afficherait les dossiers epingles d'un autre serveur, qui n'y
@@ -678,7 +710,7 @@ export default function App() {
       if (!current()) return;
       setConnErr(humanConnError(String(e)));
       setConnected(false);
-      logEvent("error", "connexion", `Échec de connexion à ${u}@${h} — ${e}`);
+      logEvent("error", "connexion", t("app.log.connFailed", { target: `${u}@${h}`, err: String(e) }));
     } finally {
       if (current()) setConnecting(false);
     }
@@ -791,7 +823,10 @@ export default function App() {
     logEvent(
       "info",
       "transfert",
-      `Mise en file : ${keep.length} élément${keep.length > 1 ? "s" : ""} → ${destSide === "local" ? "Ton PC" : "Serveur"} ${destDir}`,
+      tn("app.log.queued", keep.length, {
+        dest: t(destSide === "local" ? "common.yourPc" : "common.server"),
+        dir: destDir,
+      }),
     );
     setTab("queue");
     setPreparing((n) => n + keep.length);
@@ -903,7 +938,7 @@ export default function App() {
           },
         ]);
       } catch (e) {
-        logEvent("error", "operation", `Ouverture impossible : ${name} — ${e}`);
+        logEvent("error", "operation", t("app.log.openFailed", { name, err: String(e) }));
       }
     },
     [],
@@ -935,7 +970,7 @@ export default function App() {
       },
     ]);
     setTab("edition");
-    logEvent("info", "operation", `Édition démarrée : ${name}`);
+    logEvent("info", "operation", t("app.log.editStarted", { name }));
   }, []);
 
   // Renvoi effectif d'une copie editee vers le serveur (via la file).
@@ -1074,7 +1109,7 @@ export default function App() {
       logEvent(
         "warn",
         "connexion",
-        "Ce serveur ne sait pas calculer d'empreinte : vérification par empreinte désactivée (la taille reste vérifiée). Les transferts échoués sont relancés.",
+        t("app.log.noHash"),
       );
       // Signale que la NOUVELLE config est reellement en place : relancer avant
       // ce moment referait echouer les transferts a l'identique.
@@ -1172,11 +1207,11 @@ export default function App() {
           nameFault,
           hashFault,
           error: nameFault
-            ? `Nom refusé par la destination (« ${p.name} ») — ${err}`
+            ? t("app.err.nameRefused", { name: p.name, err })
             : hashFault
-              ? `Le serveur n'a pas su fournir d'empreinte vérifiable — nouvelle tentative sans vérification par empreinte. (${err})`
+              ? t("app.err.hashRetry", { err })
               : streamFallback
-                ? `Le serveur a refusé ${curUp} connexions simultanées en envoi — nouvelle tentative avec ${nextUp}. (${err})`
+                ? t("app.err.streamFallback", { from: curUp ?? "", to: nextUp ?? "", err })
                 : err,
         };
       }),
@@ -1208,7 +1243,7 @@ export default function App() {
           : p,
       ),
     );
-    logEvent("info", "transfert", `Renommé pour la copie : ${x.name} → ${clean}`);
+    logEvent("info", "transfert", t("app.log.renamedForCopy", { from: x.name, to: clean }));
   }, []);
 
   // Abandonne la proposition de renommage pour ce transfert (il reste en echec).
@@ -1471,7 +1506,7 @@ export default function App() {
             // avec l'appli associee de l'OS. (Effet de bord hors du updater.)
             if (x.openOnDone) {
               openPath(x.openOnDone).catch(() => {});
-              logEvent("info", "operation", `Ouverture : ${x.name}`);
+              logEvent("info", "operation", t("app.log.opened", { name: x.name }));
               // Ouvert POUR EDITION : on met la copie sous surveillance.
               if (x.editWatch) registerEdit(x);
             }
@@ -1489,7 +1524,7 @@ export default function App() {
                   p.id === eid ? { ...p, state: "watching" as const } : p,
                 ),
               );
-              logEvent("info", "operation", `Renvoi après édition : ${x.name}`);
+              logEvent("info", "operation", t("app.log.resent", { name: x.name }));
               // La reference DISTANTE doit suivre aussi, sinon le renvoi
               // suivant se croit en conflit : le fichier du serveur a bien
               // change depuis l'ouverture… mais c'est NOUS qui venons de le
@@ -1552,11 +1587,11 @@ export default function App() {
         logEvent(
           "warn",
           "transfert",
-          `Coupure, reprise auto (tentative ${x.attempts}) : ${label} — ${x.error}`,
+          t("app.log.retry", { n: x.attempts, label, err: x.error }),
         );
       else if (x.status === "error") {
         tally.current.error++;
-        logEvent("error", "transfert", `Échec : ${label} — ${x.error}`);
+        logEvent("error", "transfert", t("app.log.failed", { label, err: x.error }));
         // Renvoi d'edition echoue (fichier verrouille par l'appli ?) : on
         // repasse « modifie » pour que l'utilisateur puisse reessayer.
         if (x.editId) {
@@ -1570,7 +1605,7 @@ export default function App() {
         }
       } else if (x.status === "cancelled") {
         tally.current.cancelled++;
-        logEvent("info", "transfert", `Annulé : ${label}`);
+        logEvent("info", "transfert", t("app.log.cancelled", { label }));
         if (x.editId) {
           const eid = x.editId;
           invoke("edit_set_uploading", { id: eid, uploading: false }).catch(
@@ -1599,7 +1634,11 @@ export default function App() {
         logEvent(
           error ? "warn" : "info",
           "transfert",
-          `Lot terminé : ${done} réussi${done > 1 ? "s" : ""}, ${error} échec${error > 1 ? "s" : ""}, ${cancelled} annulé${cancelled > 1 ? "s" : ""}`,
+          t("app.log.batchDone", {
+            done: tn("app.log.batchOk", done),
+            failed: tn("app.log.batchFail", error),
+            cancelled: tn("app.log.batchCancel", cancelled),
+          }),
         );
       tally.current = { done: 0, error: 0, cancelled: 0 };
     }
@@ -1814,8 +1853,8 @@ export default function App() {
   const etaText =
     eta > 0
       ? eta < 60
-        ? ` · ${Math.ceil(eta)} s`
-        : ` · ${Math.round(eta / 60)} min`
+        ? t("app.bar.etaSec", { s: Math.ceil(eta) })
+        : t("app.bar.etaMin", { m: Math.round(eta / 60) })
       : "";
   // « Connexion perdue » n'est vrai que si TOUT est a l'arret. Si des transferts
   // tournent encore, le lien n'est PAS perdu : les items en reprise attendent
@@ -1877,13 +1916,13 @@ export default function App() {
         </span>
         {!isMac && (
           <div className="win-buttons">
-            <button className="win-btn" onClick={() => appWindow.minimize()} aria-label="Réduire">
+            <button className="win-btn" onClick={() => appWindow.minimize()} aria-label={t("app.win.minimize")}>
               &#xE921;
             </button>
-            <button className="win-btn" onClick={() => appWindow.toggleMaximize()} aria-label="Agrandir">
+            <button className="win-btn" onClick={() => appWindow.toggleMaximize()} aria-label={t("app.win.maximize")}>
               &#xE922;
             </button>
-            <button className="win-btn win-close" onClick={() => appWindow.close()} aria-label="Fermer">
+            <button className="win-btn win-close" onClick={() => appWindow.close()} aria-label={t("app.win.close")}>
               &#xE8BB;
             </button>
           </div>
@@ -1891,19 +1930,21 @@ export default function App() {
       </div>
 
       <div className="connect-bar" ref={connBarRef}>
-        <input className="conn-field cname" placeholder="Nom (facultatif)" value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
-        <input className="conn-field host" placeholder="Hôte" value={host} onChange={(e) => setHostField(e.target.value)} spellCheck={false} />
-        <input className="conn-field user" placeholder="Utilisateur" value={user} onChange={(e) => setUserField(e.target.value)} spellCheck={false} />
-        <input className="conn-field pwd" placeholder="Mot de passe" type="password" value={pass} onChange={(e) => setPassField(e.target.value)} />
-        <input className="conn-field port" placeholder="Port" value={port} onChange={(e) => setPortField(e.target.value)} spellCheck={false} />
+        <input className="conn-field cname" placeholder={t("app.conn.name")} value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
+        <input className="conn-field host" placeholder={t("app.conn.host")} value={host} onChange={(e) => setHostField(e.target.value)} spellCheck={false} />
+        <input className="conn-field user" placeholder={t("app.conn.user")} value={user} onChange={(e) => setUserField(e.target.value)} spellCheck={false} />
+        <input className="conn-field pwd" placeholder={t("app.conn.password")} type="password" value={pass} onChange={(e) => setPassField(e.target.value)} />
+        <input className="conn-field port" placeholder={t("app.conn.port")} value={port} onChange={(e) => setPortField(e.target.value)} spellCheck={false} />
         <button
           className={"conn-btn" + (connecting ? " is-connecting" : "")}
           onClick={() => connect()}
         >
           {/* Sizer invisible : reserve toujours la largeur du libelle le plus
               large pour que le bouton ne change pas de taille entre les etats. */}
-          <span className="conn-btn-sizer" aria-hidden="true">Se connecter</span>
-          <span className="conn-btn-label">{connecting ? "Connexion…" : "Se connecter"}</span>
+          <span className="conn-btn-sizer" aria-hidden="true">{t("app.conn.connect")}</span>
+          <span className="conn-btn-label">
+            {connecting ? t("app.conn.connecting") : t("app.conn.connect")}
+          </span>
         </button>
         <ServersDropdown
           servers={servers}
@@ -1913,16 +1954,16 @@ export default function App() {
         />
         <button
           className="gear-btn"
-          aria-label="Journal"
-          title="Journal (diagnostic)"
+          aria-label={t("app.conn.journal")}
+          title={t("app.conn.journalTitle")}
           onClick={() => setShowJournal(true)}
         >
           <UiIcon name="journal" />
         </button>
         <button
           className="gear-btn"
-          aria-label="Paramètres"
-          title="Paramètres"
+          aria-label={t("app.conn.settings")}
+          title={t("app.conn.settings")}
           onClick={() => setShowSettings(true)}
         >
           &#x2699;
@@ -1933,7 +1974,7 @@ export default function App() {
 
       <main className="explorers">
         <FilePane
-          title="Ton PC"
+          title={t("common.yourPc")}
           side="local"
           enabled={true}
           anyModal={anyModal}
@@ -1953,7 +1994,7 @@ export default function App() {
           onReorderPin={(from, to, after) => reorderPins("local", from, to, after)}
         />
         <FilePane
-          title="Serveur"
+          title={t("common.server")}
           side="remote"
           enabled={connected}
           anyModal={anyModal}
@@ -2027,10 +2068,9 @@ export default function App() {
       {conflict && (
         <div className="modal-backdrop">
           <div className="modal">
-            <div className="modal-title">Le fichier existe déjà</div>
+            <div className="modal-title">{t("app.conflict.title")}</div>
             <div className="modal-body">
-              « <strong>{conflict.name}</strong> » est déjà présent dans le
-              dossier de destination. Que faire ?
+              {tx("app.conflict.body", { name: <strong>{conflict.name}</strong> })}
             </div>
             <label className="modal-check">
               <input
@@ -2038,14 +2078,14 @@ export default function App() {
                 checked={conflictAll}
                 onChange={(e) => setConflictAll(e.target.checked)}
               />
-              Appliquer à tous les fichiers de cette copie
+              {t("app.conflict.applyAll")}
             </label>
             <div className="modal-actions">
               <button className="btn-ghost" onClick={() => resolveConflict("ignore")}>
-                Ignorer
+                {t("app.conflict.skip")}
               </button>
               <button className="btn-accent" onClick={() => resolveConflict("replace")}>
-                Remplacer
+                {t("app.conflict.replace")}
               </button>
             </div>
           </div>
@@ -2055,22 +2095,24 @@ export default function App() {
       {renameAsk && (
         <div className="modal-backdrop">
           <div className="modal">
-            <div className="modal-title">Nom refusé par la destination</div>
+            <div className="modal-title">{t("app.rename.title")}</div>
             <div className="modal-body">
-              « <strong>{renameAsk.name}</strong> » n'a pas pu être copié : la
-              destination n'accepte pas certains caractères de ce nom (
-              <code>\ / : * ? " &lt; &gt; |</code>).
+              {tx("app.rename.body", {
+                name: <strong>{renameAsk.name}</strong>,
+                chars: <code>{'\\ / : * ? " < > |'}</code>,
+              })}
               <br />
               <br />
-              Copier sous le nom «&nbsp;<strong>{sanitizeName(renameAsk.name)}</strong>
-              &nbsp;» ?
+              {tx("app.rename.ask", {
+                name: <strong>{sanitizeName(renameAsk.name)}</strong>,
+              })}
               <label className="modal-check">
                 <input
                   type="checkbox"
                   checked={renameAll}
                   onChange={(ev) => setRenameAll(ev.target.checked)}
                 />
-                Appliquer aux autres noms refusés de cette copie
+                {t("app.rename.applyAll")}
               </label>
             </div>
             <div className="modal-actions">
@@ -2082,7 +2124,7 @@ export default function App() {
                   declineRename(id);
                 }}
               >
-                Laisser tomber
+                {t("app.rename.drop")}
               </button>
               <button
                 className="btn-accent"
@@ -2095,7 +2137,7 @@ export default function App() {
                   retryRenamed(x);
                 }}
               >
-                Renommer et copier
+                {t("app.rename.confirm")}
               </button>
             </div>
           </div>
@@ -2107,8 +2149,8 @@ export default function App() {
           <div className="modal">
             <div className="modal-title">
               {xfers.some((x) => !isFinal(x)) || preparing > 0
-                ? "Des transferts sont en cours"
-                : "Des éditions ne sont pas renvoyées"}
+                ? t("app.close.titleXfers")
+                : t("app.close.titleEdits")}
             </div>
             <div className="modal-body">
               {(() => {
@@ -2116,31 +2158,22 @@ export default function App() {
                 const e = edits.filter((x) => x.state !== "watching").length;
                 return (
                   <>
-                    {n > 0 && (
-                      <>
-                        {n} transfert{n > 1 ? "s" : ""} en cours ou en attente.{" "}
-                      </>
-                    )}
-                    {e > 0 && (
-                      <>
-                        {e} fichier{e > 1 ? "s" : ""} édité{e > 1 ? "s" : ""} pas
-                        encore renvoyé{e > 1 ? "s" : ""} sur le serveur.{" "}
-                      </>
-                    )}
-                    Fermer maintenant perdra ces changements.
+                    {n > 0 && <>{tn("app.close.xfers", n)} </>}
+                    {e > 0 && <>{tn("app.close.edits", e)} </>}
+                    {t("app.close.lose")}
                   </>
                 );
               })()}
             </div>
             <div className="modal-actions">
               <button className="btn-ghost" onClick={() => setCloseAsk(false)}>
-                Annuler
+                {t("common.cancel")}
               </button>
               <button
                 className="btn-accent"
                 onClick={() => invoke("force_quit").catch(() => appWindow.destroy())}
               >
-                Fermer quand même
+                {t("app.close.force")}
               </button>
             </div>
           </div>
@@ -2149,6 +2182,9 @@ export default function App() {
 
       {updater.dialog}
 
+      {/* Premier lancement : choix de la langue (cf. i18n). */}
+      <FirstRunLanguage />
+
       {/* Identite du serveur : 1re connexion (empreinte a accepter) ou cle qui
           a change depuis la derniere fois (alerte). */}
       {hostKeyAsk && (
@@ -2156,52 +2192,50 @@ export default function App() {
           <div className="modal modal-hostkey">
             <div className="modal-title">
               {hostKeyAsk.status === "changed"
-                ? "Attention : l'identité du serveur a changé"
-                : "Première connexion à ce serveur"}
+                ? t("app.hostkey.titleChanged")
+                : t("app.hostkey.titleNew")}
             </div>
             <div className="modal-body">
               {hostKeyAsk.status === "changed" ? (
                 <>
-                  La clé présentée par{" "}
-                  <strong>
-                    {hostKeyAsk.host}:{hostKeyAsk.port}
-                  </strong>{" "}
-                  ne correspond pas à celle mémorisée. C'est normal après une
-                  réinstallation ou une mise à jour du serveur, mais cela peut
-                  aussi signifier que quelqu'un se fait passer pour lui afin
-                  d'intercepter votre mot de passe.
-                  <div className="hostkey-label">Empreinte mémorisée</div>
+                  {tx("app.hostkey.changedBody", {
+                    server: (
+                      <strong>
+                        {hostKeyAsk.host}:{hostKeyAsk.port}
+                      </strong>
+                    ),
+                  })}
+                  <div className="hostkey-label">{t("app.hostkey.stored")}</div>
                   <code className="hostkey-fp is-old">{hostKeyAsk.previous}</code>
-                  <div className="hostkey-label">Empreinte présentée</div>
+                  <div className="hostkey-label">{t("app.hostkey.presented")}</div>
                   <code className="hostkey-fp">
                     {hostKeyAsk.algo} {hostKeyAsk.fingerprint}
                   </code>
                   <div className="modal-hint">
-                    Dans le doute, annulez et vérifiez auprès de la personne qui
-                    gère le serveur.
+                    {t("app.hostkey.changedHint")}
                   </div>
                 </>
               ) : (
                 <>
-                  Copiteur ne connaît pas encore{" "}
-                  <strong>
-                    {hostKeyAsk.host}:{hostKeyAsk.port}
-                  </strong>
-                  . Voici l'empreinte de sa clé d'identité :
+                  {tx("app.hostkey.newBody", {
+                    server: (
+                      <strong>
+                        {hostKeyAsk.host}:{hostKeyAsk.port}
+                      </strong>
+                    ),
+                  })}
                   <code className="hostkey-fp">
                     {hostKeyAsk.algo} {hostKeyAsk.fingerprint}
                   </code>
                   <div className="modal-hint">
-                    Si vous pouvez, comparez-la à celle donnée par la personne
-                    qui gère le serveur. Copiteur la mémorise et vous alertera si
-                    elle change un jour.
+                    {t("app.hostkey.newHint")}
                   </div>
                 </>
               )}
             </div>
             <div className="modal-actions">
               <button className="btn-ghost" onClick={() => answerHostKey(false)}>
-                Annuler
+                {t("common.cancel")}
               </button>
               <button
                 className={
@@ -2210,8 +2244,8 @@ export default function App() {
                 onClick={() => answerHostKey(true)}
               >
                 {hostKeyAsk.status === "changed"
-                  ? "Faire confiance à la nouvelle clé"
-                  : "Faire confiance et se connecter"}
+                  ? t("app.hostkey.trustNew")
+                  : t("app.hostkey.trust")}
               </button>
             </div>
           </div>
@@ -2222,12 +2256,9 @@ export default function App() {
       {dmgMount && (
         <div className="modal-backdrop">
           <div className="modal">
-            <div className="modal-title">Installer Copiteur ?</div>
+            <div className="modal-title">{t("app.dmg.title")}</div>
             <div className="modal-body">
-              Copiteur tourne actuellement depuis son image disque (
-              <strong>{dmgMount}</strong>), pas depuis le dossier
-              Applications. Le déplacer évite qu'elle réapparaisse comme un
-              volume dans le panneau de gauche, et l'éjecte automatiquement.
+              {tx("app.dmg.body", { mount: <strong>{dmgMount}</strong> })}
             </div>
             <div className="modal-actions">
               <button
@@ -2235,7 +2266,7 @@ export default function App() {
                 onClick={() => setDmgMount(null)}
                 disabled={dmgMoving}
               >
-                Continuer depuis là
+                {t("app.dmg.stay")}
               </button>
               <button
                 className="btn-accent"
@@ -2247,14 +2278,14 @@ export default function App() {
                     logEvent(
                       "error",
                       "operation",
-                      `Déplacement vers Applications impossible : ${e}`,
+                      t("app.log.moveFailed", { err: String(e) }),
                     );
                   });
                   // Succes = l'app quitte cote Rust (app.exit) ; rien d'autre
                   // a faire ici, la fenetre va se fermer.
                 }}
               >
-                {dmgMoving ? "Déplacement…" : "Déplacer vers Applications"}
+                {dmgMoving ? t("app.dmg.moving") : t("app.dmg.move")}
               </button>
             </div>
           </div>
@@ -2265,17 +2296,16 @@ export default function App() {
       {editAsk && (
         <div className="modal-backdrop" onMouseDown={() => ignoreEdit(editAsk.id)}>
           <div className="modal" onMouseDown={(ev) => ev.stopPropagation()}>
-            <div className="modal-title">Fichier modifié</div>
+            <div className="modal-title">{t("app.edit.title")}</div>
             <div className="modal-body">
-              « <strong>{editAsk.label}</strong> » a été modifié. Le renvoyer sur
-              le serveur ?
+              {tx("app.edit.body", { name: <strong>{editAsk.label}</strong> })}
             </div>
             <div className="modal-actions">
               <button
                 className="btn-ghost"
                 onClick={() => ignoreEdit(editAsk.id)}
               >
-                Ignorer
+                {t("app.edit.ignore")}
               </button>
               <button
                 className="btn-accent"
@@ -2284,7 +2314,7 @@ export default function App() {
                   if (e) resendEdit(e);
                 }}
               >
-                Renvoyer
+                {t("app.edit.resend")}
               </button>
             </div>
           </div>
@@ -2299,20 +2329,17 @@ export default function App() {
           onMouseDown={() => setConflictAsk(null)}
         >
           <div className="modal" onMouseDown={(ev) => ev.stopPropagation()}>
-            <div className="modal-title">Conflit sur le serveur</div>
+            <div className="modal-title">{t("app.editConflict.title")}</div>
             <div className="modal-body">
               {conflictAsk.reason === "deleted" ? (
-                <>
-                  « <strong>{conflictAsk.e.label}</strong> » n'existe plus sur le
-                  serveur (supprimé ou déplacé depuis que vous l'avez ouvert). Le
-                  renvoyer le recréera.
-                </>
+                tx("app.editConflict.deleted", {
+                  name: <strong>{conflictAsk.e.label}</strong>,
+                })
               ) : (
-                <>
-                  « <strong>{conflictAsk.e.label}</strong> » a été modifié sur le
-                  serveur depuis que vous l'avez ouvert. Le renvoyer{" "}
-                  <strong>écrasera</strong> la version du serveur.
-                </>
+                tx("app.editConflict.changed", {
+                  name: <strong>{conflictAsk.e.label}</strong>,
+                  overwrite: <strong>{t("app.editConflict.overwriteWord")}</strong>,
+                })
               )}
             </div>
             <div className="modal-actions">
@@ -2320,13 +2347,15 @@ export default function App() {
                 className="btn-ghost"
                 onClick={() => setConflictAsk(null)}
               >
-                Annuler
+                {t("common.cancel")}
               </button>
               <button
                 className="btn-accent btn-danger"
                 onClick={() => doResend(conflictAsk.e)}
               >
-                {conflictAsk.reason === "deleted" ? "Renvoyer" : "Écraser"}
+                {conflictAsk.reason === "deleted"
+                  ? t("app.edit.resend")
+                  : t("app.editConflict.overwrite")}
               </button>
             </div>
           </div>
@@ -2348,39 +2377,38 @@ export default function App() {
             {reconnecting ? (
               // Le lien est tombe : on le dit clairement, la file repart seule.
               <span className="xfer-text is-retry">
-                Connexion perdue — reprise automatique · {queue.length} transfert
-                {queue.length > 1 ? "s" : ""} en attente · reste{" "}
-                {humanSize(remaining)}
+                {tn("app.bar.lost", queue.length, { size: humanSize(remaining) })}
               </span>
             ) : allStalled ? (
               // Rien n'avance plus, mais on n'a pas encore la preuve d'une
               // coupure : on decrit ce qu'on voit, sans rien conclure.
               <span className="xfer-text is-retry">
-                Plus aucune donnée ne passe — en attente du serveur ·{" "}
-                {queue.length} transfert{queue.length > 1 ? "s" : ""} · reste{" "}
-                {humanSize(remaining)}
+                {tn("app.bar.stalled", queue.length, { size: humanSize(remaining) })}
               </span>
             ) : (
               <span className="xfer-text">
-                {queue.length} transfert{queue.length > 1 ? "s" : ""} · {pct}% ·
-                reste {humanSize(remaining)} · {humanSize(smoothSpeed)}/s
+                {tn("app.bar.progress", queue.length, {
+                  pct,
+                  size: humanSize(remaining),
+                  speed: t("common.perSecond", { size: humanSize(smoothSpeed) }),
+                })}
                 {etaText}
               </span>
             )}
           </>
         ) : errBanner ? (
-          <span className="xfer-err">Erreur : {errBanner}</span>
+          <span className="xfer-err">{t("app.bar.error", { err: errBanner })}</span>
         ) : (
-          <span>Aucun transfert en cours</span>
+          <span>{t("app.bar.idle")}</span>
         )}
         <span
           className="rclone-ver"
           title={version ? `rclone ${version}` : undefined}
         >
           {!version
-            ? "démarrage de rclone…"
+            ? t("app.rclone.starting")
             : /mt-sftp/i.test(version)
-              ? "Moteur rclone custom"
+              ? t("app.rclone.custom")
               : `rclone ${version}`}
         </span>
       </footer>

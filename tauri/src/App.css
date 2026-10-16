@@ -1959,3 +1959,37 @@
   height: 11px;
   background: var(--cp-stroke-strong);
 }
+
+/* ---- Choix de la langue (reglages + premier lancement) ------------------ */
+.lang-choice {
+  flex: 0 0 auto;
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: var(--cp-radius);
+  background: var(--cp-field);
+}
+.lang-opt {
+  appearance: none;
+  border: 0;
+  border-radius: calc(var(--cp-radius) - 2px);
+  background: transparent;
+  color: var(--cp-text-muted);
+  font: inherit;
+  font-weight: 600;
+  padding: 5px 12px;
+  cursor: default;
+}
+.lang-opt:hover {
+  color: var(--cp-text);
+}
+.lang-opt.is-active {
+  background: var(--cp-accent);
+  color: var(--cp-accent-text);
+}
+.lang-welcome {
+  display: flex;
+  justify-content: center;
+  margin: 4px 0 18px;
+}

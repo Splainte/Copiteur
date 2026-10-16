@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { t, useT } from "./i18n";
 
 type Phase =
   | { kind: "hidden" }
@@ -28,11 +29,11 @@ type Phase =
 function humanUpdateError(raw: string): string {
   const s = raw.toLowerCase();
   if (s.includes("signature"))
-    return "La mise à jour téléchargée n'a pas une signature valide : elle a été refusée et rien n'a été installé.";
+    return t("panels.upd.errSignature");
   if (s.includes("valid release json") || s.includes("404"))
-    return "Impossible de lire la dernière version publiée (pas de connexion internet, ou aucune version publiée pour le moment).";
+    return t("panels.upd.errManifest");
   if (s.includes("network") || s.includes("dns") || s.includes("connect") || s.includes("timed out"))
-    return "Pas de connexion au serveur des mises à jour. Réessayez plus tard.";
+    return t("panels.upd.errNetwork");
   return raw;
 }
 
@@ -50,6 +51,7 @@ export function useUpdater({
   autoCheck: boolean;
   log: Log;
 }) {
+  useT();
   const [phase, setPhase] = useState<Phase>({ kind: "hidden" });
   const logRef = useRef(log);
   logRef.current = log;
@@ -61,13 +63,13 @@ export function useUpdater({
     try {
       const update = await check();
       if (update) {
-        logRef.current("info", `Mise à jour disponible : ${update.version}`);
+        logRef.current("info", t("panels.upd.logAvailable", { version: update.version }));
         setPhase({ kind: "available", update });
       } else if (!silent) {
         setPhase({ kind: "uptodate" });
       }
     } catch (e) {
-      logRef.current("warn", `Vérification des mises à jour impossible — ${e}`);
+      logRef.current("warn", t("panels.upd.logCheckFailed", { error: String(e) }));
       if (!silent) setPhase({ kind: "error", message: humanUpdateError(String(e)) });
     }
   }, []);
@@ -93,7 +95,7 @@ export function useUpdater({
         setPhase({ kind: "downloading", update, done, total });
       });
       setPhase({ kind: "installing", update });
-      logRef.current("info", `Installation de la version ${update.version}`);
+      logRef.current("info", t("panels.upd.logInstalling", { version: update.version }));
       // Arrete rclone : l'installeur doit pouvoir remplacer son binaire.
       await invoke("prepare_update");
       stopped = true;
@@ -105,7 +107,7 @@ export function useUpdater({
       // L'installation a echoue apres l'arret de rclone : on le laisse
       // redemarrer, sinon l'app resterait sans moteur jusqu'a sa fermeture.
       if (stopped) invoke("cancel_update").catch(() => {});
-      logRef.current("error", `Mise à jour échouée — ${e}`);
+      logRef.current("error", t("panels.upd.logFailed", { error: String(e) }));
       setPhase({ kind: "error", message: humanUpdateError(String(e)) });
     }
   };
@@ -118,20 +120,20 @@ export function useUpdater({
       <div className="modal modal-update">
         {phase.kind === "checking" && (
           <>
-            <div className="modal-title">Recherche d'une mise à jour…</div>
-            <div className="modal-body">Connexion aux Releases de Copiteur.</div>
+            <div className="modal-title">{t("panels.upd.checking")}</div>
+            <div className="modal-body">{t("panels.upd.checkingBody")}</div>
           </>
         )}
 
         {phase.kind === "uptodate" && (
           <>
-            <div className="modal-title">Copiteur est à jour</div>
+            <div className="modal-title">{t("panels.upd.upToDate")}</div>
             <div className="modal-body">
-              Vous utilisez la dernière version ({current}).
+              {t("panels.upd.upToDateBody", { version: current })}
             </div>
             <div className="modal-actions">
               <button className="btn-accent" onClick={close}>
-                OK
+                {t("common.ok")}
               </button>
             </div>
           </>
@@ -139,17 +141,14 @@ export function useUpdater({
 
         {phase.kind === "error" && (
           <>
-            <div className="modal-title">Mise à jour impossible</div>
+            <div className="modal-title">{t("panels.upd.errorTitle")}</div>
             <div className="modal-body">
               {phase.message}
-              <div className="modal-hint">
-                Les installeurs restent disponibles sur
-                github.com/Splainte/Copiteur/releases.
-              </div>
+              <div className="modal-hint">{t("panels.upd.errorHint")}</div>
             </div>
             <div className="modal-actions">
               <button className="btn-accent" onClick={close}>
-                Fermer
+                {t("common.close")}
               </button>
             </div>
           </>
@@ -158,30 +157,27 @@ export function useUpdater({
         {phase.kind === "available" && (
           <>
             <div className="modal-title">
-              Copiteur {phase.update.version} est disponible
+              {t("panels.upd.available", { version: phase.update.version })}
             </div>
             <div className="modal-body">
-              Vous avez la version {current}.
+              {t("panels.upd.currentVersion", { version: current })}
               {phase.update.body && (
                 <div className="update-notes">{phase.update.body}</div>
               )}
               {busy && (
-                <div className="modal-hint is-warn">
-                  Des transferts sont en cours : installer fermerait Copiteur et
-                  les interromprait. Attendez qu'ils se terminent.
-                </div>
+                <div className="modal-hint is-warn">{t("panels.upd.busy")}</div>
               )}
             </div>
             <div className="modal-actions">
               <button className="btn-ghost" onClick={close}>
-                Plus tard
+                {t("panels.upd.later")}
               </button>
               <button
                 className="btn-accent"
                 disabled={busy}
                 onClick={() => install(phase.update)}
               >
-                Installer et redémarrer
+                {t("panels.upd.install")}
               </button>
             </div>
           </>
@@ -190,12 +186,12 @@ export function useUpdater({
         {(phase.kind === "downloading" || phase.kind === "installing") && (
           <>
             <div className="modal-title">
-              Mise à jour vers {phase.update.version}
+              {t("panels.upd.updatingTo", { version: phase.update.version })}
             </div>
             <div className="modal-body">
               {phase.kind === "installing"
-                ? "Installation… Copiteur va redémarrer."
-                : "Téléchargement…"}
+                ? t("panels.upd.installing")
+                : t("panels.upd.downloading")}
               <div className="update-bar">
                 <div
                   className="update-bar-fill"

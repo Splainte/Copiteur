@@ -4,6 +4,7 @@ use tauri::{Emitter, Manager};
 mod edits;
 mod engine;
 mod hostkeys;
+mod i18n;
 mod journal;
 mod rclone;
 mod vault;
@@ -127,6 +128,91 @@ fn eject_dmg_if_relaunched() {
     });
 }
 
+// macOS : le menu PAR DEFAUT a un « Quitter » predefini, cable directement sur
+// `NSApp terminate:`. Il court-circuite la boucle d'evenements, donc
+// `ExitRequested` n'est jamais emis et Cmd+Q tuait les transferts en cours sans
+// rien demander. On reconstruit le menu avec un « Quitter » CUSTOM, qu'on peut
+// intercepter (cf. `on_menu_event`). Le sous-menu Edition est reconduit tel
+// quel : sans lui, remplacer le menu ferait sauter les raccourcis Cmd+C /
+// Cmd+V / Cmd+A dans les champs de saisie.
+//
+// Appele au demarrage puis a chaque changement de langue (cf. i18n.rs) : les
+// entrees predefinies recoivent un texte explicite, sinon elles restent en
+// anglais quelle que soit la langue.
+#[cfg(target_os = "macos")]
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use i18n::tr;
+    use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
+    let quit = MenuItem::with_id(app, "quit", tr("Quitter Copiteur", "Quit Copiteur"), true, Some("Cmd+Q"))?;
+    let app_menu = Submenu::with_items(
+        app,
+        "Copiteur",
+        true,
+        &[
+            &PredefinedMenuItem::about(
+                app,
+                Some(tr("À propos de Copiteur", "About Copiteur")),
+                Some(AboutMetadata::default()),
+            )?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, Some(tr("Services", "Services")))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, Some(tr("Masquer Copiteur", "Hide Copiteur")))?,
+            &PredefinedMenuItem::hide_others(app, Some(tr("Masquer les autres", "Hide Others")))?,
+            &PredefinedMenuItem::show_all(app, Some(tr("Tout afficher", "Show All")))?,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )?;
+    // « Tout selectionner » est CUSTOM, pas predefini : l'action native
+    // `selectAll:` surligne le TEXTE de la webview, alors qu'ici on veut
+    // selectionner les FICHIERS du panneau actif. Desactive au premier
+    // demarrage, le front l'active des qu'un panneau prend le focus ; a la
+    // reconstruction, on reprend l'etat de l'entree precedente.
+    let slot = app.state::<SelectAllItem>();
+    let enabled = slot
+        .0
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().and_then(|i| i.is_enabled().ok()))
+        .unwrap_or(false);
+    let select_all = MenuItem::with_id(
+        app,
+        "select_all",
+        tr("Tout sélectionner", "Select All"),
+        enabled,
+        Some("Cmd+A"),
+    )?;
+    let edit_menu = Submenu::with_items(
+        app,
+        tr("Édition", "Edit"),
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, Some(tr("Annuler", "Undo")))?,
+            &PredefinedMenuItem::redo(app, Some(tr("Rétablir", "Redo")))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, Some(tr("Couper", "Cut")))?,
+            &PredefinedMenuItem::copy(app, Some(tr("Copier", "Copy")))?,
+            &PredefinedMenuItem::paste(app, Some(tr("Coller", "Paste")))?,
+            &select_all,
+        ],
+    )?;
+    if let Ok(mut g) = slot.0.lock() {
+        *g = Some(select_all);
+    }
+    let window_menu = Submenu::with_items(
+        app,
+        tr("Fenêtre", "Window"),
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, Some(tr("Réduire", "Minimize")))?,
+            &PredefinedMenuItem::fullscreen(app, Some(tr("Plein écran", "Enter Full Screen")))?,
+        ],
+    )?;
+    app.set_menu(Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu])?)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "macos")]
@@ -143,70 +229,10 @@ pub fn run() {
         .manage(Busy::default())
         .manage(SelectAllItem::default())
         .setup(|app| {
-            // macOS : le menu PAR DEFAUT a un « Quitter » predefini, cable
-            // directement sur `NSApp terminate:`. Il court-circuite la boucle
-            // d'evenements, donc `ExitRequested` n'est jamais emis et Cmd+Q
-            // tuait les transferts en cours sans rien demander. On reconstruit
-            // le menu avec un « Quitter » CUSTOM, qu'on peut intercepter
-            // (cf. `on_menu_event`). Le sous-menu Edition est reconduit tel
-            // quel : sans lui, remplacer le menu ferait sauter les raccourcis
-            // Cmd+C / Cmd+V / Cmd+A dans les champs de saisie.
+            // macOS : menu custom (cf. `build_menu`), refait dans la bonne
+            // langue des que le front l'annonce.
             #[cfg(target_os = "macos")]
-            {
-                use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-                let quit = MenuItem::with_id(app, "quit", "Quitter Copiteur", true, Some("Cmd+Q"))?;
-                let app_menu = Submenu::with_items(
-                    app,
-                    "Copiteur",
-                    true,
-                    &[
-                        &PredefinedMenuItem::about(app, None, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::services(app, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::hide(app, None)?,
-                        &PredefinedMenuItem::hide_others(app, None)?,
-                        &PredefinedMenuItem::show_all(app, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &quit,
-                    ],
-                )?;
-                // « Tout selectionner » est CUSTOM, pas predefini : l'action
-                // native `selectAll:` surligne le TEXTE de la webview, alors
-                // qu'ici on veut selectionner les FICHIERS du panneau actif.
-                // Desactive au demarrage, le front l'active des qu'un panneau
-                // prend le focus.
-                let select_all =
-                    MenuItem::with_id(app, "select_all", "Tout sélectionner", false, Some("Cmd+A"))?;
-                let edit_menu = Submenu::with_items(
-                    app,
-                    "Édition",
-                    true,
-                    &[
-                        &PredefinedMenuItem::undo(app, None)?,
-                        &PredefinedMenuItem::redo(app, None)?,
-                        &PredefinedMenuItem::separator(app)?,
-                        &PredefinedMenuItem::cut(app, None)?,
-                        &PredefinedMenuItem::copy(app, None)?,
-                        &PredefinedMenuItem::paste(app, None)?,
-                        &select_all,
-                    ],
-                )?;
-                *app.state::<SelectAllItem>().0.lock().unwrap() = Some(select_all);
-                let window_menu = Submenu::with_items(
-                    app,
-                    "Fenêtre",
-                    true,
-                    &[
-                        &PredefinedMenuItem::minimize(app, None)?,
-                        &PredefinedMenuItem::fullscreen(app, None)?,
-                    ],
-                )?;
-                app.set_menu(Menu::with_items(
-                    app,
-                    &[&app_menu, &edit_menu, &window_menu],
-                )?)?;
-            }
+            build_menu(app.handle())?;
 
             // Lance le daemon rclone RC (sidecar) des le demarrage.
             rclone::start(app.handle());
@@ -295,6 +321,8 @@ pub fn run() {
             prepare_update,
             cancel_update,
             set_pane_active,
+            i18n::set_language,
+            i18n::installer_language,
         ])
         // Menu macOS. « Quitter » : s'il reste du travail, on ne quitte pas —
         // on demande au front la meme modale que pour Alt+F4. « Tout

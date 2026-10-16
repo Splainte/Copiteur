@@ -3,6 +3,7 @@
 // ============================================================
 import { useEffect, useRef, useState } from "react";
 import { UiIcon } from "./icons";
+import { useT } from "./i18n";
 import type { Server } from "./files";
 
 export function ServersDropdown({
@@ -16,6 +17,7 @@ export function ServersDropdown({
   onDelete: (label: string) => void;
   onRename: (oldLabel: string, newLabel: string) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   // Label du serveur en cours de renommage (inline), + valeur saisie. On edite
   // DANS le menu plutot qu'avec une boite de dialogue native (window.prompt
@@ -74,7 +76,7 @@ export function ServersDropdown({
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
       >
-        <span className="select__value is-placeholder">Serveurs mémorisés…</span>
+        <span className="select__value is-placeholder">{t("files.servers.placeholder")}</span>
         <span className="select__chevron">
           <UiIcon name="caret" />
         </span>
@@ -82,7 +84,7 @@ export function ServersDropdown({
       {open && (
         <div className="select__menu" role="listbox">
           {servers.length === 0 ? (
-            <div className="select__empty">Aucun serveur mémorisé</div>
+            <div className="select__empty">{t("files.servers.empty")}</div>
           ) : (
             servers.map((s) =>
               editing === s.label ? (
@@ -136,7 +138,7 @@ export function ServersDropdown({
                   <span className="select__option-label">{s.label}</span>
                   <span
                     className="select__option-rename"
-                    title="Renommer ce serveur"
+                    title={t("files.servers.rename")}
                     onClick={(e) => {
                       e.stopPropagation();
                       startEdit(s.label);
@@ -146,7 +148,7 @@ export function ServersDropdown({
                   </span>
                   <span
                     className="select__option-del"
-                    title="Oublier ce serveur"
+                    title={t("files.servers.forget")}
                     onClick={(e) => {
                       e.stopPropagation();
                       onDelete(s.label);

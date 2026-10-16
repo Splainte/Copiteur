@@ -3,6 +3,7 @@
 //  (appels rclone, types de fichiers, tri, formatage, chemins)
 // ============================================================
 import { invoke } from "@tauri-apps/api/core";
+import { fmtNum, locale, t } from "./i18n";
 
 // Passe-plat vers l'API RC de rclone (daemon sidecar cote Rust).
 export type RcParams = Record<string, unknown>;
@@ -404,7 +405,7 @@ export function matchesSearch(name: string, query: string): boolean {
   return tokens.every((t) => hay.includes(t));
 }
 
-// ---- Types de fichiers : categorie d'icone + libelle FR --------------------
+// ---- Types de fichiers : categorie d'icone + libelle traduit ------------------
 export type IconKind =
   | "folder"
   | "video"
@@ -439,16 +440,22 @@ export function iconKind(e: Entry): IconKind {
 
 // Libelle « Type » facon Windows : « Dossier de fichiers » / « Fichier MP4 ».
 export function typeLabel(e: Entry): string {
-  if (e.IsDir) return "Dossier de fichiers";
+  if (e.IsDir) return t("files.type.folder");
   const ext = extOf(e.Name);
-  return ext ? `Fichier ${ext.toUpperCase()}` : "Fichier";
+  return ext ? t("files.type.ext", { ext: ext.toUpperCase() }) : t("files.type.file");
 }
 
 // ---- Formatage -------------------------------------------------------------
 export function humanSize(n: number): string {
   if (n < 0) return "";
-  if (n === 0) return "0 o";
-  const u = ["o", "Ko", "Mo", "Go", "To"];
+  const u = [
+    t("common.unit.b"),
+    t("common.unit.kb"),
+    t("common.unit.mb"),
+    t("common.unit.gb"),
+    t("common.unit.tb"),
+  ];
+  if (n === 0) return `0 ${u[0]}`;
   let i = 0;
   let v = n;
   while (v >= 1024 && i < u.length - 1) {
@@ -458,10 +465,18 @@ export function humanSize(n: number): string {
   // < 1024 o : on arrondit a l'entier. Sans ca, une valeur fractionnaire
   // (typiquement une vitesse « 0,2 o/s » en fin de transfert) s'afficherait avec
   // toutes ses decimales (« 0.2091419499856701 o/s »).
-  return `${i === 0 ? Math.round(v) : v.toFixed(1).replace(".", ",")} ${u[i]}`;
+  // Separateur decimal de la langue (« 2,4 Go » / « 2.4 GB »), sans espace de
+  // milliers (v < 1024 ici).
+  const num =
+    i === 0
+      ? String(Math.round(v))
+      : fmtNum(v, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false });
+  return `${num} ${u[i]}`;
 }
 
 // Convertit une taille facon rclone ("256M", "128M", "1G", "512K") en octets.
+// Accepte aussi les unites affichees dans les deux langues (« 2,5 Go »,
+// « 2.5 GB », « 512 Ko », « 512 KB ») : seule la premiere lettre compte.
 // Base 1024, comme rclone. Sert a savoir si un fichier depasse le seuil de
 // decoupe multi-thread. Une chaine vide ou illisible -> 0 (tout depasse 0, donc
 // on ne bride personne par erreur).
@@ -499,17 +514,24 @@ export function xferStreams(
   return { n, fallback };
 }
 
-const DT = new Intl.DateTimeFormat("fr-FR", {
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-});
+// Formateur recree quand la langue change (pas fige sur une locale au chargement).
+let DT: { loc: string; fmt: Intl.DateTimeFormat } | null = null;
 export function humanDate(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "";
-  return DT.format(d).replace(",", "");
+  const loc = locale();
+  if (!DT || DT.loc !== loc)
+    DT = {
+      loc,
+      fmt: new Intl.DateTimeFormat(loc, {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    };
+  return DT.fmt.format(d).replace(",", "");
 }
 
 // ---- Chemins ---------------------------------------------------------------
@@ -645,7 +667,7 @@ export function humanConnError(raw: string): string {
   // En premier : l'erreur de cle de rclone contient aussi « handshake failed »,
   // qu'on prendrait sinon pour un mauvais mot de passe.
   if (s.includes("knownhosts") || s.includes("host key") || s.includes("hostkey"))
-    return "L'identité du serveur ne correspond pas à celle mémorisée : connexion refusée par sécurité. Reconnectez-vous pour voir l'empreinte présentée.";
+    return t("files.err.hostKeyMismatch");
   // macOS « Réseau local » : une app sans cette autorisation ne peut pas
   // joindre une adresse privee (LAN, WireGuard) ; la connexion echoue aussitot,
   // avec une erreur reseau trompeuse. Tailscale (100.x) n'est pas concerne.
@@ -655,30 +677,35 @@ export function humanConnError(raw: string): string {
       s.includes("no route to host") ||
       s.includes("network is down"))
   )
-    return "Serveur injoignable depuis ce Mac : vérifiez que le VPN est connecté et que le serveur (ou son VPN) est bien démarré. Si le serveur répond par ailleurs, macOS bloque peut-être Copiteur : Réglages Système > Confidentialité et sécurité > Réseau local, activez Copiteur.";
-  if (s.includes("identité du serveur non vérifiée"))
-    return "Identité du serveur non vérifiée : reconnectez-vous et acceptez son empreinte.";
+    return t("files.err.macLocalNetwork");
+  // Message du backend Rust, dans l'une ou l'autre langue.
+  if (
+    s.includes("identité du serveur non vérifiée") ||
+    s.includes("server identity not verified")
+  )
+    return t("files.err.hostKeyUnverified");
   if (
     s.includes("too many authentication failures") ||
     s.includes("unable to authenticate")
   )
-    return "Trop de tentatives d'authentification, le serveur a coupé. Réessayez dans un instant (souvent l'agent SSH qui propose des clés avant le mot de passe).";
+    return t("files.err.tooManyAuth");
   if (
     s.includes("unexpected message type 51") ||
     s.includes("handshake failed") ||
     s.includes("permission denied") ||
     s.includes("auth") // authentication failed, no auth methods…
   )
-    return "Identifiant ou mot de passe refusé par le serveur. Vérifiez aussi la casse de l'identifiant (« Alice » ≠ « alice »).";
+    return t("files.err.badLogin");
   if (
     s.includes("no route to host") ||
     s.includes("connection refused") ||
     s.includes("i/o timeout") ||
     s.includes("timeout") ||
     s.includes("ne répond pas") ||
+    s.includes("not responding") ||
     s.includes("no such host")
   )
-    return "Serveur injoignable : vérifiez l'adresse, le port, et que le serveur est bien allumé et accessible.";
+    return t("files.err.unreachable");
   return raw;
 }
 
@@ -704,13 +731,13 @@ export function sanitizeName(name: string): string {
     .replace(/\s*_+\s*/g, "_")
     .replace(/^_+|_+$/g, "")
     .trim();
-  return clean || "sans-nom";
+  return clean || t("files.untitled");
 }
 export function nameError(name: string): string {
   const n = name.trim();
-  if (!n) return "Le nom ne peut pas être vide.";
-  if (BAD_NAME.test(n)) return "Un nom ne peut pas contenir \\ / : * ? \" < > |";
-  if (n === "." || n === "..") return "Nom réservé.";
+  if (!n) return t("files.name.empty");
+  if (BAD_NAME.test(n)) return t("files.name.badChars", { chars: '\\ / : * ? " < > |' });
+  if (n === "." || n === "..") return t("files.name.reserved");
   return "";
 }
 
@@ -745,7 +772,7 @@ export function breadcrumb(
 ): { label: string; path: string }[] {
   const crumbs: { label: string; path: string }[] = [];
   if (side === "remote") {
-    crumbs.push({ label: "Serveur", path: "/" });
+    crumbs.push({ label: t("common.server"), path: "/" });
     let acc = "/";
     for (const seg of trimSlashes(dir).split("/").filter(Boolean)) {
       acc += seg + "/";

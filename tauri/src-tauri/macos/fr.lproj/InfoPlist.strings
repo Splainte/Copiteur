@@ -1,0 +1,2 @@
+/* Textes affichés par macOS pour le compte de Copiteur (français). */
+"NSLocalNetworkUsageDescription" = "Copiteur se connecte à vos serveurs SFTP et NAS situés sur le réseau local ou derrière un VPN.";
