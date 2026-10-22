@@ -20,6 +20,7 @@ export default {
   "pane.head.typePath": "Cliquer pour saisir un chemin",
   "pane.head.parents": "Dossiers parents",
   "pane.head.loading": "Chargement…",
+  "pane.head.pathChoices": "Ce chemin existe à plusieurs endroits :",
   "pane.head.searchHere": "Rechercher ici…",
   "pane.head.searchIn": "Rechercher dans {title}",
   "pane.head.clear": "Effacer",
@@ -74,6 +75,7 @@ export default {
   "pane.err.exists": "« {name} » existe déjà dans ce dossier.",
   "pane.err.rename": "Renommage impossible : {err}",
   "pane.err.move": "Déplacement impossible : {err}",
+  "pane.err.pathNotFound": "Chemin introuvable de ce côté : {path}",
 
   // Confirmation de suppression. {what} = « 3 fichiers » en gras.
   "pane.del.title": "Confirmation requise",

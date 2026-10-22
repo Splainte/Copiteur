@@ -595,7 +595,7 @@ export function dirFs(side: Side, dir: string, name: string): string {
 // ---- Dossier de depart / detection des racines de partages -----------------
 // Ou vivent les dossiers partages selon la marque (on NE devine PAS la marque :
 // on sonde ces chemins, le premier qui existe gagne). Repli propre si aucun.
-const SHARE_BASES = [
+export const SHARE_BASES = [
   "/volume1",
   "/volume2",
   "/volume3",
@@ -624,7 +624,7 @@ const RAW_ROOT_MARKERS = new Set([
 ]);
 
 // Liste les NOMS des sous-dossiers d'un dossier serveur, ou null si illisible.
-async function remoteDirNames(dir: string): Promise<string[] | null> {
+export async function remoteDirNames(dir: string): Promise<string[] | null> {
   try {
     const r = await rc<{ list: Entry[] }>("operations/list", {
       ...listArgs("remote", dir),
@@ -759,6 +759,7 @@ export function joinDir(dir: string, name: string): string {
 export function parentDir(dir: string): string {
   const t = dir.replace(/\/+$/, "");
   if (/^[A-Za-z]:$/.test(t)) return dir; // racine de lecteur : pas de parent
+  if (/^\/\/[^/]+\/[^/]+$/.test(t)) return dir; // racine \\serveur\partage : idem
   const i = t.lastIndexOf("/");
   if (i < 0) return dir;
   if (i === 0) return "/";
@@ -780,9 +781,17 @@ export function breadcrumb(
     }
     return crumbs;
   }
-  // Local : premier segment = lecteur ("C:") ou racine "/".
+  // Local : premier segment = lecteur ("C:"), partage reseau ("\\nas\partage",
+  // ouvert par un chemin colle) ou racine "/".
   const segs = trimSlashes(dir).split("/").filter(Boolean);
-  if (dir.startsWith("/")) {
+  if (dir.startsWith("//") && segs.length >= 2) {
+    let acc = `//${segs[0]}/${segs[1]}/`;
+    crumbs.push({ label: `\\\\${segs[0]}\\${segs[1]}`, path: acc });
+    for (const seg of segs.slice(2)) {
+      acc += seg + "/";
+      crumbs.push({ label: seg, path: acc });
+    }
+  } else if (dir.startsWith("/")) {
     crumbs.push({ label: "/", path: "/" });
     let acc = "/";
     for (const seg of segs) {

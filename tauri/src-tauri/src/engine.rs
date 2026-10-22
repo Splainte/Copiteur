@@ -252,10 +252,64 @@ fn macos_volumes() -> Vec<LocalRoot> {
                 path: format!("{path}/"),
                 kind: "drive".into(),
                 drive_type: drive_type.into(),
-                unc: String::new(),
+                unc: mount_unc(&line[..idx]),
             })
         })
         .collect()
+}
+
+// Source d'un montage reseau macOS ("//user@serveur/Mon%20Partage") ->
+// "\\serveur\Mon Partage", meme forme que l'UNC des lecteurs Windows. Sert a
+// retrouver le VRAI nom du partage quand le Finder a renomme le volume
+// ("Frandroid-1") pour un chemin colle. Vide si ce n'est pas une adresse.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mount_unc(source: &str) -> String {
+    let Some(rest) = source.strip_prefix("//") else {
+        return String::new();
+    };
+    let Some((user_host, share)) = rest.split_once('/') else {
+        return String::new();
+    };
+    let host = user_host.rsplit('@').next().unwrap_or(user_host);
+    let host = host.split(':').next().unwrap_or(host);
+    if host.is_empty() || share.is_empty() {
+        return String::new();
+    }
+    format!("\\\\{}\\{}", host, percent_decode(share).replace('/', "\\"))
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod mount_tests {
+    use super::mount_unc;
+
+    #[test]
+    fn source_de_montage_vers_unc() {
+        assert_eq!(mount_unc("//robin@Neufsept._smb._tcp.local/Frandroid"), r"\\Neufsept._smb._tcp.local\Frandroid");
+        assert_eq!(mount_unc("//nas:445/Mon%20Partage/PROJETS"), r"\\nas\Mon Partage\PROJETS");
+        assert_eq!(mount_unc("//GUEST:@nas/a%2"), r"\\nas\a%2");
+        assert_eq!(mount_unc("/dev/disk4s1"), "");
+        assert_eq!(mount_unc("//nas"), "");
+    }
 }
 
 // ------------------------------------------------------------------

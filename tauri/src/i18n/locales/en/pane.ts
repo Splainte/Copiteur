@@ -18,6 +18,7 @@ export default {
   "pane.head.typePath": "Click to type a path",
   "pane.head.parents": "Parent folders",
   "pane.head.loading": "Loading…",
+  "pane.head.pathChoices": "This path exists in several places:",
   "pane.head.searchHere": "Search here…",
   "pane.head.searchIn": "Search in {title}",
   "pane.head.clear": "Clear",
@@ -66,6 +67,7 @@ export default {
   "pane.err.exists": "“{name}” already exists in this folder.",
   "pane.err.rename": "Couldn't rename: {err}",
   "pane.err.move": "Couldn't move: {err}",
+  "pane.err.pathNotFound": "Path not found on this side: {path}",
 
   "pane.del.title": "Confirmation required",
   "pane.del.askLocal": "Do you really want to delete {what} from “Your computer”?",

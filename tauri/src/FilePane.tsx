@@ -48,6 +48,7 @@ import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FileIcon, UiIcon } from "./icons";
 import { NavTree, type TreeSection } from "./NavTree";
 import { logEvent } from "./journal";
+import { parsePastedPath, resolvePastedPath, type PathHit } from "./chemins";
 import { t, tn, tx, useLang, type Key } from "./i18n";
 
 // Libelle du cote pour le journal (« Ton PC » / « Serveur »).
@@ -239,6 +240,12 @@ export function FilePane({
   // Erreur d'une operation (creation, renommage, deplacement) : distincte de
   // `error` (echec de listage), que `load` remet a zero a chaque chargement.
   const [opErr, setOpErr] = useState("");
+  // Chemin colle (Finder / explorateur) : recherche en cours, emplacements
+  // possibles quand il y en a plusieurs, et fichier a selectionner une fois
+  // son dossier ouvert.
+  const [resolving, setResolving] = useState(false);
+  const [pathChoices, setPathChoices] = useState<PathHit[] | null>(null);
+  const selectAfterLoad = useRef<PathHit | null>(null);
   // Dossier survole pendant un glisser interne (cible d'un deplacement).
   const [dropRow, setDropRow] = useState<string | null>(null);
   // Taille d'un dossier, calculee a l'ouverture du menu contextuel.
@@ -373,6 +380,14 @@ export function FilePane({
     ro.observe(el);
     return () => ro.disconnect();
   }, [recomputeCrumbs, editingAddr]);
+
+  // Fermeture du choix d'emplacement au clic ailleurs.
+  useEffect(() => {
+    if (!pathChoices) return;
+    const close = () => setPathChoices(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [pathChoices]);
 
   // Fermeture du menu « … » au clic ailleurs.
   useEffect(() => {
@@ -530,6 +545,40 @@ export function FilePane({
     },
     [load],
   );
+  // Ouvre un chemin saisi ou colle dans la barre d'adresse. Un chemin absolu
+  // venu d'ailleurs (Z:\…, \\nas\partage\…, /Volumes/…, smb://…) est
+  // traduit en cherchant OU il existe vraiment de ce cote (cf. chemins.ts).
+  const openHit = (h: PathHit) => {
+    selectAfterLoad.current = h.file ? h : null;
+    navigate(h.dir);
+  };
+  const goToTyped = async (raw: string) => {
+    setEditingAddr(false);
+    setPathChoices(null);
+    selectAfterLoad.current = null;
+    const parsed = parsePastedPath(raw);
+    if (!parsed) {
+      navigate(normalizeTypedPath(raw));
+      return;
+    }
+    setResolving(true);
+    let hits: PathHit[] = [];
+    try {
+      hits = await resolvePastedPath(side, parsed, entriesDir, isWin);
+    } finally {
+      setResolving(false);
+    }
+    if (hits.length === 0) {
+      setAddr(dir);
+      setOpErr(t("pane.err.pathNotFound", { path: raw.trim() }));
+    } else if (hits.length === 1) {
+      openHit(hits[0]);
+    } else {
+      setAddr(dir);
+      setPathChoices(hits);
+    }
+  };
+
   const goBack = useCallback(() => {
     setHist((h) => {
       if (h.idx === 0) return h;
@@ -635,6 +684,19 @@ export function FilePane({
         ?.scrollIntoView({ block: "nearest" });
     });
   };
+
+  // Chemin colle qui designait un FICHIER : une fois son dossier affiche, on
+  // le selectionne et on le fait apparaitre, comme « Afficher dans le Finder ».
+  useEffect(() => {
+    const want = selectAfterLoad.current;
+    if (!want || entriesDir !== want.dir) return;
+    const hit = sorted.find((e) => e.Path === want.file);
+    if (!hit) return;
+    selectAfterLoad.current = null;
+    setSelected(new Set([hit.Path]));
+    revealPath(hit.Path);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sorted, entriesDir]);
 
   // "Ouvrir" : un dossier => on entre dedans ; un fichier LOCAL => ouvert avec
   // l'appli par defaut de l'OS ; un fichier DISTANT => telecharge en copie
@@ -1429,8 +1491,7 @@ export function FilePane({
               onChange={(e) => setAddr(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  navigate(normalizeTypedPath((e.target as HTMLInputElement).value));
-                  setEditingAddr(false);
+                  goToTyped((e.target as HTMLInputElement).value);
                 } else if (e.key === "Escape") {
                   setAddr(dir);
                   setEditingAddr(false);
@@ -1512,7 +1573,30 @@ export function FilePane({
             </div>
           )}
 
-          {loading && <span className="loading-dot" title={t("pane.head.loading")} />}
+          {(loading || resolving) && (
+            <span className="loading-dot" title={t("pane.head.loading")} />
+          )}
+
+          {/* Chemin colle trouve a plusieurs endroits (lettre de lecteur : le
+              nom du partage est perdu) : on demande plutot que deviner. */}
+          {pathChoices && (
+            <div className="crumb-menu" onClick={(e) => e.stopPropagation()}>
+              <div className="crumb-menu-title">{t("pane.head.pathChoices")}</div>
+              {pathChoices.map((h) => (
+                <button
+                  key={h.dir + (h.file ?? "")}
+                  className="ctx-item"
+                  onClick={() => {
+                    setPathChoices(null);
+                    onFocus();
+                    openHit(h);
+                  }}
+                >
+                  {h.file ? joinDir(h.dir, h.file) : h.dir}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Menu deroulant des parents replies (du plus proche au plus loin). */}
           {crumbMenu && hiddenCrumbs > 0 && (
