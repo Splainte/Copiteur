@@ -1489,19 +1489,6 @@ export function FilePane({
               onFocus={(e) => e.currentTarget.select()}
               value={addr}
               onChange={(e) => setAddr(e.target.value)}
-              // Coller un chemin entier (champ vide ou tout selectionne, ce qui
-              // est le cas a l'ouverture) suffit : pas besoin d'Entree.
-              onPaste={(e) => {
-                const el = e.currentTarget;
-                const text = e.clipboardData.getData("text");
-                const whole =
-                  el.value === "" ||
-                  (el.selectionStart === 0 && el.selectionEnd === el.value.length);
-                if (!whole || !parsePastedPath(text)) return;
-                e.preventDefault();
-                setAddr(text.trim());
-                goToTyped(text);
-              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   goToTyped((e.target as HTMLInputElement).value);
