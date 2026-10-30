@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -1872,6 +1872,35 @@ export default function App() {
   );
   const allStalled =
     running.length > 0 && running.every((x) => isStalled(x, Date.now()));
+  // Meme progression globale reportee sur l'icone de l'app : bouton de la barre
+  // des taches sous Windows (comme une copie de l'Explorateur), icone du Dock
+  // sous macOS. Jaune (« en pause ») quand la copie est figee ou reconnecte,
+  // indeterminee tant que le lot n'a pas encore de taille connue, effacee quand
+  // la file est vide. Dedoublonne : `pct` est entier, on n'appelle l'OS qu'a
+  // chaque changement reel, pas a chaque tick de sondage.
+  const taskbarKey =
+    queue.length === 0
+      ? "none"
+      : totalBytes === 0
+        ? "indeterminate"
+        : `${reconnecting || allStalled ? "paused" : "normal"}:${pct}`;
+  const taskbarKeyRef = useRef("none");
+  useEffect(() => {
+    if (taskbarKeyRef.current === taskbarKey) return;
+    taskbarKeyRef.current = taskbarKey;
+    const [kind] = taskbarKey.split(":");
+    const status =
+      kind === "none"
+        ? ProgressBarStatus.None
+        : kind === "indeterminate"
+          ? ProgressBarStatus.Indeterminate
+          : kind === "paused"
+            ? ProgressBarStatus.Paused
+            : ProgressBarStatus.Normal;
+    appWindow
+      .setProgressBar({ status, progress: Math.min(100, Math.max(0, pct)) })
+      .catch(() => {});
+  }, [taskbarKey, pct]);
   // Bandeau d'erreur EPHEMERE. Il s'affichait tant qu'un echec trainait dans la
   // liste, donc indefiniment : entre deux transferts on lisait encore l'echec du
   // precedent, ce qui donnait l'impression qu'il concernait les suivants.
