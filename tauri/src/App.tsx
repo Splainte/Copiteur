@@ -1956,6 +1956,11 @@ export default function App() {
       setActive(null);
       panes.current.local.clearSelection();
       panes.current.remote.clearSelection();
+      // Le panneau garde sinon le focus clavier : au retour du focus dans la
+      // fenetre (fin d'un deplacement par la barre du haut), le navigateur le
+      // lui rendait et il se re-selectionnait aussitot.
+      const el = document.activeElement as HTMLElement | null;
+      if (el && el.closest(".explorer")) el.blur();
     };
     const onClick = (e: MouseEvent) => {
       if (!(e.target as HTMLElement).closest(".explorer")) deselect();
