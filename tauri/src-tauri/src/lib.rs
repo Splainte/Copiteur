@@ -225,13 +225,39 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             )?,
         ));
     }
-    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = design_items
+    // Rappels de progression (zone des transferts cachee), a la suite.
+    let current_rappel = design_state
+        .rappel
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    let mut rappel_items = Vec::new();
+    for (n, (id, fr, en)) in design::RAPPELS.into_iter().enumerate() {
+        rappel_items.push((
+            id.to_string(),
+            tauri::menu::CheckMenuItem::with_id(
+                app,
+                format!("{}{id}", design::RAPPEL_PREFIX),
+                tr(fr, en),
+                true,
+                current_rappel == id,
+                Some(format!("Cmd+Alt+{}", design::DESIGNS.len() + n + 1).as_str()),
+            )?,
+        ));
+    }
+    let sep = PredefinedMenuItem::separator(app)?;
+    let mut refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = design_items
         .iter()
         .map(|(_, i)| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
         .collect();
+    refs.push(&sep);
+    refs.extend(rappel_items.iter().map(|(_, i)| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>));
     let design_menu = Submenu::with_items(app, tr("Design (bêta)", "Design (beta)"), true, &refs)?;
     if let Ok(mut g) = design_state.items.lock() {
         *g = design_items;
+    }
+    if let Ok(mut g) = design_state.rappel_items.lock() {
+        *g = rappel_items;
     }
     let window_menu = Submenu::with_items(
         app,
@@ -365,6 +391,7 @@ pub fn run() {
             design::design_toolbar_item,
             design::design_glass,
             design::design_pill,
+            design::design_rappel,
         ])
         // Menu macOS. « Quitter » : s'il reste du travail, on ne quitte pas —
         // on demande au front la meme modale que pour Alt+F4. « Tout
@@ -383,6 +410,8 @@ pub fn run() {
             other => {
                 if let Some(d) = other.strip_prefix(design::MENU_PREFIX) {
                     let _ = app.emit("copiteur://design", d.to_string());
+                } else if let Some(r) = other.strip_prefix(design::RAPPEL_PREFIX) {
+                    let _ = app.emit("copiteur://rappel", r.to_string());
                 }
             }
         })

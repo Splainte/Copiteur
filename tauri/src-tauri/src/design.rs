@@ -21,12 +21,20 @@ use tauri::{AppHandle, Manager, Wry};
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 // Seconde serie (03/11/2026) : B « Îlots » retenu, trois facons de presenter
 // les transferts (cf. src/design.ts).
-pub const DESIGNS: [(&str, &str, &str); 4] = [
+// Troisieme serie : B1 retenu ; on compare trois rappels de progression.
+pub const DESIGNS: [(&str, &str, &str); 2] = [
     ("actuelle", "Actuelle (1.2)", "Current (1.2)"),
     ("bas", "B1 · Îlot du bas", "B1 · Bottom island"),
-    ("colonne", "B2 · Colonne", "B2 · Side column"),
-    ("vue", "B3 · Vue Transferts", "B3 · Transfers view"),
 ];
+
+/// Rappel de la progression quand la zone des transferts est cachee.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub const RAPPELS: [(&str, &str, &str); 3] = [
+    ("bouton", "Rappel : sur le bouton", "Reminder: on the button"),
+    ("fil", "Rappel : fil sous la barre", "Reminder: line under the bar"),
+    ("pastille", "Rappel : pastille centrale", "Reminder: center pill"),
+];
+pub const RAPPEL_PREFIX: &str = "rappel:";
 
 pub const MENU_PREFIX: &str = "design:";
 
@@ -35,6 +43,8 @@ pub const MENU_PREFIX: &str = "design:";
 pub struct DesignState {
     pub current: Mutex<String>,
     pub items: Mutex<Vec<(String, CheckMenuItem<Wry>)>>,
+    pub rappel: Mutex<String>,
+    pub rappel_items: Mutex<Vec<(String, CheckMenuItem<Wry>)>>,
 }
 
 // ---- Description du decor (miroir de src/macChrome.tsx) ---------------------
@@ -104,6 +114,13 @@ pub enum TbItem {
         labels: Vec<String>,
         selected: i64,
     },
+    #[serde(rename_all = "camelCase")]
+    Progress {
+        id: String,
+        text: String,
+        value: f64,
+        visible: bool,
+    },
 }
 
 impl TbItem {
@@ -114,7 +131,8 @@ impl TbItem {
             | TbItem::Button { id, .. }
             | TbItem::Menu { id, .. }
             | TbItem::Field { id, .. }
-            | TbItem::Segment { id, .. } => Some(id),
+            | TbItem::Segment { id, .. }
+            | TbItem::Progress { id, .. } => Some(id),
             TbItem::Flex | TbItem::Space => None,
         }
     }
@@ -169,6 +187,20 @@ fn check_menu(app: &AppHandle, design: &str) {
     if let Ok(items) = state.items.lock() {
         for (id, item) in items.iter() {
             let _ = item.set_checked(id == design);
+        }
+    };
+}
+
+/// Coche le rappel de progression choisi dans le menu.
+#[tauri::command]
+pub fn design_rappel(app: AppHandle, rappel: String) {
+    let state = app.state::<DesignState>();
+    if let Ok(mut cur) = state.rappel.lock() {
+        *cur = rappel.clone();
+    }
+    if let Ok(items) = state.rappel_items.lock() {
+        for (id, item) in items.iter() {
+            let _ = item.set_checked(*id == rappel);
         }
     };
 }

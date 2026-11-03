@@ -78,4 +78,15 @@ export default {
   "design.xfer.remaining": "reste {size}",
   "design.view.files": "Fichiers",
   "design.view.transfers": "Transferts",
+
+  // Troisieme serie : rappel de progression quand la zone est cachee.
+  "design.rappelHeader": "Rappel de progression (zone cachée)",
+  "design.rappel.bouton": "Sur le bouton",
+  "design.rappel.fil": "Fil sous la barre",
+  "design.rappel.pastille": "Pastille centrale",
+  "design.rappelHint.bouton": "Anneau et pourcentage sur le bouton Transferts",
+  "design.rappelHint.fil": "Fine barre de progression sous la barre du haut",
+  "design.rappelHint.pastille": "Pourcentage, débit et temps restant au centre",
+  "design.xfer.show": "Afficher les transferts",
+  "design.xfer.hideAll": "Masquer les transferts",
 };

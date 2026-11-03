@@ -22,7 +22,10 @@ import { t, type Key } from "./i18n";
 // habillages de la premiere serie (volet, ilots, classique) restent dans le
 // code mais ne sont plus proposes.
 export type Layout = "actuelle" | "volet" | "ilots" | "classique" | "bas" | "colonne" | "vue";
-export const LAYOUTS: Layout[] = ["actuelle", "bas", "colonne", "vue"];
+// Troisieme serie : B1 « Îlot du bas » retenu (Mac et Windows) ; on le peaufine,
+// et on compare trois facons de rappeler la progression quand la zone des
+// transferts est cachee.
+export const LAYOUTS: Layout[] = ["actuelle", "bas"];
 // Famille d'habillage (styles communs des Îlots, cf. design.css).
 export const familyOf = (d: Layout): string =>
   d === "actuelle" ? "actuelle" : d === "bas" || d === "colonne" || d === "vue" || d === "ilots" ? "ilots" : d;
@@ -74,6 +77,50 @@ export function designName(d: Layout): string {
   return t(`design.name.${d}` as Key);
 }
 export const designHint = (d: Layout): string => t(`design.hint.${d}` as Key);
+
+// ---- Rappel de la progression quand la zone des transferts est cachee ----------
+//  - bouton   : anneau + pourcentage sur le bouton « Transferts »
+//  - fil      : fine barre de progression sous la barre du haut
+//  - pastille : pastille de suivi au centre de la barre du haut
+export type Rappel = "bouton" | "fil" | "pastille";
+export const RAPPELS: Rappel[] = ["bouton", "fil", "pastille"];
+const RKEY = "copiteur.design.rappel";
+const isRappel = (v: unknown): v is Rappel =>
+  typeof v === "string" && (RAPPELS as string[]).includes(v);
+let rappel: Rappel = (() => {
+  try {
+    const v = localStorage.getItem(RKEY);
+    return isRappel(v) ? v : "bouton";
+  } catch {
+    return "bouton";
+  }
+})();
+const rListeners = new Set<() => void>();
+export function setRappel(r: Rappel) {
+  if (r === rappel) return;
+  rappel = r;
+  try {
+    localStorage.setItem(RKEY, r);
+  } catch {
+    // stockage indisponible : le choix vaut pour la session
+  }
+  rListeners.forEach((f) => f());
+}
+export function useRappel(): Rappel {
+  return useSyncExternalStore(
+    (cb) => {
+      rListeners.add(cb);
+      return () => rListeners.delete(cb);
+    },
+    () => rappel,
+  );
+}
+export const rappelName = (r: Rappel): string => t(`design.rappel.${r}` as Key);
+export const rappelHint = (r: Rappel): string => t(`design.rappelHint.${r}` as Key);
+
+listen<string>("copiteur://rappel", (e) => {
+  if (isRappel(e.payload)) setRappel(e.payload);
+}).catch(() => {});
 
 // macOS : le menu natif « Design (bêta) » (cf. lib.rs) annonce le choix.
 listen<string>("copiteur://design", (e) => {

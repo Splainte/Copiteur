@@ -30,7 +30,7 @@ import {
 import { FilePane } from "./FilePane";
 import { ServersDropdown } from "./ServersDropdown";
 import { SettingsDialog } from "./SettingsDialog";
-import { TransfersPanel, XferStrip, isStalled, type Tab, type XferSummary } from "./TransfersPanel";
+import { TransfersPanel, XferRing, XferStrip, isStalled, type Tab, type XferSummary } from "./TransfersPanel";
 import { JournalDialog } from "./JournalDialog";
 import { logEvent } from "./journal";
 import { useUpdater } from "./Updater";
@@ -38,11 +38,13 @@ import { getVersion } from "@tauri-apps/api/app";
 import { UiIcon } from "./icons";
 import { locale, t, tn, tx, useLang } from "./i18n";
 import { FirstRunLanguage } from "./i18n/LanguagePicker";
-import { familyOf, useDesign } from "./design";
+import { familyOf, useDesign, useRappel } from "./design";
 import { Sidebar } from "./Sidebar";
 import {
   ConnectSheet,
   DebugMenu,
+  ProgLine,
+  ProgPill,
   ServerButton,
   TransferPill,
   ViewSwitch,
@@ -114,11 +116,16 @@ export default function App() {
   // habillages A / B / C (feuille de connexion, liste des transferts repliable,
   // dossiers courants pour le volet lateral, renommage d'un serveur).
   const layout = useDesign();
+  // Troisieme serie : facon de rappeler la progression quand la zone est cachee.
+  const rappel = useRappel();
   const [connectSheet, setConnectSheet] = useState(false);
   const [xferOpen, setXferOpen] = useState(false);
   // Seconde serie (Îlots) : îlot / colonne replies, et vue courante de B3.
   const [xferCollapsed, setXferCollapsed] = useState(false);
   const [view, setView] = useState<"files" | "transfers">("files");
+  // L'utilisateur a cache la zone des transferts lui-meme : un nouveau lot ne la
+  // fait plus reapparaitre (le rappel de progression prend le relais).
+  const userHidXfer = useRef(false);
   const [dirs, setDirs] = useState<Record<Side, string>>({ local: "/", remote: "/" });
   const [renameSrv, setRenameSrv] = useState<{ old: string; value: string } | null>(null);
   const [active, setActive] = useState<Side | null>("local");
@@ -1939,7 +1946,7 @@ export default function App() {
   useEffect(() => {
     // Un nouveau lot fait apparaitre la zone des transferts — sans la deplier
     // si on l'avait repliee expres.
-    if (activeCount > 0 && prevActive.current === 0) setXferOpen(true);
+    if (activeCount > 0 && prevActive.current === 0 && !userHidXfer.current) setXferOpen(true);
     prevActive.current = activeCount;
   }, [activeCount]);
   const anyXfer = xfers.length > 0 || preparing > 0 || edits.length > 0;
@@ -1975,17 +1982,20 @@ export default function App() {
   };
   // Bouton « Transferts » (barre d'outils de B1 / B2) : fait apparaitre la zone
   // si elle est cachee, sinon la replie / la deplie.
-  const xferShown = anyXfer || xferOpen;
+  // B1 / B2 : la zone se montre et se cache EN ENTIER par le bouton de la barre
+  // (le chevron de l'îlot, lui, la replie sur sa ligne de resume).
+  const xferShown = layout === "bas" || layout === "colonne" ? xferOpen : anyXfer || xferOpen;
   const toggleXfer = () => {
     if (layout === "vue") {
       setView((v) => (v === "files" ? "transfers" : "files"));
       return;
     }
-    if (!xferShown) {
-      setXferOpen(true);
-      setXferCollapsed(false);
-    } else setXferCollapsed((c) => !c);
+    const next = !xferOpen;
+    userHidXfer.current = !next;
+    setXferOpen(next);
   };
+  // Rappel de progression : seulement quand la zone est cachee et que ca tourne.
+  const showRappel = layout === "bas" && !xferShown && summary.active > 0;
   const serverEntries = serverMenuEntries({
     servers,
     remoteKey,
@@ -2006,9 +2016,11 @@ export default function App() {
     xferCount: queue.length + preparing,
     xferPct: queue.length > 0 ? pct : null,
     xferSummary,
-    xferOpen: layout === "vue" ? view === "transfers" : xferShown && !xferCollapsed,
+    xferOpen: layout === "vue" ? view === "transfers" : xferShown,
     anyXfer,
     view,
+    rappel,
+    showRappel,
     handlers: {
       pick: (label) => {
         const s = servers.find((x) => x.label === label);
@@ -2099,12 +2111,20 @@ export default function App() {
         // macOS, habillages A/B/C : la barre d'outils est NATIVE (dessinee par
         // AppKit au-dessus de la webview). On ne fait que lui reserver sa
         // hauteur ; l'apercu navigateur y dessine une imitation.
-        <div className="tb-band">{isPreview && <ToolbarSim />}</div>
+        // Bande sous la barre native : c'est ELLE qui recoit les clics dans les
+        // vides de la barre (la webview est dessous) -> zone de deplacement.
+        <div className="tb-band" data-tauri-drag-region>
+          {isPreview && <ToolbarSim />}
+          {showRappel && rappel === "fil" && <ProgLine summary={summary} />}
+        </div>
       ) : !isMac && layout !== "actuelle" ? (
         <WinTitleBar
           version={appVersion}
+          line={showRappel && rappel === "fil" ? <ProgLine summary={summary} /> : null}
           center={
-            layout === "vue" ? (
+            showRappel && rappel === "pastille" ? (
+              <ProgPill summary={summary} onClick={toggleXfer} />
+            ) : layout === "vue" ? (
               <ViewSwitch
                 view={view}
                 onView={setView}
@@ -2130,14 +2150,25 @@ export default function App() {
               <>
                 {layout !== "vue" && (
                   <button
-                    className={"w11-tool" + (xferShown && !xferCollapsed ? " is-on" : "")}
-                    title={t("design.xfer.button")}
+                    className={
+                      "w11-tool" +
+                      (xferShown ? " is-on" : "") +
+                      (showRappel && rappel === "bouton" ? " has-ring" : "")
+                    }
+                    title={t(xferShown ? "design.xfer.hideAll" : "design.xfer.show")}
                     onClick={toggleXfer}
                   >
-                    <svg viewBox="0 0 16 16" aria-hidden>
-                      <path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                    {summary.active > 0 && <span className="w11-badge">{summary.active}</span>}
+                    {showRappel && rappel === "bouton" ? (
+                      // Rappel « sur le bouton » : anneau de progression + pourcentage.
+                      <>
+                        <XferRing pct={summary.pct} size={24} state={summary.state} />
+                        <span className="w11-tool-pct">{summary.pct ?? 0} %</span>
+                      </>
+                    ) : (
+                      <span className="w11-glyph" aria-hidden>
+                        &#xE8CB;
+                      </span>
+                    )}
                   </button>
                 )}
                 <ServerButton
@@ -2147,12 +2178,14 @@ export default function App() {
                   entries={serverEntries}
                 />
                 <button className="w11-tool" title={t("app.conn.journalTitle")} onClick={() => setShowJournal(true)}>
-                  <UiIcon name="journal" />
+                  <span className="w11-glyph" aria-hidden>
+                    &#xE9F9;
+                  </span>
                 </button>
                 <button className="w11-tool" title={t("app.conn.settings")} onClick={() => setShowSettings(true)}>
-                  <svg viewBox="0 0 16 16" aria-hidden>
-                    <path d="M8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM6.9 1.5h2.2l.4 1.8 1.2.7 1.8-.6 1.1 1.9-1.4 1.2v1.4l1.4 1.2-1.1 1.9-1.8-.6-1.2.7-.4 1.8H6.9l-.4-1.8-1.2-.7-1.8.6-1.1-1.9L3.8 8.7V7.3L2.4 6.1l1.1-1.9 1.8.6 1.2-.7z" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-                  </svg>
+                  <span className="w11-glyph" aria-hidden>
+                    &#xE713;
+                  </span>
                 </button>
               </>
             ) : (
@@ -2170,12 +2203,14 @@ export default function App() {
                   </button>
                 )}
                 <button className="w11-tool" title={t("app.conn.journalTitle")} onClick={() => setShowJournal(true)}>
-                  <UiIcon name="journal" />
+                  <span className="w11-glyph" aria-hidden>
+                    &#xE9F9;
+                  </span>
                 </button>
                 <button className="w11-tool" title={t("app.conn.settings")} onClick={() => setShowSettings(true)}>
-                  <svg viewBox="0 0 16 16" aria-hidden>
-                    <path d="M8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM6.9 1.5h2.2l.4 1.8 1.2.7 1.8-.6 1.1 1.9-1.4 1.2v1.4l1.4 1.2-1.1 1.9-1.8-.6-1.2.7-.4 1.8H6.9l-.4-1.8-1.2-.7-1.8.6-1.1-1.9L3.8 8.7V7.3L2.4 6.1l1.1-1.9 1.8.6 1.2-.7z" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
-                  </svg>
+                  <span className="w11-glyph" aria-hidden>
+                    &#xE713;
+                  </span>
                 </button>
               </>
             )
@@ -2360,8 +2395,13 @@ export default function App() {
           : null}
         {/* Seconde serie : B1 îlot du bas, B2 colonne (repliable), B3 page
             dediee + bande de suivi sous les panneaux. */}
-        {(layout === "bas" || layout === "colonne") && xferShown && (
-          <div className={"transfers-host" + (xferCollapsed ? " is-collapsed" : "")}>
+        {(layout === "bas" || layout === "colonne") && (
+          // Toujours monte : la zone apparait / disparait en ANIMANT sa hauteur
+          // (cf. design.css), au lieu de surgir d'un coup.
+          <div
+            className={"transfers-host" + (xferCollapsed ? " is-collapsed" : "") + (xferShown ? "" : " is-hidden")}
+            aria-hidden={!xferShown}
+          >
             <TransfersPanel
               queue={queue}
               done={done}

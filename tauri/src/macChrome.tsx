@@ -19,7 +19,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Server } from "./files";
 import { t, tn } from "./i18n";
-import type { Layout } from "./design";
+import type { Layout, Rappel } from "./design";
 
 const isMac = navigator.userAgent.includes("Macintosh");
 // Apercu navigateur (faux backend Tauri, cf. outillage de capture) : pas de
@@ -44,7 +44,8 @@ export type TbItem =
   | { kind: "button"; id: string; symbol: string; label: string; tip: string; prominent: boolean; enabled: boolean; badge: string; selected: boolean }
   | { kind: "menu"; id: string; symbol: string; title: string; tip: string; entries: MenuEntry[] }
   | { kind: "field"; id: string; placeholder: string; value: string; secure: boolean; width: number }
-  | { kind: "segment"; id: string; labels: string[]; selected: number };
+  | { kind: "segment"; id: string; labels: string[]; selected: number }
+  | { kind: "progress"; id: string; text: string; value: number; visible: boolean };
 export type ToolbarSpec = { id: string; items: TbItem[]; centered: string[] };
 export type Region = { id: string; x: number; y: number; w: number; h: number; radius: number; anchor: string };
 export type Pill = { visible: boolean; title: string; sub: string; progress: number; open: boolean; width: number; bottom: number };
@@ -81,6 +82,8 @@ type Opts = {
   xferOpen: boolean;
   anyXfer: boolean;
   view: "files" | "transfers";
+  rappel: Rappel;
+  showRappel: boolean;
   handlers: Handlers;
 };
 
@@ -180,13 +183,28 @@ function buildToolbar(o: Opts): ToolbarSpec | null {
     // Seconde serie (Îlots) : la connexion est calee a droite, a cote du
     // journal et des parametres.
     case "bas":
-    case "colonne":
+    case "colonne": {
+      // Rappel « pastille » : jauge + resume au centre de la barre, visible
+      // seulement quand la zone des transferts est cachee.
+      const pastille = o.layout === "bas" && o.rappel === "pastille";
       return {
-        id: "copiteur." + o.layout,
-        centered: [],
+        id: "copiteur." + o.layout + (pastille ? ".pastille" : ""),
+        centered: pastille ? ["progress"] : [],
         items: [
           title(0),
           { kind: "flex" },
+          ...(pastille
+            ? ([
+                {
+                  kind: "progress",
+                  id: "progress",
+                  text: o.showRappel ? o.xferSummary : "",
+                  value: o.xferPct ?? 0,
+                  visible: o.showRappel,
+                },
+                { kind: "flex" },
+              ] as TbItem[])
+            : []),
           button("transfers", "arrow.up.arrow.down", t("design.xfer.button"), {
             badge: o.xferCount > 0 ? (o.xferPct !== null ? `${o.xferPct} %` : String(o.xferCount)) : "",
             selected: o.xferOpen,
@@ -197,6 +215,7 @@ function buildToolbar(o: Opts): ToolbarSpec | null {
           settings,
         ],
       };
+    }
     case "vue":
       return {
         id: "copiteur.vue",
@@ -283,14 +302,14 @@ export function useMacChrome(o: Opts): number {
       .then((h) => setTbH(h > 20 ? h : 52))
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [o.layout]);
+  }, [o.layout, o.rappel]);
 
   // 2. Elements dynamiques de la barre (titre du serveur, menu, pastille,
   //    champs) : on ne renvoie que ce qui a change.
   const sent = useRef<Record<string, string>>({});
-  const layoutRef = useRef(o.layout);
-  if (layoutRef.current !== o.layout) {
-    layoutRef.current = o.layout;
+  const layoutRef = useRef(o.layout + "|" + o.rappel);
+  if (layoutRef.current !== o.layout + "|" + o.rappel) {
+    layoutRef.current = o.layout + "|" + o.rappel;
     sent.current = {};
   }
   useEffect(() => {
@@ -354,6 +373,12 @@ export function useMacChrome(o: Opts): number {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pillJson, native]);
 
+  // 4 bis. Coche du rappel de progression dans le menu Design.
+  useEffect(() => {
+    if (!native) return;
+    invoke("design_rappel", { rappel: o.rappel }).catch(() => {});
+  }, [native, o.rappel]);
+
   // 5. Clics venus de la barre / de la pastille natives.
   useEffect(() => {
     if (!native) return;
@@ -383,6 +408,7 @@ function dispatch(h: Handlers, p: { id: string; kind: string; entry?: string; va
   switch (p.id) {
     case "transfers":
     case "pill":
+    case "progress":
       return h.toggleTransfers();
     case "journal":
       return h.journal();
@@ -493,6 +519,15 @@ export function ToolbarSim() {
                 )}
               </span>
             );
+          case "progress":
+            return it.visible ? (
+              <span key={i} className="tbsim-prog is-centered" onClick={() => h && dispatch(h, { id: it.id, kind: "click" })}>
+                <span className="tbsim-progbar">
+                  <span style={{ width: `${it.value}%` }} />
+                </span>
+                <span>{it.text}</span>
+              </span>
+            ) : null;
           case "segment":
             return (
               <span key={i} className={"tbsim-seg" + (centered.has(it.id) ? " is-centered" : "")}>

@@ -16,7 +16,19 @@ import type { ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Server } from "./files";
 import { t, tn, useLang } from "./i18n";
-import { LAYOUTS, designHint, designName, setDesign, useDesign } from "./design";
+import {
+  LAYOUTS,
+  RAPPELS,
+  designHint,
+  designName,
+  rappelHint,
+  rappelName,
+  setDesign,
+  setRappel,
+  useDesign,
+  useRappel,
+} from "./design";
+import { XferRing, type XferSummary } from "./TransfersPanel";
 import { Flyout, type MenuEntry } from "./Sidebar";
 import appIcon from "./assets/app-icon.png";
 
@@ -182,16 +194,24 @@ export function ServerButton({
 export function DebugMenu() {
   useLang();
   const cur = useDesign();
+  const curRappel = useRappel();
   const [open, setOpen] = useState(false);
   // Ctrl+Maj+1..4 : bascule directe (par la touche physique, quelle que soit
   // la disposition du clavier ; Ctrl+Alt aurait gene AltGr en AZERTY).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || !e.shiftKey || e.altKey) return;
-      const m = /^Digit([1-4])$/.exec(e.code);
+      const m = /^Digit([1-9])$/.exec(e.code);
       if (!m) return;
-      e.preventDefault();
-      setDesign(LAYOUTS[Number(m[1]) - 1]);
+      // 1..N : interfaces, puis les rappels de progression.
+      const n = Number(m[1]) - 1;
+      if (n < LAYOUTS.length) {
+        e.preventDefault();
+        setDesign(LAYOUTS[n]);
+      } else if (n - LAYOUTS.length < RAPPELS.length) {
+        e.preventDefault();
+        setRappel(RAPPELS[n - LAYOUTS.length]);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -245,6 +265,29 @@ export function DebugMenu() {
               </span>
             </button>
           ))}
+          <div className="debug-sep" />
+          <div className="debug-head">{t("design.rappelHeader")}</div>
+          {RAPPELS.map((r, k) => (
+            <button
+              key={r}
+              role="menuitemradio"
+              aria-checked={curRappel === r}
+              className={"debug-item" + (curRappel === r ? " is-on" : "")}
+              onClick={() => {
+                setOpen(false);
+                setRappel(r);
+              }}
+            >
+              <span className="debug-check">{curRappel === r ? "\uE73E" : ""}</span>
+              <span className="debug-texts">
+                <span className="debug-name">
+                  {rappelName(r)}
+                  <span className="debug-key">Ctrl+Maj+{LAYOUTS.length + k + 1}</span>
+                </span>
+                <span className="debug-hint">{rappelHint(r)}</span>
+              </span>
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -252,12 +295,24 @@ export function DebugMenu() {
 }
 
 // ---- Barre de titre Windows 11 ------------------------------------------------
-export function WinTitleBar({ version, center, right }: { version: string; center?: ReactNode; right?: ReactNode }) {
+export function WinTitleBar({
+  version,
+  center,
+  right,
+  line,
+}: {
+  version: string;
+  center?: ReactNode;
+  right?: ReactNode;
+  // Rappel « fil » : barre de progression tout en bas de la barre de titre.
+  line?: ReactNode;
+}) {
   useLang();
   return (
     <div className="w11-titlebar" data-tauri-drag-region>
+      {line}
       <div className="w11-app" data-tauri-drag-region>
-        <img className="w11-icon" src={appIcon} alt="" draggable={false} />
+        <img className="w11-icon" src={appIcon} alt="" draggable={false} data-tauri-drag-region />
         <span className="w11-name" data-tauri-drag-region>
           Copiteur
         </span>
@@ -268,7 +323,8 @@ export function WinTitleBar({ version, center, right }: { version: string; cente
       <div className="w11-center" data-tauri-drag-region>
         {center}
       </div>
-      <div className="w11-right">
+      {/* La zone vide entre les boutons sert aussi a deplacer la fenetre. */}
+      <div className="w11-right" data-tauri-drag-region>
         {right}
         <DebugMenu />
         <div className="w11-caption">
@@ -350,5 +406,30 @@ export function ViewSwitch({
         </button>
       ))}
     </div>
+  );
+}
+
+// ---- Rappels de progression (zone des transferts cachee) ---------------------
+export function ProgLine({ summary }: { summary: XferSummary }) {
+  return (
+    <span className={"prog-line" + (summary.state === "retry" ? " is-retry" : "")} aria-hidden>
+      <span style={{ width: `${summary.pct ?? 0}%` }} />
+    </span>
+  );
+}
+
+export function ProgPill({ summary, onClick }: { summary: XferSummary; onClick: () => void }) {
+  useLang();
+  return (
+    <button
+      className={"prog-pill" + (summary.state === "retry" ? " is-retry" : "")}
+      onClick={onClick}
+      onMouseDown={(e) => e.stopPropagation()}
+      title={t("design.xfer.show")}
+    >
+      <XferRing pct={summary.pct} size={20} state={summary.state} />
+      <span className="prog-pill-pct">{summary.pct ?? 0} %</span>
+      <span className="prog-pill-meta">{summary.line}</span>
+    </button>
   );
 }

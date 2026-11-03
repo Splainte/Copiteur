@@ -77,5 +77,15 @@ const en: Record<keyof typeof fr, string> = {
   "design.xfer.remaining": "{size} left",
   "design.view.files": "Files",
   "design.view.transfers": "Transfers",
+
+  "design.rappelHeader": "Progress reminder (area hidden)",
+  "design.rappel.bouton": "On the button",
+  "design.rappel.fil": "Line under the bar",
+  "design.rappel.pastille": "Center pill",
+  "design.rappelHint.bouton": "Ring and percentage on the Transfers button",
+  "design.rappelHint.fil": "Thin progress bar under the top bar",
+  "design.rappelHint.pastille": "Percentage, speed and time left in the center",
+  "design.xfer.show": "Show transfers",
+  "design.xfer.hideAll": "Hide transfers",
 };
 export default en;

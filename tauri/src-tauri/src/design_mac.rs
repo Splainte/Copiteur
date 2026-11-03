@@ -78,6 +78,7 @@ struct State {
     titles: HashMap<String, (Retained<NSTextField>, Retained<NSTextField>)>,
     fields: Vec<(String, Retained<NSTextField>)>,
     segments: Vec<(String, Retained<NSSegmentedControl>)>,
+    progress: Vec<(String, Retained<NSProgressIndicator>, Retained<NSTextField>, Retained<NSStackView>)>,
     glass: Vec<Retained<NSView>>,
     pill: Option<PillViews>,
     vibrancy: Option<bool>,
@@ -174,6 +175,11 @@ define_class!(
         #[unsafe(method(onPill:))]
         fn on_pill(&self, _sender: Option<&AnyObject>) {
             self.emit("pill", "click", None, None);
+        }
+
+        #[unsafe(method(onProgress:))]
+        fn on_progress(&self, _sender: Option<&AnyObject>) {
+            self.emit("progress", "click", None, None);
         }
 
         #[unsafe(method(onSegment:))]
@@ -427,6 +433,51 @@ impl Controller {
                     }
                 }
                 item.setLabel(&NSString::from_str(labels.first().map(String::as_str).unwrap_or("")));
+            }
+            TbItem::Progress { id, text, value, visible } => {
+                if fresh {
+                    let bar = NSProgressIndicator::new(mtm);
+                    bar.setStyle(NSProgressIndicatorStyle::Bar);
+                    bar.setIndeterminate(false);
+                    bar.setMinValue(0.0);
+                    bar.setMaxValue(100.0);
+                    bar.setControlSize(objc2_app_kit::NSControlSize::Small);
+                    bar.widthAnchor().constraintEqualToConstant(110.0).setActive(true);
+                    let text_label = label("", mtm);
+                    text_label.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(12.0, unsafe {
+                        objc2_app_kit::NSFontWeightRegular
+                    })));
+                    text_label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+                    text_label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+                    let stack = hstack(&[&bar, &text_label], mtm);
+                    stack.setSpacing(10.0);
+                    stack.setEdgeInsets(NSEdgeInsets { top: 0.0, left: 12.0, bottom: 0.0, right: 14.0 });
+                    stack.heightAnchor().constraintEqualToConstant(28.0).setActive(true);
+                    let click = unsafe {
+                        NSClickGestureRecognizer::initWithTarget_action(
+                            NSClickGestureRecognizer::alloc(mtm),
+                            Some(self.as_target()),
+                            Some(sel!(onProgress:)),
+                        )
+                    };
+                    stack.addGestureRecognizer(&click);
+                    item.setView(Some(&stack));
+                    STATE.with(|s| s.borrow_mut().progress.push((id.clone(), bar, text_label, stack)));
+                }
+                let views = STATE.with(|s| {
+                    s.borrow().progress.iter().find(|(i, ..)| i == id).map(|(_, b, l, st)| (b.clone(), l.clone(), st.clone()))
+                });
+                if let Some((bar, text_label, stack)) = views {
+                    bar.setDoubleValue(*value);
+                    text_label.setStringValue(&NSString::from_str(text));
+                    // Masque l'element entier (macOS 15+), sinon sa vue.
+                    if responds(item, sel!(setHidden:)) {
+                        let _: () = unsafe { msg_send![item, setHidden: !*visible] };
+                    } else {
+                        stack.setHidden(!*visible);
+                    }
+                }
+                item.setLabel(ns_string!("Progression"));
             }
             TbItem::Flex | TbItem::Space => {}
         }
@@ -728,6 +779,7 @@ pub fn apply(app: &AppHandle, spec: ChromeSpec) -> f64 {
             st.titles.clear();
             st.fields.clear();
             st.segments.clear();
+            st.progress.clear();
             st.spec = spec.toolbar.clone();
             st.seq += 1;
             st.seq
