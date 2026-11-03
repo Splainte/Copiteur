@@ -2202,6 +2202,7 @@ export default function App() {
             title={isMac && layout !== "actuelle" ? t("design.pane.yourMac") : t("common.yourPc")}
             side="local"
             hideNav={layout === "volet"}
+            rootLabel={isMac && layout !== "actuelle" ? "Macintosh HD" : undefined}
             onDirChange={(d) => setDirs((x) => (x.local === d ? x : { ...x, local: d }))}
             enabled={true}
             anyModal={anyModal}
@@ -2224,6 +2225,7 @@ export default function App() {
             title={layout !== "actuelle" && connected && currentServer ? currentServer.label : t("common.server")}
             side="remote"
             hideNav={layout === "volet"}
+            rootLabel={layout !== "actuelle" ? currentServer?.label : undefined}
             onDirChange={(d) => setDirs((x) => (x.remote === d ? x : { ...x, remote: d }))}
             enabled={connected}
             anyModal={anyModal}

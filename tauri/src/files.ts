@@ -772,10 +772,12 @@ export function parentDir(dir: string): string {
 export function breadcrumb(
   side: Side,
   dir: string,
+  // BETA DESIGN : nom affiche pour la racine (nom du serveur, « Macintosh HD »).
+  rootLabel?: string,
 ): { label: string; path: string }[] {
   const crumbs: { label: string; path: string }[] = [];
   if (side === "remote") {
-    crumbs.push({ label: t("common.server"), path: "/" });
+    crumbs.push({ label: rootLabel || t("common.server"), path: "/" });
     let acc = "/";
     for (const seg of trimSlashes(dir).split("/").filter(Boolean)) {
       acc += seg + "/";
@@ -794,7 +796,7 @@ export function breadcrumb(
       crumbs.push({ label: seg, path: acc });
     }
   } else if (dir.startsWith("/")) {
-    crumbs.push({ label: "/", path: "/" });
+    crumbs.push({ label: rootLabel || "/", path: "/" });
     let acc = "/";
     for (const seg of segs) {
       acc += seg + "/";
