@@ -28,12 +28,10 @@
   flex: 0 0 var(--tb-h, 52px);
   height: var(--tb-h, 52px);
 }
-/* Mesure a l'ecran (MacBook, macOS 27) : les capsules de la barre sont 0,75 pt
-   au-dessus du centre des feux ; on remonte d'autant les panneaux pour un ecart
-   identique au-dessus et au-dessous des boutons. */
+/* (Hauteur = 2 x le centre du feu rouge, mesuree par macOS : verifie au
+   pixel sur une capture du MacBook, aucun ajustement.) */
 .app[data-family="ilots"][data-os="macos"] .tb-band {
-  flex-basis: calc(var(--tb-h, 52px) - 1.5px);
-  height: calc(var(--tb-h, 52px) - 1.5px);
+  flex-basis: var(--tb-h, 52px);
   position: relative;
 }
 
@@ -3037,7 +3035,8 @@ html.apercu-win .app {
   background: var(--w-subtle-hover, var(--cp-control-hover));
 }
 .morph-btn.is-expanded {
-  border-radius: 16px;
+  /* Rectangle aux coins Fluent (4 px), comme les autres controles. */
+  border-radius: 4px;
   background: var(--w-control, var(--cp-field));
   border-color: var(--w-control-stroke, var(--cp-stroke));
 }
