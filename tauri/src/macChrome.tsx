@@ -86,6 +86,7 @@ type Opts = {
   rappel: Rappel;
   showRappel: boolean;
   xferRetry: boolean;
+  xferLine: string;
   handlers: Handlers;
 };
 
@@ -202,7 +203,8 @@ function buildToolbar(o: Opts): ToolbarSpec | null {
                 {
                   kind: "progress",
                   id: "progress",
-                  text: o.showRappel ? o.xferSummary : "",
+                  // Meme texte que sous Windows : « 42 % · 94 Mo/s · reste 16 Go · 2 min ».
+                text: o.showRappel ? `${o.xferPct ?? 0} % · ${o.xferLine}` : "",
                   value: o.xferPct ?? 0,
                   visible: o.showRappel,
                 },
@@ -217,7 +219,8 @@ function buildToolbar(o: Opts): ToolbarSpec | null {
                 id: "transfers",
                 symbol: "arrow.up.arrow.down",
                 label: t("design.xfer.button"),
-                text: o.showRappel ? o.xferSummary : "",
+                // Meme texte que sous Windows : « 42 % · 94 Mo/s · reste 16 Go · 2 min ».
+                text: o.showRappel ? `${o.xferPct ?? 0} % · ${o.xferLine}` : "",
                 value: o.xferPct ?? 0,
                 expanded: o.showRappel,
                 retry: o.xferRetry,

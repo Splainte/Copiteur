@@ -2151,6 +2151,7 @@ export default function App() {
     rappel,
     showRappel,
     xferRetry: summary.state === "retry",
+    xferLine: summary.line,
     handlers: {
       pick: (label) => {
         const s = servers.find((x) => x.label === label);

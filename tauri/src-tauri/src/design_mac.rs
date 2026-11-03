@@ -490,7 +490,7 @@ impl Controller {
             }
             TbItem::Morph { id, symbol: sym, label: lbl, text, value, expanded, retry } => {
                 const H: f64 = 36.0;
-                const MAX: f64 = 320.0;
+                const MAX: f64 = 400.0;
                 if fresh {
                     // Hote large et transparent, capsule de verre collee a droite.
                     let host: Retained<PassThroughView> = unsafe { msg_send![PassThroughView::alloc(mtm), init] };
