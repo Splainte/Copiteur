@@ -27,6 +27,13 @@
 .tb-band {
   flex: 0 0 var(--tb-h, 52px);
   height: var(--tb-h, 52px);
+}
+/* Mesure a l'ecran (MacBook, macOS 27) : les capsules de la barre sont 0,75 pt
+   au-dessus du centre des feux ; on remonte d'autant les panneaux pour un ecart
+   identique au-dessus et au-dessous des boutons. */
+.app[data-family="ilots"][data-os="macos"] .tb-band {
+  flex-basis: calc(var(--tb-h, 52px) - 1.5px);
+  height: calc(var(--tb-h, 52px) - 1.5px);
   position: relative;
 }
 
@@ -2975,4 +2982,34 @@ html.apercu-win .app {
 }
 .app[data-family="ilots"][data-os="macos"] .pane-splitter:hover::after {
   background: var(--cp-accent);
+}
+
+/* macOS : pastille centrale dans la bande sous la barre native, alignee sur
+   l'axe des boutons, au gabarit de leurs capsules (36 pt, verre imite). */
+.app[data-os="macos"] .tb-band .prog-pill {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--tb-h, 52px) / 2);
+  height: 36px;
+  margin-top: -18px;
+  translate: -50% 0;
+  padding: 0 16px 0 10px;
+  border: 0;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--m-text);
+  background: color-mix(in srgb, var(--m-text) 7%, transparent);
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.35),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.12),
+    0 1px 3px rgba(0, 0, 0, 0.12);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  z-index: 4;
+}
+.app[data-os="macos"] .tb-band .prog-pill:hover {
+  background: color-mix(in srgb, var(--m-text) 11%, transparent);
+}
+.app[data-os="macos"] .tb-band .prog-pill .prog-pill-meta {
+  color: var(--m-text-2);
 }

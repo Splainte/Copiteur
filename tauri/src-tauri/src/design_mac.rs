@@ -461,18 +461,29 @@ impl Controller {
                     stack.setSpacing(10.0);
                     stack.setEdgeInsets(NSEdgeInsets { top: 0.0, left: 14.0, bottom: 0.0, right: 16.0 });
                     stack.setTranslatesAutoresizingMaskIntoConstraints(false);
-                    let root = glass_view(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 36.0)), 18.0, mtm);
-                    root.setTranslatesAutoresizingMaskIntoConstraints(false);
-                    match has_glass().then(|| root.downcast_ref::<NSGlassEffectView>()).flatten() {
+                    // Le verre ignore sa propre opacite : on le pose dans un
+                    // conteneur a calque, dont l'opacite (animee) s'applique a
+                    // tout ce qu'il contient.
+                    let glass = glass_view(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 36.0)), 18.0, mtm);
+                    glass.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    match has_glass().then(|| glass.downcast_ref::<NSGlassEffectView>()).flatten() {
                         Some(g) => g.setContentView(Some(&stack)),
-                        None => root.addSubview(&stack),
+                        None => glass.addSubview(&stack),
                     }
+                    let root = NSView::new(mtm);
+                    root.setWantsLayer(true);
+                    root.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    root.addSubview(&glass);
                     let c = [
                         root.heightAnchor().constraintEqualToConstant(36.0),
-                        stack.leadingAnchor().constraintEqualToAnchor(&root.leadingAnchor()),
-                        stack.trailingAnchor().constraintEqualToAnchor(&root.trailingAnchor()),
-                        stack.topAnchor().constraintEqualToAnchor(&root.topAnchor()),
-                        stack.bottomAnchor().constraintEqualToAnchor(&root.bottomAnchor()),
+                        glass.leadingAnchor().constraintEqualToAnchor(&root.leadingAnchor()),
+                        glass.trailingAnchor().constraintEqualToAnchor(&root.trailingAnchor()),
+                        glass.topAnchor().constraintEqualToAnchor(&root.topAnchor()),
+                        glass.bottomAnchor().constraintEqualToAnchor(&root.bottomAnchor()),
+                        stack.leadingAnchor().constraintEqualToAnchor(&glass.leadingAnchor()),
+                        stack.trailingAnchor().constraintEqualToAnchor(&glass.trailingAnchor()),
+                        stack.topAnchor().constraintEqualToAnchor(&glass.topAnchor()),
+                        stack.bottomAnchor().constraintEqualToAnchor(&glass.bottomAnchor()),
                     ];
                     NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&c));
                     let click = unsafe {
@@ -503,10 +514,29 @@ impl Controller {
                         text_label.setStringValue(&NSString::from_str(text));
                     }
                     if was != *visible || fresh {
-                        NSAnimationContext::beginGrouping();
-                        NSAnimationContext::currentContext().setDuration(0.22);
-                        root.animator().setAlphaValue(if *visible { 1.0 } else { 0.0 });
-                        NSAnimationContext::endGrouping();
+                        // Fondu explicite sur le calque du conteneur (le verre
+                        // s'y plie) ; l'etat final est pose aussi sur la vue.
+                        let to = if *visible { 1.0f32 } else { 0.0f32 };
+                        unsafe {
+                            let layer: *mut AnyObject = msg_send![&*root, layer];
+                            if !layer.is_null() && !fresh {
+                                if let Some(cls) = AnyClass::get(c"CABasicAnimation") {
+                                    let anim: *mut AnyObject =
+                                        msg_send![cls, animationWithKeyPath: ns_string!("opacity")];
+                                    let from: f32 = msg_send![layer, opacity];
+                                    let fromv = objc2_foundation::NSNumber::new_f32(from);
+                                    let tov = objc2_foundation::NSNumber::new_f32(to);
+                                    let _: () = msg_send![anim, setFromValue: &*fromv];
+                                    let _: () = msg_send![anim, setToValue: &*tov];
+                                    let _: () = msg_send![anim, setDuration: 0.22f64];
+                                    let _: () = msg_send![layer, addAnimation: anim, forKey: ns_string!("fade")];
+                                }
+                            }
+                            if !layer.is_null() {
+                                let _: () = msg_send![layer, setOpacity: to];
+                            }
+                        }
+                        root.setAlphaValue(to as f64);
                     }
                 }
                 item.setLabel(ns_string!("Progression"));
@@ -840,7 +870,25 @@ pub fn apply(app: &AppHandle, spec: ChromeSpec) -> f64 {
             }
         }
         let h = window.frame().size.height - window.contentLayoutRect().size.height;
-        if spec.toolbar.is_some() { h.max(0.0) } else { 0.0 }
+        if spec.toolbar.is_none() {
+            return 0.0;
+        }
+        // La hauteur declaree de la barre ne tombe pas sur l'axe visuel des
+        // boutons : on mesure le centre REEL d'un element (le titre) et on rend
+        // le double, pour que les boutons soient pile au milieu entre le haut de
+        // la fenetre et le bord des panneaux.
+        window.layoutIfNeeded();
+        // Repere : le centre du feu rouge, aligne par macOS sur l'axe des
+        // boutons de la barre d'outils.
+        let center = window.standardWindowButton(NSWindowButton::CloseButton).and_then(|b| {
+            let r = b.convertRect_toView(b.bounds(), None);
+            let top = window.frame().size.height - (r.origin.y + r.size.height / 2.0);
+            (r.size.height > 0.0).then_some(top)
+        });
+        match center {
+            Some(c) if c > 10.0 && c < 60.0 => (c * 2.0).round(),
+            _ => h.max(0.0),
+        }
     })
     .unwrap_or(0.0)
 }

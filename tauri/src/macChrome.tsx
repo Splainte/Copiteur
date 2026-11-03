@@ -186,7 +186,9 @@ function buildToolbar(o: Opts): ToolbarSpec | null {
     case "colonne": {
       // Rappel « pastille » : jauge + resume au centre de la barre, visible
       // seulement quand la zone des transferts est cachee.
-      const pastille = o.layout === "bas" && o.rappel === "pastille";
+      // (La pastille centrale est dessinee par la page, dans la bande sous la
+      // barre : le verre natif ne sait pas apparaitre en fondu.)
+      const pastille = false;
       return {
         id: "copiteur." + o.layout + (pastille ? ".pastille" : ""),
         centered: pastille ? ["progress"] : [],

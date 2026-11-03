@@ -2245,6 +2245,9 @@ export default function App() {
         <div className="tb-band" data-tauri-drag-region>
           {isPreview && <ToolbarSim />}
           {showRappel && rappel === "fil" && <ProgLine summary={summary} />}
+          {layout === "bas" && (
+            <ProgPill summary={summary} visible={showRappel && rappel === "pastille"} onClick={toggleXfer} />
+          )}
         </div>
       ) : !isMac && layout !== "actuelle" ? (
         <WinTitleBar
