@@ -389,6 +389,9 @@ const REMOTE_NAME: &str = "serveur";
 const ALLOWED_METHODS: &[&str] = &[
     "config/create",
     "core/stats",
+    // Remise a zero des compteurs d'un transfert avant une reprise (sinon les
+    // octets de la tentative perdue s'ajoutent : progression a 137 %, 210 %).
+    "core/stats-reset",
     "core/version",
     "fs/cache/clear",
     "job/status",
@@ -740,11 +743,62 @@ mod tests {
             ("operations/copyfile", json!({ "srcFs": "serveur:/a", "srcRemote": "x:y.mp4", "dstFs": "D:\\", "dstRemote": "x.mp4" })),
             ("sync/move", json!({ "srcFs": "/a", "dstFs": "/b/c:d" })),
             ("options/set", json!({ "main": { "Inplace": true } })),
+            ("core/stats-reset", json!({ "group": "copy/12" })),
             ("config/create", json!({ "name": "serveur", "type": "sftp", "parameters": { "host": "h", "user": "u", "pass": "p", "port": "22", "concurrency": "64", "disable_hashcheck": "true" }, "opt": { "obscure": true } })),
         ];
         for (m, p) in ok {
             assert!(check_call(m, &p).is_ok(), "{m} {p} devrait passer : {:?}", check_call(m, &p));
         }
+    }
+
+    /// Chaque methode RC appelee par le front (`rc("…")` dans src/) doit etre
+    /// dans la liste blanche : un oubli y est REFUSE EN SILENCE (le front
+    /// ignore souvent l'erreur), comme `core/stats-reset`, absent pendant des
+    /// versions, d'ou une progression a 137 % apres chaque reprise.
+    #[test]
+    fn la_liste_blanche_couvre_tous_les_appels_du_front() {
+        fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "ts" || x == "tsx") {
+                    out.push(p);
+                }
+            }
+        }
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../src");
+        let mut files = Vec::new();
+        walk(&src, &mut files);
+        let mut seen = 0;
+        for f in files {
+            let code = std::fs::read_to_string(&f).unwrap();
+            // `rc("methode"` ou `rc<Type>("methode"`.
+            for (i, _) in code.match_indices("rc") {
+                let before = code[..i].chars().next_back();
+                if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+                    continue;
+                }
+                let mut rest = &code[i + 2..];
+                if rest.starts_with('<') {
+                    let Some(end) = rest.find(">(") else { continue };
+                    rest = &rest[end + 1..];
+                }
+                let Some(rest) = rest.strip_prefix("(\"") else { continue };
+                let Some(end) = rest.find('"') else { continue };
+                let method = &rest[..end];
+                if !method.contains('/') {
+                    continue;
+                }
+                seen += 1;
+                assert!(
+                    ALLOWED_METHODS.contains(&method),
+                    "{} appelle `{method}`, absent de ALLOWED_METHODS",
+                    f.display()
+                );
+            }
+        }
+        assert!(seen > 10, "aucun appel rc trouve dans src/ ({seen}) : motif a revoir");
     }
 
     /// Tout ce qui permettrait d'executer un programme ou de sortir du cadre

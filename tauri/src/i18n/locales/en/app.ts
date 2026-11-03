@@ -26,6 +26,8 @@ export default {
     "The server could not provide a verifiable checksum — retrying without checksum verification. ({err})",
   "app.err.streamFallback":
     "The server refused {from} simultaneous upload connections — retrying with {to}. ({err})",
+  "app.err.downFallback":
+    "The connection couldn't keep up with {from} download streams — retrying with {to}. ({err})",
 
   "app.conflict.title": "File already exists",
   "app.conflict.body": "“{name}” already exists in the destination folder. What do you want to do?",
