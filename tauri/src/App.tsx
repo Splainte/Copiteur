@@ -1960,10 +1960,20 @@ export default function App() {
     const onClick = (e: MouseEvent) => {
       if (!(e.target as HTMLElement).closest(".explorer")) deselect();
     };
+    // Une zone de deplacement de fenetre (barre du haut) ne produit jamais de
+    // « click » : le systeme prend la main des l'appui pour deplacer la
+    // fenetre. On deselectionne donc des l'appui sur une telle zone (hors
+    // boutons, qui gardent leur clic normal).
+    const onDown = (e: MouseEvent) => {
+      const el = e.target as HTMLElement;
+      if (el.closest("[data-tauri-drag-region]") && !el.closest("button")) deselect();
+    };
     window.addEventListener("click", onClick);
+    window.addEventListener("mousedown", onDown, true);
     window.addEventListener("blur", deselect);
     return () => {
       window.removeEventListener("click", onClick);
+      window.removeEventListener("mousedown", onDown, true);
       window.removeEventListener("blur", deselect);
     };
   }, []);
@@ -2236,8 +2246,9 @@ export default function App() {
           version={appVersion}
           line={showRappel && rappel === "fil" ? <ProgLine summary={summary} /> : null}
           center={
-            showRappel && rappel === "pastille" ? (
-              <ProgPill summary={summary} onClick={toggleXfer} />
+            layout === "bas" ? (
+              // Toujours montee : elle apparait / disparait en fondu.
+              <ProgPill summary={summary} visible={showRappel && rappel === "pastille"} onClick={toggleXfer} />
             ) : layout === "vue" ? (
               <ViewSwitch
                 view={view}
@@ -2292,9 +2303,7 @@ export default function App() {
                   entries={serverEntries}
                 />
                 <button className="w11-tool" title={t("app.conn.journalTitle")} onClick={() => setShowJournal(true)}>
-                  <span className="w11-glyph" aria-hidden>
-                    &#xE9F9;
-                  </span>
+                  <UiIcon name="journal" />
                 </button>
                 <button className="w11-tool" title={t("app.conn.settings")} onClick={() => setShowSettings(true)}>
                   <span className="w11-glyph" aria-hidden>
@@ -2317,9 +2326,7 @@ export default function App() {
                   </button>
                 )}
                 <button className="w11-tool" title={t("app.conn.journalTitle")} onClick={() => setShowJournal(true)}>
-                  <span className="w11-glyph" aria-hidden>
-                    &#xE9F9;
-                  </span>
+                  <UiIcon name="journal" />
                 </button>
                 <button className="w11-tool" title={t("app.conn.settings")} onClick={() => setShowSettings(true)}>
                   <span className="w11-glyph" aria-hidden>

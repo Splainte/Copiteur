@@ -87,14 +87,9 @@ export const RAPPELS: Rappel[] = ["bouton", "fil", "pastille"];
 const RKEY = "copiteur.design.rappel";
 const isRappel = (v: unknown): v is Rappel =>
   typeof v === "string" && (RAPPELS as string[]).includes(v);
-let rappel: Rappel = (() => {
-  try {
-    const v = localStorage.getItem(RKEY);
-    return isRappel(v) ? v : "bouton";
-  } catch {
-    return "bouton";
-  }
-})();
+// Serie 5 : Robin a retenu la pastille centrale (Mac et Windows) ; les autres
+// rappels ne sont plus proposes (le code reste, cf. setRappel).
+let rappel: Rappel = "pastille";
 const rListeners = new Set<() => void>();
 export function setRappel(r: Rappel) {
   if (r === rappel) return;

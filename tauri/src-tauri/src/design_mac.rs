@@ -24,7 +24,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, ProtocolObject, Sel};
 use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSClickGestureRecognizer, NSColor,
+    NSAnimatablePropertyContainer, NSAnimationContext, NSApplication, NSAutoresizingMaskOptions, NSClickGestureRecognizer, NSColor,
     NSControlStateValueOn, NSControlTextEditingDelegate, NSEventType, NSFocusRingType, NSFont,
     NSFontWeightBold, NSFontWeightSemibold, NSGlassEffectView, NSImage, NSImageView, NSItemBadge,
     NSLayoutAttribute, NSLayoutConstraint, NSLineBreakMode, NSMenu, NSMenuItem, NSMenuToolbarItem,
@@ -78,7 +78,7 @@ struct State {
     titles: HashMap<String, (Retained<NSTextField>, Retained<NSTextField>)>,
     fields: Vec<(String, Retained<NSTextField>)>,
     segments: Vec<(String, Retained<NSSegmentedControl>)>,
-    progress: Vec<(String, Retained<NSProgressIndicator>, Retained<NSTextField>, Retained<NSStackView>)>,
+    progress: Vec<(String, Retained<NSProgressIndicator>, Retained<NSTextField>, Retained<NSView>, bool)>,
     glass: Vec<Retained<NSView>>,
     pill: Option<PillViews>,
     vibrancy: Option<bool>,
@@ -179,7 +179,11 @@ define_class!(
 
         #[unsafe(method(onProgress:))]
         fn on_progress(&self, _sender: Option<&AnyObject>) {
-            self.emit("progress", "click", None, None);
+            // Pastille effacee (transparente) : elle ne doit plus reagir.
+            let shown = STATE.with(|s| s.borrow().progress.iter().any(|(.., v)| *v));
+            if shown {
+                self.emit("progress", "click", None, None);
+            }
         }
 
         #[unsafe(method(onSegment:))]
@@ -435,6 +439,10 @@ impl Controller {
                 item.setLabel(&NSString::from_str(labels.first().map(String::as_str).unwrap_or("")));
             }
             TbItem::Progress { id, text, value, visible } => {
+                // Pastille centrale : une capsule de verre a NOUS (l'element de
+                // barre est sans bordure, sinon la barre poserait son propre
+                // verre, impossible a faire apparaitre en fondu). Elle reste en
+                // place et apparait / disparait en fondu.
                 if fresh {
                     let bar = NSProgressIndicator::new(mtm);
                     bar.setStyle(NSProgressIndicatorStyle::Bar);
@@ -451,8 +459,22 @@ impl Controller {
                     text_label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
                     let stack = hstack(&[&bar, &text_label], mtm);
                     stack.setSpacing(10.0);
-                    stack.setEdgeInsets(NSEdgeInsets { top: 0.0, left: 12.0, bottom: 0.0, right: 14.0 });
-                    stack.heightAnchor().constraintEqualToConstant(28.0).setActive(true);
+                    stack.setEdgeInsets(NSEdgeInsets { top: 0.0, left: 14.0, bottom: 0.0, right: 16.0 });
+                    stack.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    let root = glass_view(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(320.0, 36.0)), 18.0, mtm);
+                    root.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    match has_glass().then(|| root.downcast_ref::<NSGlassEffectView>()).flatten() {
+                        Some(g) => g.setContentView(Some(&stack)),
+                        None => root.addSubview(&stack),
+                    }
+                    let c = [
+                        root.heightAnchor().constraintEqualToConstant(36.0),
+                        stack.leadingAnchor().constraintEqualToAnchor(&root.leadingAnchor()),
+                        stack.trailingAnchor().constraintEqualToAnchor(&root.trailingAnchor()),
+                        stack.topAnchor().constraintEqualToAnchor(&root.topAnchor()),
+                        stack.bottomAnchor().constraintEqualToAnchor(&root.bottomAnchor()),
+                    ];
+                    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&c));
                     let click = unsafe {
                         NSClickGestureRecognizer::initWithTarget_action(
                             NSClickGestureRecognizer::alloc(mtm),
@@ -460,21 +482,31 @@ impl Controller {
                             Some(sel!(onProgress:)),
                         )
                     };
-                    stack.addGestureRecognizer(&click);
-                    item.setView(Some(&stack));
-                    STATE.with(|s| s.borrow_mut().progress.push((id.clone(), bar, text_label, stack)));
+                    root.addGestureRecognizer(&click);
+                    root.setAlphaValue(if *visible { 1.0 } else { 0.0 });
+                    item.setView(Some(&root));
+                    item.setBordered(false);
+                    STATE.with(|s| s.borrow_mut().progress.push((id.clone(), bar, text_label, root, *visible)));
                 }
                 let views = STATE.with(|s| {
-                    s.borrow().progress.iter().find(|(i, ..)| i == id).map(|(_, b, l, st)| (b.clone(), l.clone(), st.clone()))
+                    let mut st = s.borrow_mut();
+                    st.progress.iter_mut().find(|(i, ..)| i == id).map(|(_, b, l, r, shown)| {
+                        let was = *shown;
+                        *shown = *visible;
+                        (b.clone(), l.clone(), r.clone(), was)
+                    })
                 });
-                if let Some((bar, text_label, stack)) = views {
-                    bar.setDoubleValue(*value);
-                    text_label.setStringValue(&NSString::from_str(text));
-                    // Masque l'element entier (macOS 15+), sinon sa vue.
-                    if responds(item, sel!(setHidden:)) {
-                        let _: () = unsafe { msg_send![item, setHidden: !*visible] };
-                    } else {
-                        stack.setHidden(!*visible);
+                if let Some((bar, text_label, root, was)) = views {
+                    // Pendant le fondu de sortie, on garde le dernier texte.
+                    if *visible {
+                        bar.setDoubleValue(*value);
+                        text_label.setStringValue(&NSString::from_str(text));
+                    }
+                    if was != *visible || fresh {
+                        NSAnimationContext::beginGrouping();
+                        NSAnimationContext::currentContext().setDuration(0.22);
+                        root.animator().setAlphaValue(if *visible { 1.0 } else { 0.0 });
+                        NSAnimationContext::endGrouping();
                     }
                 }
                 item.setLabel(ns_string!("Progression"));

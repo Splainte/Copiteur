@@ -18,15 +18,10 @@ import type { Server } from "./files";
 import { t, tn, useLang } from "./i18n";
 import {
   LAYOUTS,
-  RAPPELS,
   designHint,
   designName,
-  rappelHint,
-  rappelName,
   setDesign,
-  setRappel,
   useDesign,
-  useRappel,
 } from "./design";
 import { XferRing, type XferSummary } from "./TransfersPanel";
 import { Flyout, type MenuEntry } from "./Sidebar";
@@ -194,7 +189,6 @@ export function ServerButton({
 export function DebugMenu() {
   useLang();
   const cur = useDesign();
-  const curRappel = useRappel();
   const [open, setOpen] = useState(false);
   // Ctrl+Maj+1..4 : bascule directe (par la touche physique, quelle que soit
   // la disposition du clavier ; Ctrl+Alt aurait gene AltGr en AZERTY).
@@ -208,9 +202,6 @@ export function DebugMenu() {
       if (n < LAYOUTS.length) {
         e.preventDefault();
         setDesign(LAYOUTS[n]);
-      } else if (n - LAYOUTS.length < RAPPELS.length) {
-        e.preventDefault();
-        setRappel(RAPPELS[n - LAYOUTS.length]);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -281,29 +272,6 @@ export function DebugMenu() {
               <span className="debug-texts">
                 <span className="debug-name">{t(`design.simu.${a}`)}</span>
                 <span className="debug-hint">{t(`design.simuHint.${a}`)}</span>
-              </span>
-            </button>
-          ))}
-          <div className="debug-sep" />
-          <div className="debug-head">{t("design.rappelHeader")}</div>
-          {RAPPELS.map((r, k) => (
-            <button
-              key={r}
-              role="menuitemradio"
-              aria-checked={curRappel === r}
-              className={"debug-item" + (curRappel === r ? " is-on" : "")}
-              onClick={() => {
-                setOpen(false);
-                setRappel(r);
-              }}
-            >
-              <span className="debug-check">{curRappel === r ? "\uE73E" : ""}</span>
-              <span className="debug-texts">
-                <span className="debug-name">
-                  {rappelName(r)}
-                  <span className="debug-key">Ctrl+Maj+{LAYOUTS.length + k + 1}</span>
-                </span>
-                <span className="debug-hint">{rappelHint(r)}</span>
               </span>
             </button>
           ))}
@@ -437,18 +405,33 @@ export function ProgLine({ summary }: { summary: XferSummary }) {
   );
 }
 
-export function ProgPill({ summary, onClick }: { summary: XferSummary; onClick: () => void }) {
+export function ProgPill({
+  summary,
+  visible,
+  onClick,
+}: {
+  summary: XferSummary;
+  visible: boolean;
+  onClick: () => void;
+}) {
   useLang();
+  // Pendant le fondu de sortie (fin du lot, zone reaffichee), on garde les
+  // derniers chiffres au lieu d'afficher « aucun transfert ».
+  const last = useRef(summary);
+  if (visible) last.current = summary;
+  const s = last.current;
   return (
     <button
-      className={"prog-pill" + (summary.state === "retry" ? " is-retry" : "")}
+      className={"prog-pill" + (visible ? " is-visible" : "") + (s.state === "retry" ? " is-retry" : "")}
       onClick={onClick}
       onMouseDown={(e) => e.stopPropagation()}
       title={t("design.xfer.show")}
+      tabIndex={visible ? 0 : -1}
+      aria-hidden={!visible}
     >
-      <XferRing pct={summary.pct} size={20} state={summary.state} />
-      <span className="prog-pill-pct">{summary.pct ?? 0} %</span>
-      <span className="prog-pill-meta">{summary.line}</span>
+      <XferRing pct={s.pct} size={20} state={s.state} />
+      <span className="prog-pill-pct">{s.pct ?? 0} %</span>
+      <span className="prog-pill-meta">{s.line}</span>
     </button>
   );
 }

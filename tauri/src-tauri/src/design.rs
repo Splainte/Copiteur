@@ -27,8 +27,9 @@ pub const DESIGNS: [(&str, &str, &str); 2] = [
     ("bas", "B1 · Îlot du bas", "B1 · Bottom island"),
 ];
 
-/// Rappel de la progression quand la zone des transferts est cachee.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// Rappel de la progression quand la zone des transferts est cachee (plus
+/// propose dans le menu depuis la serie 5 : pastille centrale retenue).
+#[allow(dead_code)]
 pub const RAPPELS: [(&str, &str, &str); 3] = [
     ("bouton", "Rappel : sur le bouton", "Reminder: on the button"),
     ("fil", "Rappel : fil sous la barre", "Reminder: line under the bar"),
