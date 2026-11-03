@@ -1,0 +1,1435 @@
+/* ============================================================
+   Copiteur — habillage « Îlots » pour macOS 27 (Liquid Glass) et Windows 11
+   (Fluent 2) : deux panneaux en cartes, les transferts dans un îlot dessous.
+
+   Decor natif (cf. chrome_mac.rs) :
+   - macOS : barre d'outils NATIVE au-dessus de la page (la page lui reserve
+     `--tb-h`), fond de fenetre peint par la page ;
+   - Windows : Mica natif derriere toute la fenetre (page transparente la ou
+     on veut le voir), barre de titre et tout le reste en HTML, au gabarit
+     Fluent 2.
+   Ces regles se posent par-dessus App.css (styles de base des composants).
+   ============================================================ */
+
+/* ---- Conteneur commun ----------------------------------------------------- */
+.shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tb-band {
+  flex: 0 0 var(--tb-h, 52px);
+  height: var(--tb-h, 52px);
+}
+/* (Hauteur = 2 x le centre du feu rouge, mesuree par macOS : verifie au
+   pixel sur une capture du MacBook, aucun ajustement.) */
+.app[data-os="macos"] .tb-band {
+  flex-basis: var(--tb-h, 52px);
+  position: relative;
+}
+
+/* ============================================================
+   JETONS macOS 27
+   ============================================================ */
+.app[data-os="macos"] {
+  --m-window: #ffffff;
+  --m-content: #ffffff;
+  --m-text: rgba(0, 0, 0, 0.85);
+  --m-text-2: rgba(0, 0, 0, 0.5);
+  --m-text-3: rgba(0, 0, 0, 0.26);
+  --m-sep: rgba(0, 0, 0, 0.09);
+  --m-sep-strong: rgba(0, 0, 0, 0.16);
+  --m-hover: rgba(0, 0, 0, 0.045);
+  --m-stripe: rgba(0, 0, 0, 0.026);
+  --m-sel: var(--cp-accent);
+  --m-sel-text: var(--cp-accent-text);
+  --m-sel-inactive: rgba(0, 0, 0, 0.085);
+  --m-field: rgba(0, 0, 0, 0.045);
+  --m-field-hover: rgba(0, 0, 0, 0.065);
+  --m-control: rgba(255, 255, 255, 0.9);
+  --m-control-stroke: rgba(0, 0, 0, 0.1);
+  --m-side-sel: rgba(0, 0, 0, 0.085);
+  --m-side-text: rgba(0, 0, 0, 0.82);
+  --m-card: #ffffff;
+  --m-menu: rgba(246, 246, 248, 0.98);
+  --m-shadow-card: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.05), 0 10px 30px -10px rgba(0, 0, 0, 0.12);
+  --m-shadow-pop: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 12px 40px rgba(0, 0, 0, 0.2);
+
+  /* Les composants existants lisent les --cp-* : on les recale sur la charte. */
+  --cp-text: var(--m-text);
+  --cp-text-muted: var(--m-text-2);
+  --cp-stroke: var(--m-sep);
+  --cp-stroke-strong: var(--m-sep-strong);
+  --cp-control: var(--m-field);
+  --cp-control-hover: var(--m-hover);
+  --cp-control-active: rgba(0, 0, 0, 0.1);
+  --cp-field: var(--m-field);
+  --cp-field-hover: var(--m-field-hover);
+  --cp-surface: var(--m-content);
+  --cp-menu-bg: var(--m-menu);
+  --cp-menu-stroke: rgba(0, 0, 0, 0.08);
+  --cp-menu-shadow: var(--m-shadow-pop);
+  --cp-radius: 8px;
+
+  color: var(--m-text);
+  font-size: 13px;
+  letter-spacing: -0.005em;
+}
+@media (prefers-color-scheme: dark) {
+  .app[data-os="macos"] {
+    --m-window: #1f1f21;
+    --m-content: #1f1f21;
+    --m-text: rgba(255, 255, 255, 0.88);
+    --m-text-2: rgba(255, 255, 255, 0.55);
+    --m-text-3: rgba(255, 255, 255, 0.25);
+    --m-sep: rgba(255, 255, 255, 0.09);
+    --m-sep-strong: rgba(255, 255, 255, 0.18);
+    --m-hover: rgba(255, 255, 255, 0.05);
+    --m-stripe: rgba(255, 255, 255, 0.028);
+    --m-sel-inactive: rgba(255, 255, 255, 0.11);
+    --m-field: rgba(255, 255, 255, 0.07);
+    --m-field-hover: rgba(255, 255, 255, 0.1);
+    --m-control: rgba(255, 255, 255, 0.1);
+    --m-control-stroke: rgba(255, 255, 255, 0.08);
+    --m-side-sel: rgba(255, 255, 255, 0.11);
+    --m-side-text: rgba(255, 255, 255, 0.86);
+    --m-card: #262628;
+    --m-menu: rgba(40, 40, 43, 0.98);
+    --m-shadow-card: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -10px rgba(0, 0, 0, 0.55);
+    --m-shadow-pop: 0 0 0 0.5px rgba(255, 255, 255, 0.1), 0 14px 44px rgba(0, 0, 0, 0.55);
+    --cp-control-active: rgba(255, 255, 255, 0.14);
+    --cp-menu-stroke: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* ---- macOS : en-tete de panneau (barre de chemin) ------------------------- */
+.app[data-os="macos"] .explorer-head {
+  height: 40px;
+  padding: 0 10px 0 12px;
+  gap: 4px;
+  border-bottom: 1px solid var(--m-sep);
+}
+.app[data-os="macos"] .explorer-title {
+  font-weight: 650;
+  font-size: 13px;
+  margin-right: 4px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app[data-os="macos"] .explorer:not(.is-active) .explorer-title {
+  color: var(--m-text-2);
+}
+.app[data-os="macos"] .nav-btn,
+.app[data-os="macos"] .view-btn {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--m-text-2);
+}
+.app[data-os="macos"] .nav-btn:hover:not(:disabled),
+.app[data-os="macos"] .view-btn:hover {
+  background: var(--m-hover);
+  color: var(--m-text);
+}
+.app[data-os="macos"] .nav-btn:disabled {
+  opacity: 0.4;
+}
+.app[data-os="macos"] .view-btns {
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--m-field);
+  gap: 0;
+}
+.app[data-os="macos"] .view-btn {
+  width: 30px;
+  height: 24px;
+}
+.app[data-os="macos"] .view-btn.on {
+  background: var(--m-control);
+  border: 0;
+  color: var(--m-text);
+  box-shadow: 0 0 0 0.5px var(--m-control-stroke), 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.app[data-os="macos"] .nav-btn.on {
+  background: color-mix(in srgb, var(--cp-accent) 18%, transparent);
+  color: var(--cp-accent);
+  border: 0;
+}
+.app[data-os="macos"] .crumbs,
+.app[data-os="macos"] .url-bar,
+.app[data-os="macos"] .search-bar {
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--m-field);
+  padding-left: 10px;
+}
+.app[data-os="macos"] .crumbs-mirror {
+  background: transparent;
+}
+.app[data-os="macos"] .url-bar:focus,
+.app[data-os="macos"] .search-bar:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cp-accent) 40%, transparent);
+}
+.app[data-os="macos"] .crumb {
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+.app[data-os="macos"] .crumbs > .crumb-wrap:last-child .crumb {
+  font-weight: 600;
+}
+.app[data-os="macos"] .crumb-sep {
+  color: var(--m-text-3);
+}
+
+/* ---- macOS : liste de fichiers ------------------------------------------- */
+.app[data-os="macos"] .files-head {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--m-text-2);
+  border-bottom: 1px solid var(--m-sep);
+}
+.app[data-os="macos"] .fh-cell {
+  padding: 6px 10px;
+}
+.app[data-os="macos"] .fh-cell + .fh-cell::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 1px;
+  background: var(--m-sep);
+}
+.app[data-os="macos"] .files-table {
+  font-size: 13px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.app[data-os="macos"] .files-table td {
+  height: 26px;
+  padding: 0 10px;
+}
+.app[data-os="macos"] .files-table tbody tr:nth-child(even) td {
+  background: var(--m-stripe);
+}
+.app[data-os="macos"] .files-table tbody tr:hover {
+  background: transparent;
+}
+/* Selection facon Finder : pilule pleine largeur aux bouts arrondis, couleur
+   d'accent dans le panneau actif, gris dans l'autre (comme une liste qui n'a
+   pas le focus). */
+.app[data-os="macos"] .files-table tbody tr.row-selected td {
+  background: var(--m-sel);
+  color: var(--m-sel-text);
+}
+.app[data-os="macos"] .files-table tbody tr.row-selected td:first-child {
+  border-radius: 7px 0 0 7px;
+}
+.app[data-os="macos"] .files-table tbody tr.row-selected td:last-child {
+  border-radius: 0 7px 7px 0;
+}
+.app[data-os="macos"] .explorer:not(.is-active) .files-table tbody tr.row-selected td {
+  background: var(--m-sel-inactive);
+  color: var(--m-text);
+}
+.app[data-os="macos"] .files-table tbody tr.row-selected .c-date,
+.app[data-os="macos"] .files-table tbody tr.row-selected .c-type,
+.app[data-os="macos"] .files-table tbody tr.row-selected .c-size {
+  color: color-mix(in srgb, var(--m-sel-text) 82%, transparent);
+}
+.app[data-os="macos"] .explorer:not(.is-active) .files-table tbody tr.row-selected .c-date,
+.app[data-os="macos"] .explorer:not(.is-active) .files-table tbody tr.row-selected .c-type,
+.app[data-os="macos"] .explorer:not(.is-active) .files-table tbody tr.row-selected .c-size {
+  color: var(--m-text-2);
+}
+.app[data-os="macos"] .files-table tbody tr.row-selected {
+  background: transparent;
+}
+.app[data-os="windows"] .files-table tbody tr.row-selected {
+  background: transparent;
+}
+.app[data-os="macos"] .files-scroll {
+  padding: 4px 6px;
+}
+.app[data-os="macos"] .cell-icon {
+  width: 17px;
+  height: 17px;
+}
+.app[data-os="macos"] .tile {
+  border-radius: 10px;
+}
+.app[data-os="macos"] .tile.tile-selected {
+  background: var(--m-sel-inactive);
+}
+.app[data-os="macos"] .explorer.is-active .tile.tile-selected .tile-name {
+  background: var(--m-sel);
+  color: var(--m-sel-text);
+  border-radius: 5px;
+  padding: 0 4px;
+}
+.app[data-os="macos"] .files-empty {
+  padding-top: 40px;
+  font-size: 13px;
+  color: var(--m-text-3);
+}
+
+/* ---- macOS : arbre de navigation ----------------------------------------- */
+.app[data-os="macos"] .nav-pane {
+  font-size: 13px;
+  border-right: 1px solid var(--m-sep);
+}
+.app[data-os="macos"] .tree-section-title {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--m-text-2);
+  padding: 6px 10px 4px;
+}
+.app[data-os="macos"] .tree-row {
+  height: 26px;
+  border-radius: 7px;
+}
+.app[data-os="macos"] .tree-row.is-current {
+  background: var(--m-side-sel);
+}
+.app[data-os="macos"] .nav-status {
+  border-top: 1px solid var(--m-sep);
+  font-size: 11px;
+  color: var(--m-text-2);
+}
+
+/* ---- macOS : menus HTML restants (menu contextuel des fichiers…) ---------- */
+.app[data-os="macos"] .ctx-menu,
+.app[data-os="macos"] .crumb-menu,
+.app[data-os="macos"] .flyout {
+  border-radius: 12px;
+  padding: 5px;
+  -webkit-backdrop-filter: blur(30px) saturate(1.8);
+  backdrop-filter: blur(30px) saturate(1.8);
+}
+.app[data-os="macos"] .ctx-item {
+  border-radius: 7px;
+  padding: 4px 10px;
+}
+
+/* ---- macOS : feuilles (modales) ------------------------------------------ */
+.app[data-os="macos"] .modal {
+  border-radius: 22px;
+  padding: 20px 22px 18px;
+  border: 0;
+  box-shadow: var(--m-shadow-pop);
+}
+.app[data-os="macos"] .btn-ghost,
+.app[data-os="macos"] .btn-accent {
+  height: 30px;
+  border-radius: 999px;
+  padding: 0 18px;
+  font-weight: 500;
+}
+.app[data-os="macos"] .btn-ghost {
+  border: 0;
+  background: var(--m-field);
+}
+.app[data-os="macos"] .modal-backdrop {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+/* ============================================================
+   JETONS Windows 11 (Fluent 2, d'apres Robloader)
+   ============================================================ */
+.app[data-os="windows"],
+.app[data-os="linux"] {
+  --w-accent: var(--cp-accent);
+  --w-accent-hover: color-mix(in srgb, var(--cp-accent) 90%, #fff);
+  --w-accent-text: var(--cp-accent-text);
+  --w-layer: rgba(255, 255, 255, 0.5);
+  --w-layer-stroke: rgba(0, 0, 0, 0.06);
+  --w-card: rgba(255, 255, 255, 0.72);
+  --w-card-solid: #fbfbfb;
+  --w-card-stroke: rgba(0, 0, 0, 0.07);
+  --w-text: #1a1a1a;
+  --w-text-2: #5d5d5d;
+  --w-text-3: #8a8a8a;
+  --w-control: rgba(255, 255, 255, 0.7);
+  --w-control-hover: rgba(249, 249, 249, 0.5);
+  --w-control-stroke: rgba(0, 0, 0, 0.06);
+  --w-control-stroke-bottom: rgba(0, 0, 0, 0.16);
+  --w-subtle-hover: rgba(0, 0, 0, 0.04);
+  --w-subtle-press: rgba(0, 0, 0, 0.025);
+  --w-sel: color-mix(in srgb, var(--cp-accent) 14%, rgba(255, 255, 255, 0.4));
+  --w-sel-hover: color-mix(in srgb, var(--cp-accent) 20%, rgba(255, 255, 255, 0.4));
+  --w-divider: rgba(0, 0, 0, 0.08);
+  --w-menu: #f9f9f9;
+  --w-menu-stroke: rgba(0, 0, 0, 0.1);
+  --w-flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.14);
+  --w-ring-track: rgba(0, 0, 0, 0.1);
+
+  --cp-text: var(--w-text);
+  --cp-text-muted: var(--w-text-2);
+  --cp-stroke: var(--w-divider);
+  --cp-stroke-strong: rgba(0, 0, 0, 0.22);
+  --cp-control: var(--w-control);
+  --cp-control-hover: var(--w-subtle-hover);
+  --cp-control-active: rgba(0, 0, 0, 0.08);
+  --cp-field: var(--w-control);
+  --cp-field-hover: var(--w-control-hover);
+  --cp-surface: transparent;
+  --cp-menu-bg: var(--w-menu);
+  --cp-menu-stroke: var(--w-menu-stroke);
+  --cp-menu-shadow: var(--w-flyout-shadow);
+  --cp-radius: 4px;
+
+  color: var(--w-text);
+  font-size: 13px;
+}
+@media (prefers-color-scheme: dark) {
+  .app[data-os="windows"],
+  .app[data-os="linux"] {
+    --w-accent: color-mix(in srgb, var(--cp-accent) 55%, #fff);
+    --w-accent-hover: color-mix(in srgb, var(--cp-accent) 65%, #fff);
+    --w-accent-text: #000;
+    --w-layer: rgba(58, 58, 58, 0.3);
+    --w-layer-stroke: rgba(255, 255, 255, 0.06);
+    --w-card: rgba(255, 255, 255, 0.05);
+    --w-card-solid: #2b2b2b;
+    --w-card-stroke: rgba(0, 0, 0, 0.18);
+    --w-text: #ffffff;
+    --w-text-2: #c5c5c5;
+    --w-text-3: #9a9a9a;
+    --w-control: rgba(255, 255, 255, 0.06);
+    --w-control-hover: rgba(255, 255, 255, 0.08);
+    --w-control-stroke: rgba(255, 255, 255, 0.07);
+    --w-control-stroke-bottom: rgba(255, 255, 255, 0.03);
+    --w-subtle-hover: rgba(255, 255, 255, 0.06);
+    --w-subtle-press: rgba(255, 255, 255, 0.04);
+    --w-sel: color-mix(in srgb, var(--cp-accent) 22%, rgba(255, 255, 255, 0.04));
+    --w-sel-hover: color-mix(in srgb, var(--cp-accent) 28%, rgba(255, 255, 255, 0.04));
+    --w-divider: rgba(255, 255, 255, 0.08);
+    --w-menu: #2c2c2c;
+    --w-menu-stroke: rgba(0, 0, 0, 0.35);
+    --w-flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+    --w-ring-track: rgba(255, 255, 255, 0.12);
+    --cp-stroke-strong: rgba(255, 255, 255, 0.3);
+    --cp-control-active: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* ---- Windows : barre de titre 48 px -------------------------------------- */
+/* La partie droite (bouton-pilule, serveur, outils) prend la place dont elle a
+   besoin ; c'est le titre a gauche qui cede. */
+.w11-titlebar {
+  flex: 0 0 48px;
+  height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  position: relative;
+  z-index: 5;
+}
+.w11-app {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 16px;
+  min-width: 0;
+  height: 100%;
+}
+.w11-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+.w11-name {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.w11-ver {
+  font-size: 12px;
+  color: var(--w-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.w11-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 2px;
+}
+.w11-right > .server-btn {
+  margin-right: 4px;
+  max-width: 280px;
+}
+.w11-tool {
+  position: relative;
+  width: 36px;
+  height: 32px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--w-text);
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+.w11-tool svg,
+.w11-tool .uicon {
+  width: 16px;
+  height: 16px;
+}
+.w11-tool:hover {
+  background: var(--w-subtle-hover);
+}
+.w11-glyph {
+  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
+  font-size: 16px;
+  line-height: 1;
+}
+.w11-tool.is-on {
+  background: var(--w-subtle-hover);
+}
+.w11-caption {
+  display: flex;
+  margin-left: 6px;
+}
+.w11-caption {
+  align-self: stretch;
+}
+.w11-caption button {
+  width: 46px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--w-text);
+  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
+  font-size: 10px;
+  cursor: default;
+}
+.w11-caption button:hover {
+  background: var(--w-subtle-hover);
+}
+.w11-caption .w11-close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+/* Apparition des menus deroulants (cf. .flyout). */
+@keyframes flyout-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* ---- Windows : controles Fluent ------------------------------------------- */
+.app[data-os="windows"] .btn-ghost,
+.app[data-os="windows"] .btn-accent {
+  height: 32px;
+  border-radius: 4px;
+  font-weight: 400;
+  padding: 0 14px;
+}
+.app[data-os="windows"] .btn-ghost {
+  background: var(--w-control);
+  border: 1px solid var(--w-control-stroke);
+  border-bottom-color: var(--w-control-stroke-bottom);
+}
+.app[data-os="windows"] .btn-accent {
+  background: var(--w-accent);
+  color: var(--w-accent-text);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom-color: rgba(0, 0, 0, 0.4);
+}
+.app[data-os="windows"] .modal {
+  border-radius: 8px;
+  padding: 24px;
+  background: var(--w-card-solid);
+  border: 1px solid var(--w-menu-stroke);
+  box-shadow: 0 32px 64px rgba(0, 0, 0, 0.28), 0 2px 21px rgba(0, 0, 0, 0.22);
+}
+.app[data-os="windows"] .modal-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.app[data-os="windows"] .modal-actions {
+  margin: 20px -24px -24px;
+  padding: 24px;
+  background: color-mix(in srgb, var(--w-card-solid) 70%, var(--w-subtle-hover));
+  border-top: 1px solid var(--w-divider);
+  border-radius: 0 0 8px 8px;
+}
+.app[data-os="windows"] .modal-actions .modal-actions {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+.app[data-os="windows"] .modal-actions:not(.modal-actions-split) > * {
+  flex: 1 1 0;
+}
+
+.app[data-os="windows"] .link-btn {
+  color: var(--w-accent);
+}
+
+/* ---- Windows : en-tete de panneau ----------------------------------------- */
+.app[data-os="windows"] .explorer-head {
+  height: 44px;
+  padding: 0 8px 0 12px;
+  gap: 4px;
+  border-bottom: 1px solid var(--w-divider);
+}
+.app[data-os="windows"] .explorer-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-right: 6px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app[data-os="windows"] .nav-btn,
+.app[data-os="windows"] .view-btn {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 4px;
+}
+.app[data-os="windows"] .nav-btn .uicon,
+.app[data-os="windows"] .view-btn .uicon {
+  width: 14px;
+  height: 14px;
+}
+.app[data-os="windows"] .nav-btn:hover:not(:disabled),
+.app[data-os="windows"] .view-btn:hover {
+  background: var(--w-subtle-hover);
+}
+.app[data-os="windows"] .view-btn.on,
+.app[data-os="windows"] .nav-btn.on {
+  background: var(--w-subtle-hover);
+  border: 0;
+  box-shadow: inset 0 -2px 0 var(--w-accent);
+}
+.app[data-os="windows"] .crumbs,
+.app[data-os="windows"] .url-bar,
+.app[data-os="windows"] .search-bar {
+  height: 32px;
+  border-radius: 4px;
+  background: var(--w-control);
+  border: 1px solid var(--w-control-stroke);
+  border-bottom-color: var(--w-control-stroke-bottom);
+}
+.app[data-os="windows"] .url-bar:focus,
+.app[data-os="windows"] .search-bar:focus {
+  border-color: var(--w-control-stroke);
+  box-shadow: inset 0 -2px 0 var(--w-accent);
+  background: var(--w-card-solid);
+}
+.app[data-os="windows"] .crumbs-mirror {
+  border-color: transparent;
+  background: transparent;
+}
+.app[data-os="windows"] .crumb {
+  padding: 3px 6px;
+}
+
+/* ---- Windows : liste de fichiers (Details de l'Explorateur) --------------- */
+.app[data-os="windows"] .files-head {
+  font-size: 12px;
+  color: var(--w-text-2);
+  border-bottom: 1px solid var(--w-divider);
+}
+.app[data-os="windows"] .fh-cell {
+  padding: 7px 10px;
+}
+.app[data-os="windows"] .fh-cell:hover {
+  background: var(--w-subtle-hover);
+}
+.app[data-os="windows"] .files-table {
+  font-size: 13px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.app[data-os="windows"] .files-table td {
+  height: 32px;
+  padding: 0 10px;
+}
+.app[data-os="windows"] .files-scroll {
+  padding: 2px 4px;
+}
+.app[data-os="windows"] .files-table tbody tr:hover td {
+  background: var(--w-subtle-hover);
+}
+.app[data-os="windows"] .files-table tbody tr:hover {
+  background: transparent;
+}
+.app[data-os="windows"] .files-table tbody tr.row-selected td {
+  background: var(--w-sel);
+}
+.app[data-os="windows"] .files-table tbody tr.row-selected:hover td {
+  background: var(--w-sel-hover);
+}
+.app[data-os="windows"] .files-table tbody tr td:first-child {
+  border-radius: 4px 0 0 4px;
+}
+.app[data-os="windows"] .files-table tbody tr td:last-child {
+  border-radius: 0 4px 4px 0;
+}
+.app[data-os="windows"] .explorer:not(.is-active) .files-table tbody tr.row-selected td {
+  background: var(--w-subtle-hover);
+}
+.app[data-os="windows"] .cell-icon {
+  width: 18px;
+  height: 18px;
+}
+.app[data-os="windows"] .tile.tile-selected {
+  background: var(--w-sel);
+}
+.app[data-os="windows"] .tile {
+  border-radius: 4px;
+}
+.app[data-os="windows"] .files-empty {
+  padding-top: 40px;
+  color: var(--w-text-3);
+}
+
+/* ---- Windows : arbre de navigation --------------------------------------- */
+.app[data-os="windows"] .nav-pane {
+  font-size: 13px;
+  border-right: 1px solid var(--w-divider);
+}
+.app[data-os="windows"] .tree-section-title {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--w-text-2);
+  padding: 8px 12px 4px;
+}
+.app[data-os="windows"] .tree-row {
+  height: 32px;
+  border-radius: 4px;
+}
+.app[data-os="windows"] .tree-row.is-current {
+  background: var(--w-subtle-hover);
+}
+.app[data-os="windows"] .tree-row.is-current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  margin-top: -8px;
+  border-radius: 2px;
+  background: var(--w-accent);
+}
+.app[data-os="windows"] .nav-status {
+  font-size: 12px;
+  color: var(--w-text-2);
+  border-top: 1px solid var(--w-divider);
+}
+
+/* ---- Windows : menus ------------------------------------------------------ */
+.app[data-os="windows"] .ctx-menu,
+.app[data-os="windows"] .crumb-menu,
+.flyout {
+  border-radius: 8px;
+  padding: 4px;
+  border: 1px solid var(--cp-menu-stroke);
+  background: var(--cp-menu-bg);
+  box-shadow: var(--cp-menu-shadow);
+}
+.app[data-os="windows"] .ctx-item {
+  border-radius: 4px;
+  padding: 7px 12px;
+}
+.app[data-os="windows"] .ctx-item:hover:not(:disabled) {
+  background: var(--w-subtle-hover);
+  color: var(--w-text);
+}
+
+/* ---- Menu deroulant HTML (menu serveur sous Windows) ---------------------- */
+.flyout {
+  position: fixed;
+  z-index: 220;
+  min-width: 220px;
+  max-width: 320px;
+  animation: flyout-in 0.16s cubic-bezier(0, 0, 0, 1);
+}
+.flyout-item {
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--cp-text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+.flyout-item:hover:not(:disabled) {
+  background: var(--cp-control-hover);
+}
+.flyout-item:disabled {
+  opacity: 0.4;
+}
+.flyout-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--cp-stroke);
+}
+
+/* ---- Bouton serveur (barre de titre Windows) ------------------------------ */
+.server-btn {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 0 12px;
+  border-radius: 4px;
+  border: 1px solid var(--w-control-stroke);
+  border-bottom-color: var(--w-control-stroke-bottom);
+  background: var(--w-control);
+  color: var(--cp-text);
+  font: inherit;
+  cursor: default;
+  min-width: 0;
+}
+.server-btn:hover {
+  background: var(--w-control-hover);
+}
+.server-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cp-text-muted);
+  opacity: 0.5;
+  flex: 0 0 auto;
+}
+.server-dot.is-on {
+  background: #3fb950;
+  opacity: 1;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #3fb950 22%, transparent);
+}
+.server-dot.is-busy {
+  background: var(--cp-accent);
+  opacity: 1;
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.server-texts {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.server-label {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.server-caret {
+  width: 12px;
+  height: 12px;
+  margin-left: auto;
+  color: var(--cp-text-muted);
+  flex: 0 0 auto;
+}
+
+/* ---- Feuille « Nouvelle connexion » / « Modifier le serveur » ------------- */
+.sheet-connect {
+  width: min(460px, 92vw);
+}
+.sheet-head {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+.sheet-head .modal-title {
+  margin: 0;
+}
+.sheet-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--cp-accent) 16%, transparent);
+  color: var(--cp-accent);
+  flex: 0 0 auto;
+}
+.sheet-icon svg {
+  width: 22px;
+  height: 22px;
+}
+.sheet-sub {
+  font-size: 12px;
+  color: var(--cp-text-muted);
+  margin-top: 2px;
+}
+.sheet-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 9px 12px;
+  align-items: center;
+}
+.sheet-label {
+  text-align: right;
+  color: var(--cp-text-muted);
+  font-size: 13px;
+}
+.sheet-field {
+  height: 30px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: 7px;
+  background: var(--cp-field);
+  color: var(--cp-text);
+  font: inherit;
+  outline: none;
+}
+.sheet-field:focus {
+  border-color: var(--cp-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cp-accent) 35%, transparent);
+}
+.sheet-port {
+  width: 80px;
+}
+.sheet-rename {
+  width: 100%;
+}
+.sheet-error {
+  margin-top: 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--cp-err) 14%, transparent);
+  color: var(--cp-err);
+  font-size: 12px;
+}
+.sheet-connect .modal-actions {
+  margin-top: 20px;
+}
+.app[data-os="macos"] .sheet-field {
+  border: 0;
+  background: var(--m-field, var(--cp-field));
+  border-radius: 8px;
+}
+.app[data-os="windows"] .sheet-field {
+  border-radius: 4px;
+  border: 1px solid var(--w-control-stroke, var(--cp-stroke));
+  border-bottom-color: var(--w-control-stroke-bottom, var(--cp-stroke));
+  background: var(--w-control, var(--cp-field));
+  height: 32px;
+}
+.app[data-os="windows"] .sheet-field:focus {
+  box-shadow: inset 0 -2px 0 var(--w-accent, var(--cp-accent));
+  border-color: var(--w-control-stroke, var(--cp-stroke));
+}
+.app[data-os="windows"] .sheet-icon {
+  border-radius: 8px;
+}
+
+/* ============================================================
+   ÎLOTS : panneaux en cartes
+   ============================================================ */
+.app .shell {
+  position: relative;
+}
+.app .explorers {
+  gap: 12px;
+  padding: 6px 12px 12px;
+}
+.app .explorer {
+  border: 0;
+  border-radius: 16px;
+  background: var(--m-card, var(--w-card));
+  box-shadow: var(--m-shadow-card, none);
+}
+.app .explorer.is-active {
+  box-shadow: var(--m-shadow-card, none), 0 0 0 2px color-mix(in srgb, var(--cp-accent) 70%, transparent);
+}
+.app .explorer.is-drop {
+  box-shadow: 0 0 0 3px var(--cp-accent);
+}
+
+/* macOS : fond de fenetre teinte, cartes blanches */
+.app[data-os="macos"] {
+  background: #ececf0;
+}
+@media (prefers-color-scheme: dark) {
+  .app[data-os="macos"] {
+    background: #151517;
+  }
+}
+.app[data-os="macos"] .explorer-head {
+  border-bottom-color: var(--m-sep);
+}
+.app[data-os="macos"] .nav-pane {
+  border-right: 0;
+  background: color-mix(in srgb, var(--m-card) 94%, var(--m-sep-strong));
+  margin: 0 0 8px 8px;
+  border-radius: 12px;
+}
+
+/* Windows : cartes Fluent sur le Mica */
+.app:not([data-os="macos"]) .explorer {
+  border-radius: 8px;
+  background: var(--w-card);
+  border: 1px solid var(--w-card-stroke);
+}
+.app:not([data-os="macos"]) .explorer.is-active {
+  border-color: color-mix(in srgb, var(--w-accent) 60%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--w-accent) 60%, transparent);
+}
+
+/* ============================================================
+   ÎLOT DES TRANSFERTS (sous les panneaux)
+   Jetons communs : carte (--x-card), filet, accent, teintes d'etat.
+   ============================================================ */
+.app {
+  --x-card: var(--m-card, var(--w-card));
+  --x-card-solid: var(--m-card, var(--w-card-solid));
+  --x-shadow: var(--m-shadow-card, none);
+  --x-radius: 16px;
+  --x-gap: 12px;
+  --x-sep: var(--cp-stroke);
+  --x-soft: color-mix(in srgb, var(--cp-text) 5%, transparent);
+  --x-accent: var(--w-accent, var(--cp-accent));
+  --x-warn: #e8930c;
+  --x-err: var(--cp-err);
+  --x-ok: #34c759;
+}
+.app[data-os="windows"],
+.app[data-os="linux"] {
+  --x-radius: 8px;
+  --x-ok: #0f7b0f;
+  --x-warn: #9d5d00;
+}
+@media (prefers-color-scheme: dark) {
+  .app[data-os="windows"],
+  .app[data-os="linux"] {
+    --x-ok: #6ccb5f;
+    --x-warn: #fce100;
+  }
+}
+.app .shell {
+  /* Haut a 0 : les boutons de la barre (centres dans sa hauteur) tombent pile
+     a mi-chemin entre le bord de la fenetre et le bord des panneaux. */
+  padding: 0 var(--x-gap) var(--x-gap);
+  gap: var(--x-gap);
+  min-height: 0;
+}
+.app .explorers {
+  padding: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* La carte de l'îlot */
+.app .xfer-island {
+  background: var(--x-card);
+  border-radius: var(--x-radius);
+  box-shadow: var(--x-shadow);
+}
+.app:not([data-os="macos"]) .xfer-island {
+  border: 1px solid var(--w-card-stroke);
+}
+.app .transfers-panel {
+  border-top: 0;
+  padding: 0;
+  max-height: none;
+}
+
+/* ---- Pastilles d'onglets (segmentees) ---- */
+.xfer-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--x-soft);
+  flex: 0 0 auto;
+}
+.xfer-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cp-text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: default;
+  white-space: nowrap;
+}
+.xfer-seg-btn:hover {
+  color: var(--cp-text);
+}
+.xfer-seg-btn.is-on {
+  background: var(--x-card-solid);
+  color: var(--cp-text);
+  box-shadow: 0 0 0 0.5px var(--cp-stroke-strong), 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+.xfer-seg-n {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--x-soft);
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.xfer-seg-btn.is-alert .xfer-seg-n {
+  background: var(--x-err);
+  color: #fff;
+}
+.app[data-os="windows"] .xfer-seg {
+  border-radius: 4px;
+}
+.app[data-os="windows"] .xfer-seg-btn {
+  border-radius: 3px;
+}
+.xfer-icon-btn {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cp-text-muted);
+  cursor: default;
+}
+.xfer-icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.xfer-icon-btn:hover {
+  background: var(--x-soft);
+  color: var(--cp-text);
+}
+.app[data-os="windows"] .xfer-icon-btn {
+  border-radius: 4px;
+}
+.xfer-flex {
+  flex: 1 1 auto;
+}
+
+/* ---- Anneau de progression ---- */
+.xfer-ring {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.xfer-ring > svg:first-child {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+.xfer-ring-track {
+  fill: none;
+  stroke: var(--x-soft);
+  stroke-width: 3.2;
+}
+.xfer-ring-fill {
+  fill: none;
+  stroke: var(--x-accent);
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.4s ease;
+}
+.xfer-ring.is-retry .xfer-ring-fill {
+  stroke: var(--x-warn);
+}
+.xfer-ring-glyph {
+  width: 46%;
+  height: 46%;
+  color: var(--cp-text-muted);
+}
+
+/* ---- Lignes communes ---- */
+.app .transfers-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 6px;
+}
+.app .xfer-empty {
+  padding: 18px 12px;
+  color: var(--cp-text-muted);
+  text-align: center;
+}
+
+/* ---- Apparition, en-tete et resume ---- */
+.app .transfers-host {
+  flex: 0 0 auto;
+  height: 236px;
+  min-height: 0;
+  display: flex;
+  /* Apparition / disparition : hauteur, opacite et l'ecart avec les panneaux
+     s'animent ensemble (rapide, sans rebond). */
+  transition:
+    height 0.24s cubic-bezier(0.2, 0.8, 0.2, 1),
+    margin-top 0.24s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.18s ease,
+    transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.app .transfers-host.is-collapsed {
+  height: 48px;
+}
+.app .transfers-host.is-hidden {
+  height: 0;
+  margin-top: calc(-1 * var(--x-gap));
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+}
+/* (Pas de coupure « mouvement reduit » : sous Windows, desactiver les effets
+   d'animation du systeme suffit a la declencher, et l'animation est voulue.) */
+.xfer-island {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.xfer-island-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  padding: 0 10px 0 16px;
+}
+.xfer-island:not(.is-collapsed) .xfer-island-head {
+  border-bottom: 1px solid var(--x-sep);
+}
+.xfer-island-title {
+  font-weight: 650;
+  font-size: 13px;
+}
+.xfer-island-sum {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--cp-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.xfer-island-sum.is-retry {
+  color: var(--x-warn);
+}
+.xfer-island-pct {
+  font-weight: 650;
+  color: var(--cp-text);
+}
+.xfer-island-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xfer-minibar {
+  width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--x-soft);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.xfer-minibar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--x-accent);
+  transition: width 0.3s ease;
+}
+.xfer-island-sum.is-retry .xfer-minibar > span {
+  background: var(--x-warn);
+}
+.xfer-island-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+/* Lignes de la file, arrondies ; la teinte de progression reste en fond.
+   Hauteur synchronisee avec ROW_H (TransfersPanel.tsx). */
+.app .transfers-list.is-virtual .xfer-row {
+  height: 30px;
+  border-radius: 8px;
+  padding: 0 10px;
+  overflow: hidden;
+}
+.app .xfer-wash {
+  background: color-mix(in srgb, var(--x-accent) 16%, transparent);
+}
+.app .transfers-list.is-virtual .xfer-row:hover {
+  background: var(--x-soft);
+}
+
+/* La barre de recherche se deploie dans un cadre qui rogne (animation de
+   largeur) : on lui laisse 4 px de marge interieure, sinon il coupait le
+   contour de focus (macOS) et un demi-pixel de bordure (Windows). */
+.app .search-wrap {
+  padding: 4px;
+  margin: -4px;
+}
+/* Windows : champs translucides comme le reste (pas de fond opaque au focus). */
+.app[data-os="windows"] .url-bar:focus,
+.app[data-os="windows"] .search-bar:focus {
+  background: var(--w-control);
+}
+/* Windows : la barre de defilement de l'arbre reserve toujours sa place, sinon
+   le surlignage changeait de largeur quand la zone des transferts s'ouvrait. */
+.app[data-os="windows"] .nav-scroll {
+  scrollbar-gutter: stable;
+}
+/* macOS : pas d'alternance de teinte dans les listes, et un arbre posé
+   sur la même surface que la liste, séparé par un simple filet. */
+.app[data-os="macos"] .files-table tbody tr:nth-child(even):not(.row-selected) td {
+  background: transparent;
+}
+.app[data-os="macos"] .nav-pane {
+  background: transparent;
+  margin: 0;
+  border-radius: 0;
+  border-right: 0;
+}
+.app[data-os="macos"] .pane-splitter::after {
+  top: 0;
+  height: 100%;
+  background: var(--m-sep);
+}
+.app[data-os="macos"] .pane-splitter:hover::after {
+  background: var(--cp-accent);
+}
+
+/* ---- Bouton Transferts qui s'etire en pilule (Windows ; macOS = natif) ---- */
+.morph-btn {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--w-text, var(--cp-text));
+  font: inherit;
+  cursor: default;
+  white-space: nowrap;
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    border-radius 0.38s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.morph-btn:hover,
+.morph-btn.is-on {
+  background: var(--w-subtle-hover, var(--cp-control-hover));
+}
+.morph-btn.is-expanded {
+  /* Rectangle aux coins Fluent (4 px), comme les autres controles. */
+  border-radius: 4px;
+  background: var(--w-control, var(--cp-field));
+  border-color: var(--w-control-stroke, var(--cp-stroke));
+}
+.morph-btn.is-expanded:hover {
+  background: var(--w-control-hover, var(--cp-field-hover));
+}
+.morph-icon {
+  position: relative;
+  width: 34px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+}
+.morph-glyph,
+.morph-ring {
+  grid-area: 1 / 1;
+  display: grid;
+  place-items: center;
+  transition:
+    opacity 0.2s ease,
+    transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.morph-ring,
+.morph-btn.is-expanded .morph-glyph {
+  opacity: 0;
+  transform: scale(0.6);
+}
+.morph-btn.is-expanded .morph-ring {
+  opacity: 1;
+  transform: none;
+}
+.morph-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  transition:
+    max-width 0.38s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.22s ease,
+    padding 0.38s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.morph-btn.is-expanded .morph-text {
+  opacity: 1;
+}
+.morph-inner {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding-right: 12px;
+  white-space: nowrap;
+}
+.morph-pct {
+  font-weight: 650;
+}
+.morph-meta {
+  color: var(--w-text-2, var(--cp-text-muted));
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.morph-btn.is-retry .morph-meta {
+  color: var(--x-warn, #e8930c);
+}
+
+.app .w11-right > .server-btn {
+  flex: 0 0 auto;
+  max-width: 260px;
+}

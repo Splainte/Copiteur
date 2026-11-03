@@ -2,11 +2,6 @@
 import type fr from "../fr/panels";
 
 export default {
-  "panels.tab.queue": "Queue",
-  "panels.tab.done": "Completed",
-  "panels.tab.failed": "Failed",
-  "panels.tab.cancelled": "Cancelled",
-  "panels.tab.edition": "Being edited",
 
   "panels.xfer.queued": "Queued",
   "panels.xfer.starting": "Starting…",

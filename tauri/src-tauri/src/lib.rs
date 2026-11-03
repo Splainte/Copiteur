@@ -1,6 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
 
+mod chrome;
+#[cfg(target_os = "macos")]
+mod chrome_mac;
 mod edits;
 mod engine;
 mod hostkeys;
@@ -323,6 +326,8 @@ pub fn run() {
             set_pane_active,
             i18n::set_language,
             i18n::installer_language,
+            chrome::chrome_apply,
+            chrome::chrome_toolbar_item,
         ])
         // Menu macOS. « Quitter » : s'il reste du travail, on ne quitte pas —
         // on demande au front la meme modale que pour Alt+F4. « Tout

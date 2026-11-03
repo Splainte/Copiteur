@@ -2,11 +2,6 @@
 // reglages). Cles prefixees « panels. ».
 export default {
   // Onglets de la file de transferts
-  "panels.tab.queue": "File d'attente",
-  "panels.tab.done": "Terminés",
-  "panels.tab.failed": "Échoués",
-  "panels.tab.cancelled": "Annulés",
-  "panels.tab.edition": "En cours d'édition",
 
   // Etat d'un transfert (colonne de droite, courte)
   "panels.xfer.queued": "En attente",

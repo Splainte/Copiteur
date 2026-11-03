@@ -22,9 +22,8 @@ export type Tab = "queue" | "done" | "failed" | "cancelled" | "edition";
 // Hauteur FIXE d'une ligne de la file, en pixels. Le fenetrage (cf. VirtualRows)
 // calcule quelles lignes sont visibles a partir de cette constante : elle DOIT
 // rester synchronisee avec la regle CSS `.transfers-list.is-virtual .xfer-row`
-// (height + box-sizing), sinon le placement derive. La ligne la plus haute est
-// portee par les boutons d'action (20 px) + 2×3 px de padding vertical = 26 px.
-const ROW_H = 26;
+// de chrome.css (height + box-sizing), sinon le placement derive.
+const ROW_H = 30;
 // Lignes rendues en plus au-dessus et au-dessous de la zone visible : le
 // defilement rapide ne laisse pas apparaitre de vide le temps d'un rendu.
 const OVERSCAN = 6;
@@ -319,6 +318,9 @@ export function TransfersPanel({
   onClear,
   onEditResend,
   onEditStop,
+  summary,
+  collapsed,
+  onToggleCollapse,
 }: {
   queue: Xfer[];
   done: Xfer[];
@@ -338,6 +340,10 @@ export function TransfersPanel({
   onClear: (tab: Tab) => void;
   onEditResend: (e: EditItem) => void;
   onEditStop: (id: number) => void;
+  // Resume affiche dans l'en-tete (reste lisible une fois l'îlot replie).
+  summary: XferSummary;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
 }) {
   useT();
   const rows =
@@ -352,100 +358,148 @@ export function TransfersPanel({
   // ne doit PAS ressusciter ce que l'utilisateur a arrete volontairement.
   const retryable = failed.filter((x) => x.status === "error").length;
 
-  const Tabs = ({ id, label, n }: { id: Tab; label: string; n: number }) => (
-    <button
-      className={"tab-btn" + (tab === id ? " is-active" : "")}
-      onClick={() => onTab(id)}
-    >
-      {label}
-      {n ? ` (${n})` : ""}
-    </button>
-  );
-
-  return (
-    <div className="transfers-panel">
-      <div className="transfers-actions">
-        <div className="transfers-tabs">
-          <Tabs id="queue" label={t("panels.tab.queue")} n={queue.length} />
-          <Tabs id="done" label={t("panels.tab.done")} n={done.length} />
-          <Tabs id="failed" label={t("panels.tab.failed")} n={failed.length} />
-          <Tabs id="cancelled" label={t("panels.tab.cancelled")} n={cancelled.length} />
-          {/* N'apparait qu'une fois qu'on edite au moins un fichier. */}
-          {edits.length > 0 && (
-            <Tabs id="edition" label={t("panels.tab.edition")} n={edits.length} />
-          )}
-        </div>
-        <div className="transfers-tools">
-          {preparing > 0 && (
-            <span className="xfer-prep">
-              {tn("panels.xfer.preparing", preparing)}
-            </span>
-          )}
-          {tab === "queue" && queue.length > 0 && (
-            <button className="link-btn" onClick={onCancelAll}>
-              {t("panels.xfer.cancelAll")}
-            </button>
-          )}
-          {tab === "failed" && retryable > 0 && (
-            <button className="link-btn" onClick={onRetryFailed}>
-              {t("panels.xfer.retryAll", { n: retryable })}
-            </button>
-          )}
-          {/* Annulés : relance en lot (choix explicite — éviter de cliquer une
-              à une sur des centaines de ↻). */}
-          {tab === "cancelled" && cancelled.length > 0 && (
-            <button className="link-btn" onClick={onRetryCancelled}>
-              {t("panels.xfer.retryAll", { n: cancelled.length })}
-            </button>
-          )}
-          {(tab === "done" || tab === "failed" || tab === "cancelled") &&
-            rows.length > 0 && (
-              <button className="link-btn" onClick={() => onClear(tab)}>
-                {t("panels.xfer.clear")}
-              </button>
-            )}
-        </div>
-      </div>
-
-      {/* Onglet Édition et listes vides : peu d'elements, rendu direct (pas de
-          virtualisation a gagner). Les onglets de transferts, eux, passent par
-          VirtualRows — ce sont eux qui peuvent compter des dizaines de milliers
-          de lignes. */}
-      {tab === "edition" ? (
-        <div className="transfers-list">
-          {edits.length === 0 ? (
-            <div className="xfer-empty">{t(EMPTY.edition)}</div>
-          ) : (
-            edits.map((e) => (
-              <EditRow
-                key={e.id}
-                e={e}
-                onResend={onEditResend}
-                onStop={onEditStop}
-              />
-            ))
-          )}
-        </div>
-      ) : rows.length === 0 ? (
-        <div className="transfers-list">
-          <div className="xfer-empty">{t(EMPTY[tab])}</div>
-        </div>
-      ) : (
-        <VirtualRows
-          items={rows}
-          renderRow={(x) => (
-            <Row
-              key={x.id}
-              x={x}
-              now={now}
-              bar={tab === "queue"}
-              settings={settings}
-              onCancel={onCancel}
-              onRetry={onRetry}
-            />
-          )}
-        />
+  // Onglets en pastilles ; « Édition » n'apparait qu'une fois qu'on edite au
+  // moins un fichier.
+  const tabList: { id: Tab; label: string; n: number }[] = [
+    { id: "queue", label: t("chrome.tab.queue"), n: queue.length },
+    { id: "done", label: t("chrome.tab.done"), n: done.length },
+    { id: "failed", label: t("chrome.tab.failed"), n: failed.length },
+    { id: "cancelled", label: t("chrome.tab.cancelled"), n: cancelled.length },
+    ...(edits.length > 0 ? [{ id: "edition" as Tab, label: t("chrome.tab.edition"), n: edits.length }] : []),
+  ];
+  const tools = (
+    <>
+      {preparing > 0 && <span className="xfer-prep">{tn("panels.xfer.preparing", preparing)}</span>}
+      {tab === "queue" && queue.length > 0 && (
+        <button className="link-btn" onClick={onCancelAll}>
+          {t("panels.xfer.cancelAll")}
+        </button>
       )}
+      {tab === "failed" && retryable > 0 && (
+        <button className="link-btn" onClick={onRetryFailed}>
+          {t("panels.xfer.retryAll", { n: retryable })}
+        </button>
+      )}
+      {tab === "cancelled" && cancelled.length > 0 && (
+        <button className="link-btn" onClick={onRetryCancelled}>
+          {t("panels.xfer.retryAll", { n: cancelled.length })}
+        </button>
+      )}
+      {(tab === "done" || tab === "failed" || tab === "cancelled") && rows.length > 0 && (
+        <button className="link-btn" onClick={() => onClear(tab)}>
+          {t("panels.xfer.clear")}
+        </button>
+      )}
+    </>
+  );
+  const list =
+    tab === "edition" ? (
+      <div className="transfers-list">
+        {edits.length === 0 ? (
+          <div className="xfer-empty">{t(EMPTY.edition)}</div>
+        ) : (
+          edits.map((e) => <EditRow key={e.id} e={e} onResend={onEditResend} onStop={onEditStop} />)
+        )}
+      </div>
+    ) : rows.length === 0 ? (
+      <div className="transfers-list">
+        <div className="xfer-empty">{t(EMPTY[tab])}</div>
+      </div>
+    ) : (
+      <VirtualRows
+        items={rows}
+        renderRow={(x) => (
+          <Row
+            key={x.id}
+            x={x}
+            now={now}
+            bar={tab === "queue"}
+            settings={settings}
+            onCancel={onCancel}
+            onRetry={onRetry}
+          />
+        )}
+      />
+    );
+  const sum = summary;
+
+  // Îlot sous les panneaux : en-tete = onglets + resume + actions ; replie, il
+  // ne reste que cet en-tete (le resume reste lisible).
+  return (
+    <div className={"transfers-panel xfer-island" + (collapsed ? " is-collapsed" : "")}>
+      <div className="xfer-island-head">
+        <span className="xfer-island-title">{t("chrome.xfer.title")}</span>
+        <div className="xfer-seg" role="tablist">
+          {tabList.map((x) => (
+            <button
+              key={x.id}
+              role="tab"
+              aria-selected={tab === x.id}
+              className={"xfer-seg-btn" + (tab === x.id ? " is-on" : "") + (x.id === "failed" && x.n > 0 ? " is-alert" : "")}
+              onClick={() => onTab(x.id)}
+            >
+              <span>{x.label}</span>
+              {x.n > 0 && <span className="xfer-seg-n">{x.n}</span>}
+            </button>
+          ))}
+        </div>
+        <span className="xfer-flex" />
+        {sum.active > 0 && (
+          <span className={"xfer-island-sum" + (sum.state !== "run" ? " is-retry" : "")}>
+            <span className="xfer-minibar">
+              <span style={{ width: `${sum.pct ?? 0}%` }} />
+            </span>
+            <span className="xfer-island-pct">{sum.pct ?? 0} %</span>
+            <span className="xfer-island-meta">{sum.line}</span>
+          </span>
+        )}
+        <span className="xfer-island-tools">{tools}</span>
+        <button
+          className="xfer-icon-btn"
+          onClick={onToggleCollapse}
+          title={t(collapsed ? "chrome.xfer.expand" : "chrome.xfer.collapse")}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden>
+            <path
+              d={collapsed ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      </div>
+      {!collapsed && list}
     </div>
+  );
+}
+
+// ============================================================
+//  Resume des transferts (en-tete de l'îlot, bouton-pilule de la barre) et
+//  anneau de progression.
+// ============================================================
+export type XferSummary = {
+  active: number; // en cours + en attente + dossiers en cours d'analyse
+  pct: number | null; // progression du lot (null : rien en cours)
+  line: string; // « 94 Mo/s · reste 16,0 Go · 2 min »
+  state: "run" | "retry" | "idle";
+};
+
+export function XferRing({ pct, size, state }: { pct: number | null; size: number; state: XferSummary["state"] }) {
+  const r = 16;
+  return (
+    <span className={"xfer-ring" + (state === "retry" ? " is-retry" : "")} style={{ width: size, height: size }}>
+      <svg viewBox="0 0 40 40" aria-hidden>
+        <circle cx="20" cy="20" r={r} className="xfer-ring-track" />
+        {pct !== null && (
+          <circle cx="20" cy="20" r={r} className="xfer-ring-fill" pathLength={100} strokeDasharray={`${Math.max(0.5, pct)} 100`} />
+        )}
+      </svg>
+      <svg viewBox="0 0 16 16" className="xfer-ring-glyph" aria-hidden>
+        <path d="M5.5 2.8v9.6M3 9.9l2.5 2.5L8 9.9M10.5 13.2V3.6M8 6.1l2.5-2.5L13 6.1" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
   );
 }

@@ -28,8 +28,4 @@ export default {
     "Serveur injoignable : vérifiez l'adresse, le port, et que le serveur est bien allumé et accessible.",
 
   // Liste des serveurs memorises.
-  "files.servers.placeholder": "Serveurs mémorisés…",
-  "files.servers.empty": "Aucun serveur mémorisé",
-  "files.servers.rename": "Renommer ce serveur",
-  "files.servers.forget": "Oublier ce serveur",
 };

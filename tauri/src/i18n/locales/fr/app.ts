@@ -21,8 +21,6 @@ export default {
 
   // Moteur rclone
   "app.rclone.unreachable": "rclone injoignable",
-  "app.rclone.starting": "démarrage de rclone…",
-  "app.rclone.custom": "Moteur rclone custom",
 
   // Erreurs de transfert
   "app.err.nameRefused": "Nom refusé par la destination (« {name} ») — {err}",
@@ -94,20 +92,8 @@ export default {
   "app.editConflict.overwrite": "Écraser",
 
   // Barre de transfert (bas de fenetre)
-  "app.bar.lost_one":
-    "Connexion perdue — reprise automatique · {n} transfert en attente · reste {size}",
-  "app.bar.lost_other":
-    "Connexion perdue — reprise automatique · {n} transferts en attente · reste {size}",
-  "app.bar.stalled_one":
-    "Plus aucune donnée ne passe — en attente du serveur · {n} transfert · reste {size}",
-  "app.bar.stalled_other":
-    "Plus aucune donnée ne passe — en attente du serveur · {n} transferts · reste {size}",
-  "app.bar.progress_one": "{n} transfert · {pct}% · reste {size} · {speed}",
-  "app.bar.progress_other": "{n} transferts · {pct}% · reste {size} · {speed}",
   "app.bar.etaSec": " · {s} s",
   "app.bar.etaMin": " · {m} min",
-  "app.bar.error": "Erreur : {err}",
-  "app.bar.idle": "Aucun transfert en cours",
 
   // Journal
   "app.log.rcloneRestarted": "Le moteur rclone a été relancé (il s'était arrêté)",

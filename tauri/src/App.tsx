@@ -28,9 +28,8 @@ import {
   type EditItem,
 } from "./files";
 import { FilePane } from "./FilePane";
-import { ServersDropdown } from "./ServersDropdown";
 import { SettingsDialog } from "./SettingsDialog";
-import { TransfersPanel, isStalled, type Tab } from "./TransfersPanel";
+import { TransfersPanel, isStalled, type Tab, type XferSummary } from "./TransfersPanel";
 import { JournalDialog } from "./JournalDialog";
 import { logEvent } from "./journal";
 import { useUpdater } from "./Updater";
@@ -38,6 +37,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import { UiIcon } from "./icons";
 import { t, tn, tx, useLang } from "./i18n";
 import { FirstRunLanguage } from "./i18n/LanguagePicker";
+import { ConnectSheet, MorphButton, ServerButton, WinTitleBar, serverMenuEntries } from "./WindowChrome";
+import { useMacChrome } from "./macChrome";
+import "./chrome.css";
 
 const appWindow = getCurrentWindow();
 const isMac = navigator.userAgent.includes("Macintosh");
@@ -97,6 +99,17 @@ type HostKeyAsk = HostKeyStatus & { host: string; port: string };
 export default function App() {
   // Re-rend toute l'app dans la nouvelle langue quand elle change.
   const lang = useLang();
+  // Feuille de connexion (nouveau serveur, ou modification du serveur courant)
+  // et renommage d'un serveur memorise.
+  const [connectSheet, setConnectSheet] = useState<"new" | "edit" | null>(null);
+  const [renameSrv, setRenameSrv] = useState<{ old: string; value: string } | null>(null);
+  // Zone des transferts sous les panneaux : visible ou cachee EN ENTIER (bouton
+  // Transferts de la barre du haut), et repliee sur sa ligne de resume.
+  const [xferOpen, setXferOpen] = useState(false);
+  const [xferCollapsed, setXferCollapsed] = useState(false);
+  // L'utilisateur a cache la zone lui-meme : un nouveau lot ne la fait plus
+  // reapparaitre (le bouton Transferts s'etire en pilule de progression).
+  const userHidXfer = useRef(false);
   const [active, setActive] = useState<Side | null>("local");
   const [connected, setConnected] = useState(false);
   // Incremente a chaque connexion reussie. Sert de « jeton » au panneau distant :
@@ -142,14 +155,10 @@ export default function App() {
   const [pass, setPass] = useState("");
   const [port, setPort] = useState("");
   // Nom FACULTATIF donne a la connexion : s'il est rempli, le serveur memorise
-  // prend ce libelle (au lieu du « user@host » par defaut). Il se vide des qu'on
-  // touche a l'un des 4 autres champs, pour ne pas coller un nom a une autre
-  // connexion. Modifier les 4 champs passe donc par ces helpers.
+  // prend ce libelle (au lieu du « user@host » par defaut). La feuille de
+  // connexion le montre a cote des 4 autres champs ; en modification, il garde
+  // le nom du serveur, qui est donc mis a jour au lieu d'etre duplique.
   const [name, setName] = useState("");
-  const setHostField = (v: string) => { setHost(v); setName(""); };
-  const setUserField = (v: string) => { setUser(v); setName(""); };
-  const setPassField = (v: string) => { setPass(v); setName(""); };
-  const setPortField = (v: string) => { setPort(v); setName(""); };
   const [servers, setServers] = useState<Server[]>([]);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [showSettings, setShowSettings] = useState(false);
@@ -204,10 +213,6 @@ export default function App() {
       panes.current[side === "local" ? "remote" : "local"].clearSelection();
     setActive(side);
   };
-  // Barre de connexion : sert a retirer le focus des champs quand on clique
-  // ailleurs (le lasso des volets fait preventDefault, ce qui sinon empeche le
-  // navigateur de deplacer le focus tout seul).
-  const connBarRef = useRef<HTMLDivElement>(null);
   busyRef.current = xfers.some((x) => !isFinal(x));
   // Idem pour les dossiers en cours d'eclatement (pas encore des transferts).
   const preparingRef = useRef(0);
@@ -524,21 +529,6 @@ export default function App() {
     localStorage.setItem(remotePinsKey(remoteKey), JSON.stringify(pins.remote));
   }, [pins.remote, remoteKey]);
 
-  // Clic hors de la barre de connexion : on retire le focus du champ actif. En
-  // phase de CAPTURE, avant que le lasso des volets ne fasse preventDefault (qui
-  // empecherait le navigateur de bouger le focus, laissant le contour colore).
-  useEffect(() => {
-    const onDown = (ev: PointerEvent) => {
-      const bar = connBarRef.current;
-      if (!bar) return;
-      if (bar.contains(ev.target as Node)) return;
-      const a = document.activeElement as HTMLElement | null;
-      if (a && bar.contains(a)) a.blur();
-    };
-    window.addEventListener("pointerdown", onDown, true);
-    return () => window.removeEventListener("pointerdown", onDown, true);
-  }, []);
-
   const pinFolder = useCallback((side: Side, path: string, label: string) => {
     setPins((p) =>
       p[side].some((x) => x.path === path)
@@ -761,6 +751,55 @@ export default function App() {
       })
       .catch(() => {});
   };
+
+  // Se deconnecter (menu serveur). Refuse tant que des transferts tournent :
+  // ils ont besoin de la connexion.
+  const disconnect = () => {
+    if (busyRef.current) {
+      setConnErr(t("chrome.conn.busy"));
+      return;
+    }
+    connSeq.current++;
+    setConnecting(false);
+    setConnected(false);
+    setRemoteKey(null);
+    setPins((p) => ({ ...p, remote: [] }));
+    setConnErr("");
+    rc("fs/cache/clear").catch(() => {});
+  };
+  // Ouvre la feuille « Nouvelle connexion » sur des champs vides.
+  const newConnection = () => {
+    setName("");
+    setHost("");
+    setUser("");
+    setPass("");
+    setPort("");
+    setConnErr("");
+    setConnectSheet("new");
+  };
+  // Rouvre la feuille sur le serveur courant (mot de passe change, autre port…).
+  // Garder le meme nom met a jour le serveur memorise au lieu d'en creer un autre.
+  const editConnection = () => {
+    const s = servers.find((x) => x.label === remoteKey);
+    if (!s) return;
+    setHost(s.host);
+    setUser(s.user);
+    setPass(s.pass);
+    setPort(s.port);
+    setName(s.label);
+    setConnErr("");
+    setConnectSheet("edit");
+  };
+  // La feuille de connexion se referme d'elle-meme une fois connecte.
+  const sheetAttempt = useRef(false);
+  useEffect(() => {
+    if (!connectSheet) {
+      sheetAttempt.current = false;
+      return;
+    }
+    if (connecting) sheetAttempt.current = true;
+    else if (sheetAttempt.current && connected && !connErr) setConnectSheet(null);
+  }, [connectSheet, connecting, connected, connErr]);
 
   // Demande a l'utilisateur quoi faire pour un fichier deja present.
   const askConflict = (name: string) =>
@@ -1775,14 +1814,29 @@ export default function App() {
       setActive(null);
       panes.current.local.clearSelection();
       panes.current.remote.clearSelection();
+      // Le panneau garde sinon le focus clavier : au retour du focus dans la
+      // fenetre (fin d'un deplacement par la barre du haut), le navigateur le
+      // lui rendait et il se re-selectionnait aussitot.
+      const el = document.activeElement as HTMLElement | null;
+      if (el && el.closest(".explorer")) el.blur();
     };
     const onClick = (e: MouseEvent) => {
       if (!(e.target as HTMLElement).closest(".explorer")) deselect();
     };
+    // Une zone de deplacement de fenetre (barre du haut) ne produit jamais de
+    // « click » : le systeme prend la main des l'appui pour deplacer la
+    // fenetre. On deselectionne donc des l'appui sur une telle zone (hors
+    // boutons, qui gardent leur clic normal).
+    const onDown = (e: MouseEvent) => {
+      const el = e.target as HTMLElement;
+      if (el.closest("[data-tauri-drag-region]") && !el.closest("button")) deselect();
+    };
     window.addEventListener("click", onClick);
+    window.addEventListener("mousedown", onDown, true);
     window.addEventListener("blur", deselect);
     return () => {
       window.removeEventListener("click", onClick);
+      window.removeEventListener("mousedown", onDown, true);
       window.removeEventListener("blur", deselect);
     };
   }, []);
@@ -1872,6 +1926,75 @@ export default function App() {
   );
   const allStalled =
     running.length > 0 && running.every((x) => isStalled(x, Date.now()));
+  // Un nouveau lot fait apparaitre la zone des transferts — sauf si on l'avait
+  // cachee expres (le bouton Transferts montre alors la progression).
+  const activeCount = queue.length + preparing;
+  const prevActive = useRef(0);
+  useEffect(() => {
+    if (activeCount > 0 && prevActive.current === 0 && !userHidXfer.current) setXferOpen(true);
+    prevActive.current = activeCount;
+  }, [activeCount]);
+  const currentServer = servers.find((x) => x.label === remoteKey);
+  // Resume des transferts : en-tete de l'îlot et bouton-pilule de la barre.
+  const xferState: XferSummary["state"] =
+    queue.length === 0 ? "idle" : reconnecting || allStalled ? "retry" : "run";
+  const summary: XferSummary = {
+    active: activeCount,
+    pct: queue.length > 0 ? pct : null,
+    line:
+      queue.length === 0
+        ? t("chrome.xfer.idle")
+        : xferState === "retry"
+          ? t("chrome.xfer.paused")
+          : `${t("common.perSecond", { size: humanSize(smoothSpeed) })} · ${t("chrome.xfer.remaining", { size: humanSize(remaining) })}${etaText}`,
+    state: xferState,
+  };
+  // Le bouton Transferts montre / cache la zone EN ENTIER (le chevron de
+  // l'îlot, lui, la replie sur sa ligne de resume).
+  const toggleXfer = () => {
+    const next = !xferOpen;
+    userHidXfer.current = !next;
+    setXferOpen(next);
+  };
+  // Zone cachee pendant une copie : le bouton s'etire en pilule de progression.
+  const showProgress = !xferOpen && summary.active > 0;
+  const renameCurrent = () => remoteKey && setRenameSrv({ old: remoteKey, value: remoteKey });
+  const forgetCurrent = () => remoteKey && deleteServer(remoteKey);
+  const serverEntries = serverMenuEntries({
+    servers,
+    remoteKey,
+    connected,
+    onPick: (s) => pickServer(s),
+    onNew: newConnection,
+    onEdit: editConnection,
+    onRename: renameCurrent,
+    onForget: forgetCurrent,
+    onDisconnect: disconnect,
+  });
+  // macOS : barre d'outils NATIVE (cf. chrome_mac.rs) ; rend sa hauteur.
+  const tbH = useMacChrome({
+    appVersion,
+    servers,
+    remoteKey,
+    connected,
+    connecting,
+    showProgress,
+    summary,
+    handlers: {
+      pick: (label) => {
+        const s = servers.find((x) => x.label === label);
+        if (s) pickServer(s);
+      },
+      newConnection,
+      edit: editConnection,
+      rename: renameCurrent,
+      forget: forgetCurrent,
+      disconnect,
+      toggleTransfers: toggleXfer,
+      journal: () => setShowJournal(true),
+      settings: () => setShowSettings(true),
+    },
+  });
   // Meme progression globale reportee sur l'icone de l'app : bouton de la barre
   // des taches sous Windows (comme une copie de l'Explorateur), icone du Dock
   // sous macOS. Jaune (« en pause ») quand la copie est figee ou reconnecte,
@@ -1901,176 +2024,136 @@ export default function App() {
       .setProgressBar({ status, progress: Math.min(100, Math.max(0, pct)) })
       .catch(() => {});
   }, [taskbarKey, pct]);
-  // Bandeau d'erreur EPHEMERE. Il s'affichait tant qu'un echec trainait dans la
-  // liste, donc indefiniment : entre deux transferts on lisait encore l'echec du
-  // precedent, ce qui donnait l'impression qu'il concernait les suivants.
-  // L'echec reste consultable dans l'onglet « Échoués » et dans le journal, le
-  // bandeau n'a donc pas a etre permanent.
-  const latestErr = failed.find((x) => x.status === "error");
-  const latestErrId = latestErr?.id ?? null;
-  const [errBanner, setErrBanner] = useState<string | null>(null);
-  useEffect(() => {
-    // Plus aucun echec en liste (le dernier a ete relance avec succes, ou
-    // l'onglet a ete nettoye) : on efface TOUT DE SUITE. Sortir sans rien faire
-    // laissait le bandeau affiche pour toujours — c'est ce qui se passait apres
-    // une bascule « sans empreinte », ou les echecs disparaissent en etant
-    // relances plutot qu'en expirant.
-    if (latestErrId === null) {
-      setErrBanner(null);
-      return;
-    }
-    setErrBanner(latestErr?.error ?? null);
-    const t = setTimeout(() => setErrBanner(null), 10000);
-    return () => clearTimeout(t);
-    // Volontairement cale sur l'ID SEUL : `failed` est un tableau recree a
-    // chaque rendu, s'en servir comme dependance relancerait le minuteur en
-    // boucle et le bandeau ne partirait jamais.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [latestErrId]);
-
   return (
     <div
       className="app"
       data-os={osName}
+      style={{ ["--tb-h" as string]: `${tbH}px` }}
       onContextMenu={(e) => {
         // Coupe le menu natif du navigateur partout, sauf dans les champs texte.
         if (!(e.target as HTMLElement).closest("input, textarea"))
           e.preventDefault();
       }}
     >
-      <div className="titlebar" data-tauri-drag-region>
-        <span className="brandwrap">
-          <span className="brand">Copiteur</span>
-          <span className="version">{appVersion}</span>
-        </span>
-        {!isMac && (
-          <div className="win-buttons">
-            <button className="win-btn" onClick={() => appWindow.minimize()} aria-label={t("app.win.minimize")}>
-              &#xE921;
-            </button>
-            <button className="win-btn" onClick={() => appWindow.toggleMaximize()} aria-label={t("app.win.maximize")}>
-              &#xE922;
-            </button>
-            <button className="win-btn win-close" onClick={() => appWindow.close()} aria-label={t("app.win.close")}>
-              &#xE8BB;
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="connect-bar" ref={connBarRef}>
-        <input className="conn-field cname" placeholder={t("app.conn.name")} value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
-        <input className="conn-field host" placeholder={t("app.conn.host")} value={host} onChange={(e) => setHostField(e.target.value)} spellCheck={false} />
-        <input className="conn-field user" placeholder={t("app.conn.user")} value={user} onChange={(e) => setUserField(e.target.value)} spellCheck={false} />
-        <input className="conn-field pwd" placeholder={t("app.conn.password")} type="password" value={pass} onChange={(e) => setPassField(e.target.value)} />
-        <input className="conn-field port" placeholder={t("app.conn.port")} value={port} onChange={(e) => setPortField(e.target.value)} spellCheck={false} />
-        <button
-          className={"conn-btn" + (connecting ? " is-connecting" : "")}
-          onClick={() => connect()}
-        >
-          {/* Sizer invisible : reserve toujours la largeur du libelle le plus
-              large pour que le bouton ne change pas de taille entre les etats. */}
-          <span className="conn-btn-sizer" aria-hidden="true">{t("app.conn.connect")}</span>
-          <span className="conn-btn-label">
-            {connecting ? t("app.conn.connecting") : t("app.conn.connect")}
-          </span>
-        </button>
-        <ServersDropdown
-          servers={servers}
-          onPick={pickServer}
-          onDelete={deleteServer}
-          onRename={renameServer}
-        />
-        <button
-          className="gear-btn"
-          aria-label={t("app.conn.journal")}
-          title={t("app.conn.journalTitle")}
-          onClick={() => setShowJournal(true)}
-        >
-          <UiIcon name="journal" />
-        </button>
-        <button
-          className="gear-btn"
-          aria-label={t("app.conn.settings")}
-          title={t("app.conn.settings")}
-          onClick={() => setShowSettings(true)}
-        >
-          &#x2699;
-        </button>
-      </div>
-
-      {connErr && <div className="conn-error">{connErr}</div>}
-
-      <main className="explorers">
-        <FilePane
-          title={t("common.yourPc")}
-          side="local"
-          enabled={true}
-          anyModal={anyModal}
-          active={active === "local"}
-          onFocus={() => focusPane("local")}
-          bus={panes.current.local}
-          onDropItems={startTransfers}
-          onCopy={doCopy}
-          onPaste={doPaste}
-          hasClipboard={clipboardReady}
-          busyRef={busyRef}
-          showHidden={settings.showHidden}
-          showNetworkDrives={settings.showNetworkDrives}
-          pins={pins.local}
-          onPin={(path, label) => pinFolder("local", path, label)}
-          onUnpin={(path) => unpinFolder("local", path)}
-          onReorderPin={(from, to, after) => reorderPins("local", from, to, after)}
-        />
-        <FilePane
-          title={t("common.server")}
-          side="remote"
-          enabled={connected}
-          anyModal={anyModal}
-          active={active === "remote"}
-          onFocus={() => focusPane("remote")}
-          bus={panes.current.remote}
-          onDropItems={startTransfers}
-          onCopy={doCopy}
-          onPaste={doPaste}
-          hasClipboard={clipboardReady}
-          busyRef={busyRef}
-          showHidden={settings.showHidden}
-          showNetworkDrives={settings.showNetworkDrives}
-          pins={pins.remote}
-          onPin={(path, label) => pinFolder("remote", path, label)}
-          onUnpin={(path) => unpinFolder("remote", path)}
-          onReorderPin={(from, to, after) => reorderPins("remote", from, to, after)}
-          onOpenRemote={openRemote}
-          connKey={connKey}
-          startAt={remoteStart}
-          startDir={servers.find((x) => x.label === remoteKey)?.startDir ?? ""}
-          onSetStartDir={setStartDir}
-        />
-      </main>
-
-      {(xfers.length > 0 || preparing > 0 || edits.length > 0) && (
-        <TransfersPanel
-          queue={queue}
-          done={done}
-          failed={failed}
-          cancelled={cancelled}
-          edits={edits}
-          tab={tab}
-          onTab={setTab}
-          preparing={preparing}
-          now={Date.now()}
-          settings={settings}
-          onCancel={cancelXfer}
-          onCancelAll={cancelAll}
-          onRetry={retryXfer}
-          onRetryFailed={retryFailed}
-          onRetryCancelled={retryCancelled}
-          onClear={clearTab}
-          onEditResend={resendEdit}
-          onEditStop={stopEdit}
+      {isMac ? (
+        // macOS : la barre d'outils est NATIVE (dessinee par AppKit au-dessus de
+        // la webview) ; on ne fait que lui reserver sa hauteur. Cette bande,
+        // sous la barre, recoit les clics dans ses vides -> zone de deplacement.
+        <div className="tb-band" data-tauri-drag-region />
+      ) : (
+        <WinTitleBar
+          version={appVersion}
+          right={
+            <>
+              <MorphButton
+                expanded={showProgress}
+                summary={summary}
+                on={xferOpen}
+                title={t(xferOpen ? "chrome.xfer.hideAll" : "chrome.xfer.show")}
+                onClick={toggleXfer}
+              />
+              <ServerButton
+                label={connected && currentServer ? currentServer.label : t("chrome.conn.pick")}
+                connected={connected}
+                connecting={connecting}
+                entries={serverEntries}
+              />
+              <button className="w11-tool" title={t("app.conn.journalTitle")} onClick={() => setShowJournal(true)}>
+                <UiIcon name="journal" />
+              </button>
+              <button className="w11-tool" title={t("app.conn.settings")} onClick={() => setShowSettings(true)}>
+                <span className="w11-glyph" aria-hidden>
+                  &#xE713;
+                </span>
+              </button>
+            </>
+          }
         />
       )}
+
+      {connErr && !connectSheet && <div className="conn-error">{connErr}</div>}
+
+      <div className="shell">
+        <main className="explorers">
+          <FilePane
+            title={isMac ? t("chrome.pane.yourMac") : t("common.yourPc")}
+            side="local"
+            rootLabel={isMac ? "Macintosh HD" : undefined}
+            enabled={true}
+            anyModal={anyModal}
+            active={active === "local"}
+            onFocus={() => focusPane("local")}
+            bus={panes.current.local}
+            onDropItems={startTransfers}
+            onCopy={doCopy}
+            onPaste={doPaste}
+            hasClipboard={clipboardReady}
+            busyRef={busyRef}
+            showHidden={settings.showHidden}
+            showNetworkDrives={settings.showNetworkDrives}
+            pins={pins.local}
+            onPin={(path, label) => pinFolder("local", path, label)}
+            onUnpin={(path) => unpinFolder("local", path)}
+            onReorderPin={(from, to, after) => reorderPins("local", from, to, after)}
+          />
+          <FilePane
+            title={connected && currentServer ? currentServer.label : t("common.server")}
+            side="remote"
+            rootLabel={currentServer?.label}
+            enabled={connected}
+            anyModal={anyModal}
+            active={active === "remote"}
+            onFocus={() => focusPane("remote")}
+            bus={panes.current.remote}
+            onDropItems={startTransfers}
+            onCopy={doCopy}
+            onPaste={doPaste}
+            hasClipboard={clipboardReady}
+            busyRef={busyRef}
+            showHidden={settings.showHidden}
+            showNetworkDrives={settings.showNetworkDrives}
+            pins={pins.remote}
+            onPin={(path, label) => pinFolder("remote", path, label)}
+            onUnpin={(path) => unpinFolder("remote", path)}
+            onReorderPin={(from, to, after) => reorderPins("remote", from, to, after)}
+            onOpenRemote={openRemote}
+            connKey={connKey}
+            startAt={remoteStart}
+            startDir={currentServer?.startDir ?? ""}
+            onSetStartDir={setStartDir}
+          />
+        </main>
+        {/* Îlot des transferts sous les panneaux. Toujours monte : il apparait
+            et disparait en ANIMANT sa hauteur (cf. chrome.css). */}
+        <div
+          className={"transfers-host" + (xferCollapsed ? " is-collapsed" : "") + (xferOpen ? "" : " is-hidden")}
+          aria-hidden={!xferOpen}
+        >
+          <TransfersPanel
+            queue={queue}
+            done={done}
+            failed={failed}
+            cancelled={cancelled}
+            edits={edits}
+            tab={tab}
+            onTab={setTab}
+            preparing={preparing}
+            now={Date.now()}
+            settings={settings}
+            onCancel={cancelXfer}
+            onCancelAll={cancelAll}
+            onRetry={retryXfer}
+            onRetryFailed={retryFailed}
+            onRetryCancelled={retryCancelled}
+            onClear={clearTab}
+            onEditResend={resendEdit}
+            onEditStop={stopEdit}
+            summary={summary}
+            collapsed={xferCollapsed}
+            onToggleCollapse={() => setXferCollapsed((c) => !c)}
+          />
+        </div>
+      </div>
 
       {showSettings && (
         <SettingsDialog
@@ -2391,56 +2474,64 @@ export default function App() {
         </div>
       )}
 
-      <footer className="transfer-bar">
-        {queue.length > 0 ? (
-          <>
-            <span className="xfer-progress">
-              <span
-                className={
-                  "xfer-progress-fill" +
-                  (reconnecting || allStalled ? " is-retry" : "")
-                }
-                style={{ width: `${pct}%` }}
+      {/* Feuille de connexion (nouveau serveur / modification) et renommage. */}
+      {connectSheet && (
+        <ConnectSheet
+          mode={connectSheet}
+          name={name}
+          host={host}
+          user={user}
+          pass={pass}
+          port={port}
+          setName={setName}
+          setHost={setHost}
+          setUser={setUser}
+          setPass={setPass}
+          setPort={setPort}
+          connecting={connecting}
+          error={connErr}
+          onConnect={() => connect()}
+          onClose={() => setConnectSheet(null)}
+        />
+      )}
+      {renameSrv && (
+        <div className="modal-backdrop" onMouseDown={() => setRenameSrv(null)}>
+          <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-title">{t("chrome.rename.title")}</div>
+            <div className="modal-body">
+              <input
+                className="sheet-field sheet-rename"
+                autoFocus
+                aria-label={t("chrome.rename.label")}
+                value={renameSrv.value}
+                onChange={(e) => setRenameSrv({ ...renameSrv, value: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && renameSrv.value.trim()) {
+                    renameServer(renameSrv.old, renameSrv.value.trim());
+                    setRenameSrv(null);
+                  } else if (e.key === "Escape") setRenameSrv(null);
+                }}
               />
-            </span>
-            {reconnecting ? (
-              // Le lien est tombe : on le dit clairement, la file repart seule.
-              <span className="xfer-text is-retry">
-                {tn("app.bar.lost", queue.length, { size: humanSize(remaining) })}
-              </span>
-            ) : allStalled ? (
-              // Rien n'avance plus, mais on n'a pas encore la preuve d'une
-              // coupure : on decrit ce qu'on voit, sans rien conclure.
-              <span className="xfer-text is-retry">
-                {tn("app.bar.stalled", queue.length, { size: humanSize(remaining) })}
-              </span>
-            ) : (
-              <span className="xfer-text">
-                {tn("app.bar.progress", queue.length, {
-                  pct,
-                  size: humanSize(remaining),
-                  speed: t("common.perSecond", { size: humanSize(smoothSpeed) }),
-                })}
-                {etaText}
-              </span>
-            )}
-          </>
-        ) : errBanner ? (
-          <span className="xfer-err">{t("app.bar.error", { err: errBanner })}</span>
-        ) : (
-          <span>{t("app.bar.idle")}</span>
-        )}
-        <span
-          className="rclone-ver"
-          title={version ? `rclone ${version}` : undefined}
-        >
-          {!version
-            ? t("app.rclone.starting")
-            : /mt-sftp/i.test(version)
-              ? t("app.rclone.custom")
-              : `rclone ${version}`}
-        </span>
-      </footer>
+            </div>
+            <div className="modal-actions">
+              <button className="btn-ghost" onClick={() => setRenameSrv(null)}>
+                {t("common.cancel")}
+              </button>
+              <button
+                className="btn-accent"
+                disabled={!renameSrv.value.trim()}
+                onClick={() => {
+                  renameServer(renameSrv.old, renameSrv.value.trim());
+                  setRenameSrv(null);
+                }}
+              >
+                {t("common.rename")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

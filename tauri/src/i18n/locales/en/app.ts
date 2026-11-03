@@ -20,8 +20,6 @@ export default {
   "app.conn.timeout": "The server is not responding (timed out).",
 
   "app.rclone.unreachable": "rclone unreachable",
-  "app.rclone.starting": "starting rclone…",
-  "app.rclone.custom": "Custom rclone engine",
 
   "app.err.nameRefused": "Name rejected by the destination (“{name}”) — {err}",
   "app.err.hashRetry":
@@ -85,20 +83,8 @@ export default {
   "app.editConflict.overwriteWord": "will overwrite",
   "app.editConflict.overwrite": "Overwrite",
 
-  "app.bar.lost_one":
-    "Connection lost — resuming automatically · {n} transfer waiting · {size} left",
-  "app.bar.lost_other":
-    "Connection lost — resuming automatically · {n} transfers waiting · {size} left",
-  "app.bar.stalled_one":
-    "No data getting through — waiting for the server · {n} transfer · {size} left",
-  "app.bar.stalled_other":
-    "No data getting through — waiting for the server · {n} transfers · {size} left",
-  "app.bar.progress_one": "{n} transfer · {pct}% · {size} left · {speed}",
-  "app.bar.progress_other": "{n} transfers · {pct}% · {size} left · {speed}",
   "app.bar.etaSec": " · {s} s",
   "app.bar.etaMin": " · {m} min",
-  "app.bar.error": "Error: {err}",
-  "app.bar.idle": "No transfers in progress",
 
   "app.log.rcloneRestarted": "The rclone engine was restarted (it had stopped)",
   "app.log.hostKeyRefused": "Connection to {host} cancelled — {kind} fingerprint rejected ({fp})",
