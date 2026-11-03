@@ -245,13 +245,27 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             )?,
         ));
     }
+    // Simulation de transferts (aucune copie reelle), a la suite.
+    let mut simu_items = Vec::new();
+    for (id, fr, en) in design::SIMUS {
+        simu_items.push(MenuItem::with_id(
+            app,
+            format!("{}{id}", design::SIMU_PREFIX),
+            tr(fr, en),
+            true,
+            None::<&str>,
+        )?);
+    }
     let sep = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
     let mut refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = design_items
         .iter()
         .map(|(_, i)| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
         .collect();
     refs.push(&sep);
     refs.extend(rappel_items.iter().map(|(_, i)| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>));
+    refs.push(&sep2);
+    refs.extend(simu_items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>));
     let design_menu = Submenu::with_items(app, tr("Design (bêta)", "Design (beta)"), true, &refs)?;
     if let Ok(mut g) = design_state.items.lock() {
         *g = design_items;
@@ -412,6 +426,8 @@ pub fn run() {
                     let _ = app.emit("copiteur://design", d.to_string());
                 } else if let Some(r) = other.strip_prefix(design::RAPPEL_PREFIX) {
                     let _ = app.emit("copiteur://rappel", r.to_string());
+                } else if let Some(a) = other.strip_prefix(design::SIMU_PREFIX) {
+                    let _ = app.emit("copiteur://simu", a.to_string());
                 }
             }
         })

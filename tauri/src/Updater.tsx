@@ -10,7 +10,6 @@
 //  Installer ferme Copiteur : on refuse donc tant que des transferts tournent.
 // ============================================================
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getName } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -41,14 +40,6 @@ function humanUpdateError(raw: string): string {
 type Log = (level: "info" | "warn" | "error", msg: string) => void;
 
 // Le hook expose la fenetre ET un declencheur manuel (bouton des parametres).
-let betaFlag: Promise<boolean> | null = null;
-function isBeta(): Promise<boolean> {
-  betaFlag ??= getName()
-    .then((n) => /beta/i.test(n))
-    .catch(() => false);
-  return betaFlag;
-}
-
 export function useUpdater({
   current,
   busy,
@@ -68,12 +59,9 @@ export function useUpdater({
   // `silent` : verification de demarrage — on ne montre rien si l'app est a
   // jour ou si le reseau manque (seulement une ligne de journal).
   const run = useCallback(async (silent: boolean) => {
-    // BETA DESIGN : la beta s'installe a cote de la version normale et ne se
-    // met jamais a jour (une MaJ installerait la version normale par-dessus).
-    if (await isBeta()) {
-      if (!silent) setPhase({ kind: "uptodate" });
-      return;
-    }
+    // BETA DESIGN : la beta a son propre canal de mise a jour (cf. endpoint de
+    // tauri.conf.json sur la branche beta) : elle ne voit jamais la version
+    // normale, et la version normale ne voit jamais la beta.
     if (!silent) setPhase({ kind: "checking" });
     try {
       const update = await check();

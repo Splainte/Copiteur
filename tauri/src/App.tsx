@@ -239,7 +239,8 @@ export default function App() {
   // ailleurs (le lasso des volets fait preventDefault, ce qui sinon empeche le
   // navigateur de deplacer le focus tout seul).
   const connBarRef = useRef<HTMLDivElement>(null);
-  busyRef.current = xfers.some((x) => !isFinal(x));
+  // (Les transferts simules du menu Debug n'empechent pas de fermer.)
+  busyRef.current = xfers.some((x) => !isFinal(x) && !x.fake);
   // Idem pour les dossiers en cours d'eclatement (pas encore des transferts).
   const preparingRef = useRef(0);
   preparingRef.current = preparing;
@@ -1413,16 +1414,19 @@ export default function App() {
   // paraitre a la fois "pas encore lance" et "en attente" => double lancement.
   useEffect(() => {
     const now = Date.now();
+    // Les transferts SIMULES (menu Debug) ne passent jamais par ici : ils ne
+    // prennent pas de creneau et ne lancent aucune copie (cf. useSimulation).
     const busy = xfers.filter(
-      (x) => x.status === "running" || x.status === "starting",
+      (x) => !x.fake && (x.status === "running" || x.status === "starting"),
     ).length;
     const free = settings.parallel - busy;
     if (free <= 0) return;
     const next = xfers
       .filter(
         (x) =>
-          x.status === "queued" ||
-          (x.status === "retry" && x.nextTry <= now),
+          !x.fake &&
+          (x.status === "queued" ||
+            (x.status === "retry" && x.nextTry <= now)),
       )
       .slice(0, free);
     if (!next.length) return;
@@ -1434,6 +1438,116 @@ export default function App() {
     );
     for (const x of next) launch(x);
   }, [xfers, tick, settings.parallel, launch]);
+
+  // ---- BETA DESIGN : transferts simules (menu Debug / Design) ---------------
+  // Un lot de faux fichiers qui avance tout seul (3 a la fois), une coupure
+  // reseau a la demande, un echec en cours de route : de quoi juger le rendu des
+  // transferts sans rien copier. Rien ne touche rclone (jobid 0, `fake`).
+  const runSimu = useCallback((action: string) => {
+    if (action === "vider") {
+      setXfers((prev) => prev.filter((x) => !x.fake));
+      return;
+    }
+    if (action === "coupure") {
+      const now = Date.now();
+      setXfers((prev) =>
+        prev.map((x) =>
+          x.fake && (x.status === "running" || x.status === "starting")
+            ? { ...x, status: "retry" as const, speed: 0, attempts: x.attempts + 1, nextTry: now + 8000 }
+            : x,
+        ),
+      );
+      return;
+    }
+    // « lot » : envois et receptions melanges, tailles variees.
+    // Tailles et debits choisis pour que le lot entier se termine en une
+    // minute environ (on voit passer « En cours », « Terminés » et l'echec).
+    const files: [string, string, number, boolean][] = [
+      ["Interview A7S III.mov", "Rushs/Jour 1", 8.4e9, true],
+      ["B-roll studio 4e.mp4", "Rushs/Jour 1", 2.1e9, true],
+      ["Plan large 02.mov", "Rushs/Jour 2", 4.6e9, true],
+      ["Test Pixel 11 - montage v3.prproj", "Projets", 48e6, true],
+      ["Miniature finale.png", "Exports", 3.3e6, true],
+      ["Export 4K HEVC.mp4", "Exports", 6.2e9, false],
+      ["Livraison iPhone 18 Pro.mov", "", 7.4e9, false],
+      ["Musique générique.wav", "Musiques", 85e6, false],
+      ["Sous-titres FR.srt", "", 34e3, false],
+      ["Archive 2025.zip", "Archives", 5.8e9, false],
+    ];
+    const batch: Xfer[] = files.map(([name, rel, size, up], k) => {
+      const id = ++jobSeq.current;
+      return {
+        id,
+        group: `simu/${id}`,
+        jobid: 0,
+        name,
+        rel,
+        srcFs: up ? "/Users/simulation/" : REMOTE + "/SIMULATION",
+        srcRemote: name,
+        dstFs: up ? REMOTE + "/SIMULATION" : "/Users/simulation/",
+        dstRemote: name,
+        size,
+        bytes: 0,
+        speed: 0,
+        status: "queued" as const,
+        error: "",
+        attempts: 0,
+        nextTry: 0,
+        fake: true,
+        simSpeed: (180 + ((k * 53) % 140)) * 1e6,
+        failAt: k === 6 ? 0.42 : undefined,
+      };
+    });
+    setXfers((prev) => [...prev, ...batch]);
+    setTab("queue");
+  }, []);
+  // Fait avancer la simulation (meme rythme que le suivi reel).
+  const anyFake = xfers.some((x) => x.fake && !isFinal(x));
+  useEffect(() => {
+    if (!anyFake) return;
+    let last = Date.now();
+    const timer = setInterval(() => {
+      const now = Date.now();
+      const dt = (now - last) / 1000;
+      last = now;
+      setXfers((prev) => {
+        let running = prev.filter((x) => x.fake && x.status === "running").length;
+        return prev.map((x) => {
+          if (!x.fake) return x;
+          if (x.status === "retry" && x.nextTry <= now) return { ...x, status: "running" as const, movedAt: now };
+          if (x.status === "queued" && running < 3) {
+            running++;
+            return { ...x, status: "running" as const, movedAt: now };
+          }
+          if (x.status !== "running") return x;
+          const speed = (x.simSpeed ?? 80e6) * (0.85 + Math.random() * 0.3);
+          const bytes = Math.min(x.size, x.bytes + speed * dt);
+          if (x.failAt !== undefined && bytes >= x.size * x.failAt)
+            return {
+              ...x,
+              bytes,
+              speed: 0,
+              status: "error" as const,
+              error: "connection reset by peer (simulation)",
+              failAt: undefined,
+            };
+          if (bytes >= x.size) return { ...x, bytes: x.size, speed: 0, status: "done" as const };
+          return { ...x, bytes, speed, movedAt: now };
+        });
+      });
+    }, 500);
+    return () => clearInterval(timer);
+  }, [anyFake]);
+  // Commandes : menu Debug (Windows, evenement de page) et menu Design (macOS).
+  useEffect(() => {
+    const onDom = (e: Event) => runSimu(String((e as CustomEvent).detail));
+    window.addEventListener("copiteur-simu", onDom);
+    const un = listen<string>("copiteur://simu", (e) => runSimu(e.payload));
+    return () => {
+      window.removeEventListener("copiteur-simu", onDom);
+      un.then((f) => f());
+    };
+  }, [runSimu]);
 
   // ---- Battement (ordonnanceur + suivi) ------------------------------------
   // Actif tant qu'il reste du travail, MEME si aucun job ne tourne : sans ca,

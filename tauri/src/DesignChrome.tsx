@@ -266,6 +266,25 @@ export function DebugMenu() {
             </button>
           ))}
           <div className="debug-sep" />
+          <div className="debug-head">{t("design.simuHeader")}</div>
+          {(["lot", "coupure", "vider"] as const).map((a) => (
+            <button
+              key={a}
+              role="menuitem"
+              className="debug-item"
+              onClick={() => {
+                setOpen(false);
+                window.dispatchEvent(new CustomEvent("copiteur-simu", { detail: a }));
+              }}
+            >
+              <span className="debug-check">{a === "lot" ? "\uE768" : a === "coupure" ? "\uE7BA" : "\uE74D"}</span>
+              <span className="debug-texts">
+                <span className="debug-name">{t(`design.simu.${a}`)}</span>
+                <span className="debug-hint">{t(`design.simuHint.${a}`)}</span>
+              </span>
+            </button>
+          ))}
+          <div className="debug-sep" />
           <div className="debug-head">{t("design.rappelHeader")}</div>
           {RAPPELS.map((r, k) => (
             <button

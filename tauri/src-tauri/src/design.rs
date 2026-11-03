@@ -36,6 +36,15 @@ pub const RAPPELS: [(&str, &str, &str); 3] = [
 ];
 pub const RAPPEL_PREFIX: &str = "rappel:";
 
+/// Transferts simules (pour juger le rendu sans rien copier).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub const SIMUS: [(&str, &str, &str); 3] = [
+    ("lot", "Lancer des transferts simulés", "Start simulated transfers"),
+    ("coupure", "Simuler une coupure réseau", "Simulate a network drop"),
+    ("vider", "Effacer la simulation", "Clear the simulation"),
+];
+pub const SIMU_PREFIX: &str = "simu:";
+
 pub const MENU_PREFIX: &str = "design:";
 
 /// Habillage courant (annonce par le front) + entrees cochables du menu.

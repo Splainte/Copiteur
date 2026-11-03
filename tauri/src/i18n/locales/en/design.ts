@@ -87,5 +87,13 @@ const en: Record<keyof typeof fr, string> = {
   "design.rappelHint.pastille": "Percentage, speed and time left in the center",
   "design.xfer.show": "Show transfers",
   "design.xfer.hideAll": "Hide transfers",
+
+  "design.simuHeader": "Simulation",
+  "design.simu.lot": "Start simulated transfers",
+  "design.simu.coupure": "Simulate a network drop",
+  "design.simu.vider": "Clear the simulation",
+  "design.simuHint.lot": "10 fake files, uploads and downloads, one failure",
+  "design.simuHint.coupure": "Running simulated transfers switch to retry",
+  "design.simuHint.vider": "Removes every simulated transfer from the list",
 };
 export default en;

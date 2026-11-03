@@ -211,6 +211,13 @@ export type Xfer = {
   // Ce transfert est un RENVOI d'edition : id du fichier edite (pour re-empreindre
   // la reference une fois le renvoi termine).
   editId?: number;
+  // BETA DESIGN : transfert SIMULE (menu Debug / Design) pour juger le rendu sans
+  // rien copier. L'ordonnanceur et le suivi rclone l'ignorent : seule la
+  // simulation le fait avancer. `simSpeed` = debit simule (o/s), `failAt` = part
+  // du fichier a laquelle il echoue (pour montrer un echec).
+  fake?: boolean;
+  simSpeed?: number;
+  failAt?: number;
 };
 
 // ---- Edition d'un fichier distant -----------------------------------------

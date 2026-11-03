@@ -89,4 +89,13 @@ export default {
   "design.rappelHint.pastille": "Pourcentage, débit et temps restant au centre",
   "design.xfer.show": "Afficher les transferts",
   "design.xfer.hideAll": "Masquer les transferts",
+
+  // Simulation de transferts (menu Debug / Design).
+  "design.simuHeader": "Simulation",
+  "design.simu.lot": "Lancer des transferts simulés",
+  "design.simu.coupure": "Simuler une coupure réseau",
+  "design.simu.vider": "Effacer la simulation",
+  "design.simuHint.lot": "10 faux fichiers, envois et réceptions, un échec",
+  "design.simuHint.coupure": "Les transferts simulés en cours passent en reprise",
+  "design.simuHint.vider": "Retire tous les transferts simulés de la liste",
 };
