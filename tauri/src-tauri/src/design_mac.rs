@@ -70,6 +70,17 @@ struct PillViews {
     chevron: Retained<NSImageView>,
 }
 
+struct MorphViews {
+    id: String,
+    host: Retained<NSView>,
+    width: Retained<NSLayoutConstraint>,
+    text: Retained<NSTextField>,
+    bar: Retained<NSProgressIndicator>,
+    extra: Retained<NSView>,
+    expanded: bool,
+    wide: f64,
+}
+
 #[derive(Default)]
 struct State {
     controller: Option<Retained<Controller>>,
@@ -79,6 +90,7 @@ struct State {
     fields: Vec<(String, Retained<NSTextField>)>,
     segments: Vec<(String, Retained<NSSegmentedControl>)>,
     progress: Vec<(String, Retained<NSProgressIndicator>, Retained<NSTextField>, Retained<NSView>, bool)>,
+    morph: Option<MorphViews>,
     glass: Vec<Retained<NSView>>,
     pill: Option<PillViews>,
     vibrancy: Option<bool>,
@@ -88,6 +100,36 @@ struct State {
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
+
+// ---------- Hote du bouton-pilule : transparent aux clics hors de la capsule ----------
+
+define_class!(
+    // L'element de barre a la largeur MAXIMALE de la pilule (la barre ne se
+    // re-agence pas pendant l'animation) ; seule la capsule, collee a droite,
+    // s'etire. Le reste de l'hote laisse passer les clics (deplacement de la
+    // fenetre par la barre).
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "CopiteurPassThroughView"]
+    struct PassThroughView;
+
+    impl PassThroughView {
+        #[unsafe(method(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> *mut NSView {
+            let hit: *mut NSView = unsafe { msg_send![super(self), hitTest: point] };
+            if hit as *const NSView == self as *const Self as *const NSView {
+                core::ptr::null_mut()
+            } else {
+                hit
+            }
+        }
+
+        #[unsafe(method(mouseDownCanMoveWindow))]
+        fn can_move(&self) -> bool {
+            true
+        }
+    }
+);
 
 // ---------- Controleur Obj-C (delegue de la barre + cible des actions) ----------
 
@@ -175,6 +217,14 @@ define_class!(
         #[unsafe(method(onPill:))]
         fn on_pill(&self, _sender: Option<&AnyObject>) {
             self.emit("pill", "click", None, None);
+        }
+
+        #[unsafe(method(onMorph:))]
+        fn on_morph(&self, _sender: Option<&AnyObject>) {
+            let id = STATE.with(|s| s.borrow().morph.as_ref().map(|m| m.id.clone()));
+            if let Some(id) = id {
+                self.emit(&id, "click", None, None);
+            }
         }
 
         #[unsafe(method(onProgress:))]
@@ -437,6 +487,142 @@ impl Controller {
                     }
                 }
                 item.setLabel(&NSString::from_str(labels.first().map(String::as_str).unwrap_or("")));
+            }
+            TbItem::Morph { id, symbol: sym, label: lbl, text, value, expanded, retry } => {
+                const H: f64 = 36.0;
+                const MAX: f64 = 320.0;
+                if fresh {
+                    // Hote large et transparent, capsule de verre collee a droite.
+                    let host: Retained<PassThroughView> = unsafe { msg_send![PassThroughView::alloc(mtm), init] };
+                    let host: Retained<NSView> = Retained::into_super(host);
+                    host.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    let glass = glass_view(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(H, H)), H / 2.0, mtm);
+                    glass.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    // macOS 27 : petit rebond du verre au clic.
+                    if responds(&glass, sel!(setEffectIsInteractive:)) {
+                        let _: () = unsafe { msg_send![&*glass, setEffectIsInteractive: true] };
+                    }
+                    // Contenu rogne a la capsule : icone a gauche, puis texte + jauge.
+                    let clip = NSView::new(mtm);
+                    clip.setWantsLayer(true);
+                    clip.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    unsafe {
+                        let layer: *mut AnyObject = msg_send![&*clip, layer];
+                        if !layer.is_null() {
+                            let _: () = msg_send![layer, setMasksToBounds: true];
+                            let _: () = msg_send![layer, setCornerRadius: H / 2.0];
+                        }
+                    }
+                    match has_glass().then(|| glass.downcast_ref::<NSGlassEffectView>()).flatten() {
+                        Some(g) => g.setContentView(Some(&clip)),
+                        None => glass.addSubview(&clip),
+                    }
+                    let icon = match symbol(sym, lbl) {
+                        Some(img) => NSImageView::imageViewWithImage(&img, mtm),
+                        None => NSImageView::new(mtm),
+                    };
+                    icon.setContentTintColor(Some(&NSColor::labelColor()));
+                    icon.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    let text_label = label("", mtm);
+                    text_label.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(12.0, unsafe {
+                        objc2_app_kit::NSFontWeightMedium
+                    })));
+                    text_label.setLineBreakMode(NSLineBreakMode::ByClipping);
+                    let bar = NSProgressIndicator::new(mtm);
+                    bar.setStyle(NSProgressIndicatorStyle::Bar);
+                    bar.setIndeterminate(false);
+                    bar.setMinValue(0.0);
+                    bar.setMaxValue(100.0);
+                    bar.setControlSize(objc2_app_kit::NSControlSize::Small);
+                    bar.widthAnchor().constraintEqualToConstant(64.0).setActive(true);
+                    let extra = hstack(&[&text_label, &bar], mtm);
+                    extra.setSpacing(10.0);
+                    extra.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    extra.setAlphaValue(0.0);
+                    clip.addSubview(&icon);
+                    clip.addSubview(&extra);
+                    host.addSubview(&glass);
+                    let width = glass.widthAnchor().constraintEqualToConstant(H);
+                    let c = [
+                        host.widthAnchor().constraintEqualToConstant(MAX),
+                        host.heightAnchor().constraintEqualToConstant(H),
+                        glass.trailingAnchor().constraintEqualToAnchor(&host.trailingAnchor()),
+                        glass.centerYAnchor().constraintEqualToAnchor(&host.centerYAnchor()),
+                        glass.heightAnchor().constraintEqualToConstant(H),
+                        width.clone(),
+                        clip.leadingAnchor().constraintEqualToAnchor(&glass.leadingAnchor()),
+                        clip.trailingAnchor().constraintEqualToAnchor(&glass.trailingAnchor()),
+                        clip.topAnchor().constraintEqualToAnchor(&glass.topAnchor()),
+                        clip.bottomAnchor().constraintEqualToAnchor(&glass.bottomAnchor()),
+                        icon.centerXAnchor().constraintEqualToAnchor_constant(&clip.leadingAnchor(), H / 2.0),
+                        icon.centerYAnchor().constraintEqualToAnchor(&clip.centerYAnchor()),
+                        extra.leadingAnchor().constraintEqualToAnchor_constant(&clip.leadingAnchor(), H - 2.0),
+                        extra.centerYAnchor().constraintEqualToAnchor(&clip.centerYAnchor()),
+                    ];
+                    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&c));
+                    let click = unsafe {
+                        NSClickGestureRecognizer::initWithTarget_action(
+                            NSClickGestureRecognizer::alloc(mtm),
+                            Some(self.as_target()),
+                            Some(sel!(onMorph:)),
+                        )
+                    };
+                    glass.addGestureRecognizer(&click);
+                    item.setView(Some(&host));
+                    item.setBordered(false);
+                    STATE.with(|s| {
+                        s.borrow_mut().morph = Some(MorphViews {
+                            id: id.clone(),
+                            host,
+                            width,
+                            text: text_label,
+                            bar,
+                            extra: Retained::into_super(extra),
+                            expanded: false,
+                            wide: H,
+                        })
+                    });
+                }
+                item.setLabel(&NSString::from_str(lbl));
+                item.setToolTip(Some(&NSString::from_str(lbl)));
+                // Mise a jour : texte, jauge, et etirement / retractation animes.
+                let st = STATE.with(|s| {
+                    let mut b = s.borrow_mut();
+                    b.morph.as_mut().map(|m| {
+                        let was = m.expanded;
+                        m.expanded = *expanded;
+                        (m.host.clone(), m.width.clone(), m.text.clone(), m.bar.clone(), m.extra.clone(), was, m.wide)
+                    })
+                });
+                let Some((host, width, text_label, bar, extra, was, wide)) = st else { return };
+                if *expanded {
+                    text_label.setStringValue(&NSString::from_str(text));
+                    let color = if *retry { NSColor::systemOrangeColor() } else { NSColor::labelColor() };
+                    text_label.setTextColor(Some(&color));
+                    bar.setDoubleValue(value.max(0.0));
+                }
+                // Largeur cible : le contenu + marges (ne retrecit pas pendant un
+                // meme deploiement, sinon la pilule « respire » a chaque seconde).
+                let need = (H - 2.0 + extra.fittingSize().width + 16.0).min(MAX).ceil();
+                let target = if *expanded { if was { need.max(wide) } else { need } } else { H };
+                STATE.with(|s| {
+                    if let Some(m) = s.borrow_mut().morph.as_mut() {
+                        m.wide = if *expanded { target } else { H };
+                    }
+                });
+                if was != *expanded || (*expanded && (target - width.constant()).abs() > 0.5) {
+                    let dur = if was != *expanded { 0.38 } else { 0.2 };
+                    NSAnimationContext::beginGrouping();
+                    let ctx = NSAnimationContext::currentContext();
+                    ctx.setDuration(dur);
+                    ctx.setAllowsImplicitAnimation(true);
+                    width.animator().setConstant(target);
+                    host.layoutSubtreeIfNeeded();
+                    if was != *expanded {
+                        extra.animator().setAlphaValue(if *expanded { 1.0 } else { 0.0 });
+                    }
+                    NSAnimationContext::endGrouping();
+                }
             }
             TbItem::Progress { id, text, value, visible } => {
                 // Pastille centrale : une capsule de verre a NOUS (l'element de

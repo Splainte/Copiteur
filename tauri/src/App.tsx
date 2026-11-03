@@ -30,7 +30,7 @@ import {
 import { FilePane } from "./FilePane";
 import { ServersDropdown } from "./ServersDropdown";
 import { SettingsDialog } from "./SettingsDialog";
-import { TransfersPanel, XferRing, XferStrip, isStalled, type Tab, type XferSummary } from "./TransfersPanel";
+import { TransfersPanel, XferStrip, isStalled, type Tab, type XferSummary } from "./TransfersPanel";
 import { JournalDialog } from "./JournalDialog";
 import { logEvent } from "./journal";
 import { useUpdater } from "./Updater";
@@ -43,8 +43,8 @@ import { Sidebar } from "./Sidebar";
 import {
   ConnectSheet,
   DebugMenu,
+  MorphButton,
   ProgLine,
-  ProgPill,
   ServerButton,
   TransferPill,
   ViewSwitch,
@@ -2150,6 +2150,7 @@ export default function App() {
     view,
     rappel,
     showRappel,
+    xferRetry: summary.state === "retry",
     handlers: {
       pick: (label) => {
         const s = servers.find((x) => x.label === label);
@@ -2245,19 +2246,13 @@ export default function App() {
         <div className="tb-band" data-tauri-drag-region>
           {isPreview && <ToolbarSim />}
           {showRappel && rappel === "fil" && <ProgLine summary={summary} />}
-          {layout === "bas" && (
-            <ProgPill summary={summary} visible={showRappel && rappel === "pastille"} onClick={toggleXfer} />
-          )}
         </div>
       ) : !isMac && layout !== "actuelle" ? (
         <WinTitleBar
           version={appVersion}
           line={showRappel && rappel === "fil" ? <ProgLine summary={summary} /> : null}
           center={
-            layout === "bas" ? (
-              // Toujours montee : elle apparait / disparait en fondu.
-              <ProgPill summary={summary} visible={showRappel && rappel === "pastille"} onClick={toggleXfer} />
-            ) : layout === "vue" ? (
+            layout === "vue" ? (
               <ViewSwitch
                 view={view}
                 onView={setView}
@@ -2281,29 +2276,21 @@ export default function App() {
           right={
             layout === "classique" ? null : familyOf(layout) === "ilots" && layout !== "ilots" ? (
               <>
-                {layout !== "vue" && (
-                  <button
-                    className={
-                      "w11-tool" +
-                      (xferShown ? " is-on" : "") +
-                      (showRappel && rappel === "bouton" ? " has-ring" : "")
-                    }
+                {layout === "bas" ? (
+                  <MorphButton
+                    expanded={showRappel}
+                    summary={summary}
+                    on={xferShown}
                     title={t(xferShown ? "design.xfer.hideAll" : "design.xfer.show")}
                     onClick={toggleXfer}
-                  >
-                    {showRappel && rappel === "bouton" ? (
-                      // Rappel « sur le bouton » : anneau de progression + pourcentage.
-                      <>
-                        <XferRing pct={summary.pct} size={24} state={summary.state} />
-                        <span className="w11-tool-pct">{summary.pct ?? 0} %</span>
-                      </>
-                    ) : (
-                      <span className="w11-glyph" aria-hidden>
-                        &#xE8CB;
-                      </span>
-                    )}
+                  />
+                ) : layout !== "vue" ? (
+                  <button className={"w11-tool" + (xferShown ? " is-on" : "")} title={t("design.xfer.button")} onClick={toggleXfer}>
+                    <span className="w11-glyph" aria-hidden>
+                      &#xE8CB;
+                    </span>
                   </button>
-                )}
+                ) : null}
                 <ServerButton
                   label={connected && currentServer ? currentServer.label : t("design.conn.pick")}
                   connected={connected}

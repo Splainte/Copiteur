@@ -45,7 +45,8 @@ export type TbItem =
   | { kind: "menu"; id: string; symbol: string; title: string; tip: string; entries: MenuEntry[] }
   | { kind: "field"; id: string; placeholder: string; value: string; secure: boolean; width: number }
   | { kind: "segment"; id: string; labels: string[]; selected: number }
-  | { kind: "progress"; id: string; text: string; value: number; visible: boolean };
+  | { kind: "progress"; id: string; text: string; value: number; visible: boolean }
+  | { kind: "morph"; id: string; symbol: string; label: string; text: string; value: number; expanded: boolean; retry: boolean };
 export type ToolbarSpec = { id: string; items: TbItem[]; centered: string[] };
 export type Region = { id: string; x: number; y: number; w: number; h: number; radius: number; anchor: string };
 export type Pill = { visible: boolean; title: string; sub: string; progress: number; open: boolean; width: number; bottom: number };
@@ -84,6 +85,7 @@ type Opts = {
   view: "files" | "transfers";
   rappel: Rappel;
   showRappel: boolean;
+  xferRetry: boolean;
   handlers: Handlers;
 };
 
@@ -207,10 +209,23 @@ function buildToolbar(o: Opts): ToolbarSpec | null {
                 { kind: "flex" },
               ] as TbItem[])
             : []),
-          button("transfers", "arrow.up.arrow.down", t("design.xfer.button"), {
-            badge: o.xferCount > 0 ? (o.xferPct !== null ? `${o.xferPct} %` : String(o.xferCount)) : "",
-            selected: o.xferOpen,
-          }),
+          // Bouton Transferts : rond, il s'etire en pilule de progression (vers
+          // la gauche) quand la zone est cachee et qu'une copie tourne.
+          o.layout === "bas"
+            ? {
+                kind: "morph",
+                id: "transfers",
+                symbol: "arrow.up.arrow.down",
+                label: t("design.xfer.button"),
+                text: o.showRappel ? o.xferSummary : "",
+                value: o.xferPct ?? 0,
+                expanded: o.showRappel,
+                retry: o.xferRetry,
+              }
+            : button("transfers", "arrow.up.arrow.down", t("design.xfer.button"), {
+                badge: o.xferCount > 0 ? (o.xferPct !== null ? `${o.xferPct} %` : String(o.xferCount)) : "",
+                selected: o.xferOpen,
+              }),
           { kind: "space" },
           server,
           journal,

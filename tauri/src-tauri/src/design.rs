@@ -124,6 +124,17 @@ pub enum TbItem {
         labels: Vec<String>,
         selected: i64,
     },
+    /// Bouton rond qui s'etire en pilule de progression (vers la gauche).
+    #[serde(rename_all = "camelCase")]
+    Morph {
+        id: String,
+        symbol: String,
+        label: String,
+        text: String,
+        value: f64,
+        expanded: bool,
+        retry: bool,
+    },
     #[serde(rename_all = "camelCase")]
     Progress {
         id: String,
@@ -142,7 +153,8 @@ impl TbItem {
             | TbItem::Menu { id, .. }
             | TbItem::Field { id, .. }
             | TbItem::Segment { id, .. }
-            | TbItem::Progress { id, .. } => Some(id),
+            | TbItem::Progress { id, .. }
+            | TbItem::Morph { id, .. } => Some(id),
             TbItem::Flex | TbItem::Space => None,
         }
     }

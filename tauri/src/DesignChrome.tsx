@@ -11,7 +11,7 @@
 //   - TransferPill    : la pastille flottante de l'habillage B (Windows, et
 //                       apercu navigateur ; macOS la dessine en verre natif).
 // ============================================================
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Server } from "./files";
@@ -432,6 +432,59 @@ export function ProgPill({
       <XferRing pct={s.pct} size={20} state={s.state} />
       <span className="prog-pill-pct">{s.pct ?? 0} %</span>
       <span className="prog-pill-meta">{s.line}</span>
+    </button>
+  );
+}
+
+// ---- Bouton Transferts qui s'etire en pilule de progression (Windows) ---------
+// Ancre a droite : il grandit vers la gauche. Le texte se devoile par sa largeur
+// maximale animee, l'icone laisse place a un anneau de progression.
+export function MorphButton({
+  expanded,
+  summary,
+  on,
+  title,
+  onClick,
+}: {
+  expanded: boolean;
+  summary: XferSummary;
+  on: boolean;
+  title: string;
+  onClick: () => void;
+}) {
+  useLang();
+  const last = useRef(summary);
+  if (expanded) last.current = summary;
+  const s = last.current;
+  // Largeur exacte du texte : la pilule s'etire jusqu'a elle (et pas jusqu'a
+  // un maximum arbitraire, ce qui faisait finir l'animation trop tot).
+  const inner = useRef<HTMLSpanElement>(null);
+  const [w, setW] = useState(0);
+  useLayoutEffect(() => {
+    const el = inner.current;
+    if (el) setW(Math.ceil(el.scrollWidth) + 12);
+  });
+  return (
+    <button
+      className={"morph-btn" + (expanded ? " is-expanded" : "") + (on ? " is-on" : "") + (s.state === "retry" ? " is-retry" : "")}
+      title={title}
+      onClick={onClick}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <span className="morph-icon">
+        <span className="w11-glyph morph-glyph" aria-hidden>
+          &#xE8CB;
+        </span>
+        <span className="morph-ring">
+          <XferRing pct={s.pct} size={22} state={s.state} />
+        </span>
+      </span>
+      <span className="morph-text" style={expanded ? { maxWidth: Math.min(w, 340) } : undefined}>
+        <span className="morph-inner" ref={inner}>
+          <span className="morph-pct">{s.pct ?? 0} %</span>
+          <span className="morph-meta">{s.line}</span>
+        </span>
+      </span>
     </button>
   );
 }
