@@ -1,0 +1,36 @@
+// Habillage de la fenetre : barre du haut (macOS native, Windows 11), menu des
+// serveurs, feuille de connexion, îlot des transferts. Cles « chrome. ».
+export default {
+  "chrome.conn.title": "Nouvelle connexion",
+  "chrome.conn.editTitle": "Modifier le serveur",
+  "chrome.conn.subtitle": "SFTP · le mot de passe est chiffré dans le trousseau du système",
+  "chrome.conn.pick": "Se connecter…",
+  "chrome.conn.connecting": "Connexion…",
+  "chrome.conn.saved": "Serveurs mémorisés",
+  "chrome.conn.none": "Aucun serveur mémorisé",
+  "chrome.conn.new": "Nouvelle connexion…",
+  "chrome.conn.edit": "Modifier…",
+  "chrome.conn.rename": "Renommer…",
+  "chrome.conn.forget": "Oublier ce serveur",
+  "chrome.conn.disconnect": "Se déconnecter",
+  "chrome.conn.busy": "Transferts en cours : la déconnexion attendra leur fin.",
+
+  "chrome.pane.yourMac": "Ton Mac",
+  "chrome.rename.title": "Renommer le serveur",
+  "chrome.rename.label": "Nouveau nom",
+
+  "chrome.tab.queue": "En cours",
+  "chrome.tab.done": "Terminés",
+  "chrome.tab.failed": "Échecs",
+  "chrome.tab.cancelled": "Annulés",
+  "chrome.tab.edition": "Édition",
+  "chrome.xfer.title": "Transferts",
+  "chrome.xfer.button": "Transferts",
+  "chrome.xfer.show": "Afficher les transferts",
+  "chrome.xfer.hideAll": "Masquer les transferts",
+  "chrome.xfer.collapse": "Replier",
+  "chrome.xfer.expand": "Déplier",
+  "chrome.xfer.idle": "Aucun transfert en cours",
+  "chrome.xfer.paused": "Interrompu · reprise automatique",
+  "chrome.xfer.remaining": "reste {size}",
+};

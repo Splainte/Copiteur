@@ -25,8 +25,4 @@ export default {
   "files.err.unreachable":
     "Server unreachable: check the address and port, and that the server is on and reachable.",
 
-  "files.servers.placeholder": "Saved servers…",
-  "files.servers.empty": "No saved servers",
-  "files.servers.rename": "Rename this server",
-  "files.servers.forget": "Forget this server",
 } satisfies Record<keyof typeof fr, string>;

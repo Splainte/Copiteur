@@ -102,6 +102,7 @@ export function FilePane({
   startAt,
   startDir,
   onSetStartDir,
+  rootLabel,
 }: {
   title: string;
   side: Side;
@@ -143,6 +144,8 @@ export function FilePane({
   // « Demarrer ici » / « Ne plus demarrer ici » du menu clic droit.
   startDir?: string;
   onSetStartDir?: (path: string) => void;
+  // Nom affiche pour la racine du fil d'Ariane (cf. breadcrumb).
+  rootLabel?: string;
 }) {
   const isLocal = side === "local";
   // Abonne le panneau au changement de langue (re-rendu dans la nouvelle langue).
@@ -268,7 +271,7 @@ export function FilePane({
   const crumbsMirrorRef = useRef<HTMLDivElement>(null);
   const [hiddenCrumbs, setHiddenCrumbs] = useState(0);
   const [crumbMenu, setCrumbMenu] = useState(false);
-  const crumbs = useMemo(() => breadcrumb(side, dir), [side, dir]);
+  const crumbs = useMemo(() => breadcrumb(side, dir, rootLabel), [side, dir, rootLabel]);
 
   // Largeur du volet de navigation (redimensionnable, memorisee).
   const [navW, setNavW] = useState<number>(
