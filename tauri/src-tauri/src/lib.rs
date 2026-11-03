@@ -1,6 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
 
+mod design;
+#[cfg(target_os = "macos")]
+mod design_mac;
 mod edits;
 mod engine;
 mod hostkeys;
@@ -200,6 +203,36 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     if let Ok(mut g) = slot.0.lock() {
         *g = Some(select_all);
     }
+    // BETA DESIGN : bascule d'habillage (cf. design.rs / src/design.ts).
+    let design_state = app.state::<design::DesignState>();
+    let current = design_state
+        .current
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    let mut design_items = Vec::new();
+    for (n, (id, fr, en)) in design::DESIGNS.into_iter().enumerate() {
+        design_items.push((
+            id.to_string(),
+            tauri::menu::CheckMenuItem::with_id(
+                app,
+                format!("{}{id}", design::MENU_PREFIX),
+                tr(fr, en),
+                true,
+                current == id,
+                // Cmd+Alt+1..4 : bascule directe, pour comparer d'un geste.
+                Some(format!("Cmd+Alt+{}", n + 1).as_str()),
+            )?,
+        ));
+    }
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = design_items
+        .iter()
+        .map(|(_, i)| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
+        .collect();
+    let design_menu = Submenu::with_items(app, tr("Design (bêta)", "Design (beta)"), true, &refs)?;
+    if let Ok(mut g) = design_state.items.lock() {
+        *g = design_items;
+    }
     let window_menu = Submenu::with_items(
         app,
         tr("Fenêtre", "Window"),
@@ -209,7 +242,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             &PredefinedMenuItem::fullscreen(app, Some(tr("Plein écran", "Enter Full Screen")))?,
         ],
     )?;
-    app.set_menu(Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu])?)?;
+    app.set_menu(Menu::with_items(app, &[&app_menu, &edit_menu, &design_menu, &window_menu])?)?;
     Ok(())
 }
 
@@ -228,7 +261,12 @@ pub fn run() {
         .manage(hostkeys::HostKeys::default())
         .manage(Busy::default())
         .manage(SelectAllItem::default())
+        .manage(design::DesignState::default())
         .setup(|app| {
+            // BETA DESIGN : la beta s'installe a cote de la version stable ; au
+            // premier lancement elle reprend ses serveurs memorises.
+            design::import_from_stable(app.handle());
+
             // macOS : menu custom (cf. `build_menu`), refait dans la bonne
             // langue des que le front l'annonce.
             #[cfg(target_os = "macos")]
@@ -323,6 +361,10 @@ pub fn run() {
             set_pane_active,
             i18n::set_language,
             i18n::installer_language,
+            design::design_apply,
+            design::design_toolbar_item,
+            design::design_glass,
+            design::design_pill,
         ])
         // Menu macOS. « Quitter » : s'il reste du travail, on ne quitte pas —
         // on demande au front la meme modale que pour Alt+F4. « Tout
@@ -338,7 +380,11 @@ pub fn run() {
             "select_all" => {
                 let _ = app.emit("copiteur://select-all", ());
             }
-            _ => {}
+            other => {
+                if let Some(d) = other.strip_prefix(design::MENU_PREFIX) {
+                    let _ = app.emit("copiteur://design", d.to_string());
+                }
+            }
         })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

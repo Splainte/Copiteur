@@ -38,6 +38,18 @@ import { getVersion } from "@tauri-apps/api/app";
 import { UiIcon } from "./icons";
 import { t, tn, tx, useLang } from "./i18n";
 import { FirstRunLanguage } from "./i18n/LanguagePicker";
+import { useDesign } from "./design";
+import { Sidebar } from "./Sidebar";
+import {
+  ConnectSheet,
+  DebugMenu,
+  ServerButton,
+  TransferPill,
+  WinTitleBar,
+  serverMenuEntries,
+} from "./DesignChrome";
+import { useMacChrome, ToolbarSim, isPreview } from "./macChrome";
+import "./design.css";
 
 const appWindow = getCurrentWindow();
 const isMac = navigator.userAgent.includes("Macintosh");
@@ -97,6 +109,14 @@ type HostKeyAsk = HostKeyStatus & { host: string; port: string };
 export default function App() {
   // Re-rend toute l'app dans la nouvelle langue quand elle change.
   const lang = useLang();
+  // BETA DESIGN : habillage courant (cf. design.ts) et etats propres aux
+  // habillages A / B / C (feuille de connexion, liste des transferts repliable,
+  // dossiers courants pour le volet lateral, renommage d'un serveur).
+  const layout = useDesign();
+  const [connectSheet, setConnectSheet] = useState(false);
+  const [xferOpen, setXferOpen] = useState(false);
+  const [dirs, setDirs] = useState<Record<Side, string>>({ local: "/", remote: "/" });
+  const [renameSrv, setRenameSrv] = useState<{ old: string; value: string } | null>(null);
   const [active, setActive] = useState<Side | null>("local");
   const [connected, setConnected] = useState(false);
   // Incremente a chaque connexion reussie. Sert de « jeton » au panneau distant :
@@ -189,8 +209,8 @@ export default function App() {
   // l'effet lie a `pending`), si bien que le lot suivant repart de zero.
   const batchAnchorRef = useRef(0);
   const panes = useRef<Record<Side, PaneBus>>({
-    local: { side: "local", dir: "/", selected: [], refresh: () => {}, clearSelection: () => {}, selectAll: () => {} },
-    remote: { side: "remote", dir: "/", selected: [], refresh: () => {}, clearSelection: () => {}, selectAll: () => {} },
+    local: { side: "local", dir: "/", selected: [], refresh: () => {}, clearSelection: () => {}, selectAll: () => {}, navigate: () => {} },
+    remote: { side: "remote", dir: "/", selected: [], refresh: () => {}, clearSelection: () => {}, selectAll: () => {}, navigate: () => {} },
   });
   const clipboard = useRef<Payload | null>(null);
   const busyRef = useRef(false);
@@ -761,6 +781,42 @@ export default function App() {
       })
       .catch(() => {});
   };
+
+  // BETA DESIGN : se deconnecter (volet lateral, menu serveur). Refuse tant que
+  // des transferts tournent : ils ont besoin de la connexion.
+  const disconnect = () => {
+    if (busyRef.current) {
+      setConnErr(t("design.conn.busy"));
+      return;
+    }
+    connSeq.current++;
+    setConnecting(false);
+    setConnected(false);
+    setRemoteKey(null);
+    setPins((p) => ({ ...p, remote: [] }));
+    setConnErr("");
+    rc("fs/cache/clear").catch(() => {});
+  };
+  // Ouvre la feuille « Nouvelle connexion » sur des champs vides.
+  const newConnection = () => {
+    setName("");
+    setHost("");
+    setUser("");
+    setPass("");
+    setPort("");
+    setConnErr("");
+    setConnectSheet(true);
+  };
+  // La feuille de connexion se referme d'elle-meme une fois connecte.
+  const sheetAttempt = useRef(false);
+  useEffect(() => {
+    if (!connectSheet) {
+      sheetAttempt.current = false;
+      return;
+    }
+    if (connecting) sheetAttempt.current = true;
+    else if (sheetAttempt.current && connected && !connErr) setConnectSheet(false);
+  }, [connectSheet, connecting, connected, connErr]);
 
   // Demande a l'utilisateur quoi faire pour un fichier deja present.
   const askConflict = (name: string) =>
@@ -1872,6 +1928,61 @@ export default function App() {
   );
   const allStalled =
     running.length > 0 && running.every((x) => isStalled(x, Date.now()));
+  // BETA DESIGN : habillages A et B — la liste des transferts se replie ; elle
+  // se deplie d'elle-meme quand un nouveau lot demarre.
+  const activeCount = queue.length + preparing;
+  const prevActive = useRef(0);
+  useEffect(() => {
+    if (activeCount > 0 && prevActive.current === 0) setXferOpen(true);
+    prevActive.current = activeCount;
+  }, [activeCount]);
+  const anyXfer = xfers.length > 0 || preparing > 0 || edits.length > 0;
+  // Resume court des transferts (barre d'outils, pastille, barre d'etat).
+  const xferSummary =
+    queue.length > 0
+      ? reconnecting || allStalled
+        ? t("design.xfer.paused")
+        : `${pct} % · ${t("common.perSecond", { size: humanSize(smoothSpeed) })}${etaText}`
+      : t("design.xfer.idle");
+  const currentServer = servers.find((x) => x.label === remoteKey);
+  const serverEntries = serverMenuEntries({
+    servers,
+    remoteKey,
+    connected,
+    onPick: (s) => pickServer(s),
+    onNew: newConnection,
+    onDisconnect: disconnect,
+  });
+  // macOS : barre d'outils, verre et pastille NATIFS (cf. design_mac.rs).
+  const tbH = useMacChrome({
+    layout,
+    appVersion,
+    servers,
+    remoteKey,
+    connected,
+    connecting,
+    fields: { host, user, pass, port },
+    xferCount: queue.length + preparing,
+    xferPct: queue.length > 0 ? pct : null,
+    xferSummary,
+    xferOpen,
+    anyXfer,
+    handlers: {
+      pick: (label) => {
+        const s = servers.find((x) => x.label === label);
+        if (s) pickServer(s);
+      },
+      newConnection,
+      disconnect,
+      toggleTransfers: () => setXferOpen((o) => !o),
+      journal: () => setShowJournal(true),
+      settings: () => setShowSettings(true),
+      field: (id, v) =>
+        id === "host" ? setHostField(v) : id === "user" ? setUserField(v) : id === "pass" ? setPassField(v) : setPortField(v),
+      connect: () => connect(),
+      rename: () => remoteKey && setRenameSrv({ old: remoteKey, value: remoteKey }),
+    },
+  });
   // Meme progression globale reportee sur l'icone de l'app : bouton de la barre
   // des taches sous Windows (comme une copie de l'Explorateur), icone du Dock
   // sous macOS. Jaune (« en pause ») quand la copie est figee ou reconnecte,
@@ -1932,32 +2043,89 @@ export default function App() {
     <div
       className="app"
       data-os={osName}
+      data-design={layout}
+      style={{ ["--tb-h" as string]: `${tbH}px` }}
       onContextMenu={(e) => {
         // Coupe le menu natif du navigateur partout, sauf dans les champs texte.
         if (!(e.target as HTMLElement).closest("input, textarea"))
           e.preventDefault();
       }}
     >
+      {isMac && layout !== "actuelle" ? (
+        // macOS, habillages A/B/C : la barre d'outils est NATIVE (dessinee par
+        // AppKit au-dessus de la webview). On ne fait que lui reserver sa
+        // hauteur ; l'apercu navigateur y dessine une imitation.
+        <div className="tb-band">{isPreview && <ToolbarSim />}</div>
+      ) : !isMac && layout !== "actuelle" ? (
+        <WinTitleBar
+          version={appVersion}
+          center={
+            layout === "ilots" ? (
+              <ServerButton
+                wide
+                label={connected && currentServer ? currentServer.label : t("design.conn.pick")}
+                sub={
+                  connected && currentServer
+                    ? `${currentServer.user}@${currentServer.host}`
+                    : t("design.conn.notConnected")
+                }
+                connected={connected}
+                connecting={connecting}
+                entries={serverEntries}
+              />
+            ) : null
+          }
+          right={
+            layout === "classique" ? null : (
+              <>
+                {layout === "volet" && (
+                  <button
+                    className={"w11-tool" + (xferOpen ? " is-on" : "")}
+                    title={t("design.xfer.button")}
+                    onClick={() => setXferOpen((o) => !o)}
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden>
+                      <path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    {queue.length + preparing > 0 && <span className="w11-badge">{queue.length + preparing}</span>}
+                  </button>
+                )}
+                <button className="w11-tool" title={t("app.conn.journalTitle")} onClick={() => setShowJournal(true)}>
+                  <UiIcon name="journal" />
+                </button>
+                <button className="w11-tool" title={t("app.conn.settings")} onClick={() => setShowSettings(true)}>
+                  <svg viewBox="0 0 16 16" aria-hidden>
+                    <path d="M8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM6.9 1.5h2.2l.4 1.8 1.2.7 1.8-.6 1.1 1.9-1.4 1.2v1.4l1.4 1.2-1.1 1.9-1.8-.6-1.2.7-.4 1.8H6.9l-.4-1.8-1.2-.7-1.8.6-1.1-1.9L3.8 8.7V7.3L2.4 6.1l1.1-1.9 1.8.6 1.2-.7z" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </>
+            )
+          }
+        />
+      ) : (
       <div className="titlebar" data-tauri-drag-region>
-        <span className="brandwrap">
-          <span className="brand">Copiteur</span>
-          <span className="version">{appVersion}</span>
-        </span>
-        {!isMac && (
-          <div className="win-buttons">
-            <button className="win-btn" onClick={() => appWindow.minimize()} aria-label={t("app.win.minimize")}>
-              &#xE921;
-            </button>
-            <button className="win-btn" onClick={() => appWindow.toggleMaximize()} aria-label={t("app.win.maximize")}>
-              &#xE922;
-            </button>
-            <button className="win-btn win-close" onClick={() => appWindow.close()} aria-label={t("app.win.close")}>
-              &#xE8BB;
-            </button>
-          </div>
-        )}
-      </div>
+          <span className="brandwrap">
+            <span className="brand">Copiteur</span>
+            <span className="version">{appVersion}</span>
+          </span>
+          {!isMac && <DebugMenu />}
+          {!isMac && (
+            <div className="win-buttons">
+              <button className="win-btn" onClick={() => appWindow.minimize()} aria-label={t("app.win.minimize")}>
+                &#xE921;
+              </button>
+              <button className="win-btn" onClick={() => appWindow.toggleMaximize()} aria-label={t("app.win.maximize")}>
+                &#xE922;
+              </button>
+              <button className="win-btn win-close" onClick={() => appWindow.close()} aria-label={t("app.win.close")}>
+                &#xE8BB;
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
+      {(layout === "actuelle" || (layout === "classique" && !isMac)) && (
       <div className="connect-bar" ref={connBarRef}>
         <input className="conn-field cname" placeholder={t("app.conn.name")} value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
         <input className="conn-field host" placeholder={t("app.conn.host")} value={host} onChange={(e) => setHostField(e.target.value)} spellCheck={false} />
@@ -1998,79 +2166,125 @@ export default function App() {
           &#x2699;
         </button>
       </div>
-
-      {connErr && <div className="conn-error">{connErr}</div>}
-
-      <main className="explorers">
-        <FilePane
-          title={t("common.yourPc")}
-          side="local"
-          enabled={true}
-          anyModal={anyModal}
-          active={active === "local"}
-          onFocus={() => focusPane("local")}
-          bus={panes.current.local}
-          onDropItems={startTransfers}
-          onCopy={doCopy}
-          onPaste={doPaste}
-          hasClipboard={clipboardReady}
-          busyRef={busyRef}
-          showHidden={settings.showHidden}
-          showNetworkDrives={settings.showNetworkDrives}
-          pins={pins.local}
-          onPin={(path, label) => pinFolder("local", path, label)}
-          onUnpin={(path) => unpinFolder("local", path)}
-          onReorderPin={(from, to, after) => reorderPins("local", from, to, after)}
-        />
-        <FilePane
-          title={t("common.server")}
-          side="remote"
-          enabled={connected}
-          anyModal={anyModal}
-          active={active === "remote"}
-          onFocus={() => focusPane("remote")}
-          bus={panes.current.remote}
-          onDropItems={startTransfers}
-          onCopy={doCopy}
-          onPaste={doPaste}
-          hasClipboard={clipboardReady}
-          busyRef={busyRef}
-          showHidden={settings.showHidden}
-          showNetworkDrives={settings.showNetworkDrives}
-          pins={pins.remote}
-          onPin={(path, label) => pinFolder("remote", path, label)}
-          onUnpin={(path) => unpinFolder("remote", path)}
-          onReorderPin={(from, to, after) => reorderPins("remote", from, to, after)}
-          onOpenRemote={openRemote}
-          connKey={connKey}
-          startAt={remoteStart}
-          startDir={servers.find((x) => x.label === remoteKey)?.startDir ?? ""}
-          onSetStartDir={setStartDir}
-        />
-      </main>
-
-      {(xfers.length > 0 || preparing > 0 || edits.length > 0) && (
-        <TransfersPanel
-          queue={queue}
-          done={done}
-          failed={failed}
-          cancelled={cancelled}
-          edits={edits}
-          tab={tab}
-          onTab={setTab}
-          preparing={preparing}
-          now={Date.now()}
-          settings={settings}
-          onCancel={cancelXfer}
-          onCancelAll={cancelAll}
-          onRetry={retryXfer}
-          onRetryFailed={retryFailed}
-          onRetryCancelled={retryCancelled}
-          onClear={clearTab}
-          onEditResend={resendEdit}
-          onEditStop={stopEdit}
-        />
       )}
+
+      {connErr && !connectSheet && <div className="conn-error">{connErr}</div>}
+
+      <div className="shell">
+        {layout === "volet" && (
+          <Sidebar
+            servers={servers}
+            remoteKey={remoteKey}
+            connected={connected}
+            connecting={connecting}
+            pinsLocal={pins.local}
+            pinsRemote={pins.remote}
+            startDir={currentServer?.startDir ?? ""}
+            localDir={dirs.local}
+            remoteDir={dirs.remote}
+            activeSide={active}
+            showNetworkDrives={settings.showNetworkDrives}
+            onConnect={(s) => pickServer(s)}
+            onNew={newConnection}
+            onDisconnect={disconnect}
+            onRename={(label) => setRenameSrv({ old: label, value: label })}
+            onForget={deleteServer}
+            onNavigate={(side, path) => {
+              focusPane(side);
+              panes.current[side].navigate(path);
+            }}
+            onUnpin={(side, path) => unpinFolder(side, path)}
+            onDropItems={(p, side, dir) => startTransfers(p, side, dir)}
+          />
+        )}
+        <main className="explorers">
+          <FilePane
+            title={isMac && layout !== "actuelle" ? t("design.pane.yourMac") : t("common.yourPc")}
+            side="local"
+            hideNav={layout === "volet"}
+            onDirChange={(d) => setDirs((x) => (x.local === d ? x : { ...x, local: d }))}
+            enabled={true}
+            anyModal={anyModal}
+            active={active === "local"}
+            onFocus={() => focusPane("local")}
+            bus={panes.current.local}
+            onDropItems={startTransfers}
+            onCopy={doCopy}
+            onPaste={doPaste}
+            hasClipboard={clipboardReady}
+            busyRef={busyRef}
+            showHidden={settings.showHidden}
+            showNetworkDrives={settings.showNetworkDrives}
+            pins={pins.local}
+            onPin={(path, label) => pinFolder("local", path, label)}
+            onUnpin={(path) => unpinFolder("local", path)}
+            onReorderPin={(from, to, after) => reorderPins("local", from, to, after)}
+          />
+          <FilePane
+            title={layout !== "actuelle" && connected && currentServer ? currentServer.label : t("common.server")}
+            side="remote"
+            hideNav={layout === "volet"}
+            onDirChange={(d) => setDirs((x) => (x.remote === d ? x : { ...x, remote: d }))}
+            enabled={connected}
+            anyModal={anyModal}
+            active={active === "remote"}
+            onFocus={() => focusPane("remote")}
+            bus={panes.current.remote}
+            onDropItems={startTransfers}
+            onCopy={doCopy}
+            onPaste={doPaste}
+            hasClipboard={clipboardReady}
+            busyRef={busyRef}
+            showHidden={settings.showHidden}
+            showNetworkDrives={settings.showNetworkDrives}
+            pins={pins.remote}
+            onPin={(path, label) => pinFolder("remote", path, label)}
+            onUnpin={(path) => unpinFolder("remote", path)}
+            onReorderPin={(from, to, after) => reorderPins("remote", from, to, after)}
+            onOpenRemote={openRemote}
+            connKey={connKey}
+            startAt={remoteStart}
+            startDir={servers.find((x) => x.label === remoteKey)?.startDir ?? ""}
+            onSetStartDir={setStartDir}
+          />
+        </main>
+        {(layout === "volet" || layout === "ilots"
+          ? xferOpen && (anyXfer || layout === "volet")
+          : anyXfer) && (
+          <div className="transfers-host">
+            <TransfersPanel
+              queue={queue}
+              done={done}
+              failed={failed}
+              cancelled={cancelled}
+              edits={edits}
+              tab={tab}
+              onTab={setTab}
+              preparing={preparing}
+              now={Date.now()}
+              settings={settings}
+              onCancel={cancelXfer}
+              onCancelAll={cancelAll}
+              onRetry={retryXfer}
+              onRetryFailed={retryFailed}
+              onRetryCancelled={retryCancelled}
+              onClear={clearTab}
+              onEditResend={resendEdit}
+              onEditStop={stopEdit}
+              onHide={layout === "volet" || layout === "ilots" ? () => setXferOpen(false) : undefined}
+            />
+          </div>
+        )}
+        {layout === "ilots" && anyXfer && (!isMac || isPreview) && (
+          <TransferPill
+            count={queue.length + preparing}
+            pct={queue.length > 0 ? pct : null}
+            text={xferSummary}
+            open={xferOpen}
+            onClick={() => setXferOpen((o) => !o)}
+          />
+        )}
+      </div>
 
       {showSettings && (
         <SettingsDialog
@@ -2391,56 +2605,115 @@ export default function App() {
         </div>
       )}
 
-      <footer className="transfer-bar">
-        {queue.length > 0 ? (
-          <>
-            <span className="xfer-progress">
-              <span
-                className={
-                  "xfer-progress-fill" +
-                  (reconnecting || allStalled ? " is-retry" : "")
-                }
-                style={{ width: `${pct}%` }}
+      {/* BETA DESIGN : feuille de connexion (A et B) et renommage d'un serveur. */}
+      {connectSheet && (
+        <ConnectSheet
+          name={name}
+          host={host}
+          user={user}
+          pass={pass}
+          port={port}
+          setName={setName}
+          setHost={setHostField}
+          setUser={setUserField}
+          setPass={setPassField}
+          setPort={setPortField}
+          connecting={connecting}
+          error={connErr}
+          onConnect={() => connect()}
+          onClose={() => setConnectSheet(false)}
+        />
+      )}
+      {renameSrv && (
+        <div className="modal-backdrop" onMouseDown={() => setRenameSrv(null)}>
+          <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-title">{t("design.rename.title")}</div>
+            <div className="modal-body">
+              <input
+                className="sheet-field sheet-rename"
+                autoFocus
+                aria-label={t("design.rename.label")}
+                value={renameSrv.value}
+                onChange={(e) => setRenameSrv({ ...renameSrv, value: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && renameSrv.value.trim()) {
+                    renameServer(renameSrv.old, renameSrv.value.trim());
+                    setRenameSrv(null);
+                  } else if (e.key === "Escape") setRenameSrv(null);
+                }}
               />
-            </span>
-            {reconnecting ? (
-              // Le lien est tombe : on le dit clairement, la file repart seule.
-              <span className="xfer-text is-retry">
-                {tn("app.bar.lost", queue.length, { size: humanSize(remaining) })}
+            </div>
+            <div className="modal-actions">
+              <button className="btn-ghost" onClick={() => setRenameSrv(null)}>
+                {t("common.cancel")}
+              </button>
+              <button
+                className="btn-accent"
+                disabled={!renameSrv.value.trim()}
+                onClick={() => {
+                  renameServer(renameSrv.old, renameSrv.value.trim());
+                  setRenameSrv(null);
+                }}
+              >
+                {t("common.rename")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(layout === "actuelle" || layout === "classique" || (layout === "volet" && !isMac)) && (
+        <footer className="transfer-bar">
+          {queue.length > 0 ? (
+            <>
+              <span className="xfer-progress">
+                <span
+                  className={
+                    "xfer-progress-fill" +
+                    (reconnecting || allStalled ? " is-retry" : "")
+                  }
+                  style={{ width: `${pct}%` }}
+                />
               </span>
-            ) : allStalled ? (
-              // Rien n'avance plus, mais on n'a pas encore la preuve d'une
-              // coupure : on decrit ce qu'on voit, sans rien conclure.
-              <span className="xfer-text is-retry">
-                {tn("app.bar.stalled", queue.length, { size: humanSize(remaining) })}
-              </span>
-            ) : (
-              <span className="xfer-text">
-                {tn("app.bar.progress", queue.length, {
-                  pct,
-                  size: humanSize(remaining),
-                  speed: t("common.perSecond", { size: humanSize(smoothSpeed) }),
-                })}
-                {etaText}
-              </span>
-            )}
-          </>
-        ) : errBanner ? (
-          <span className="xfer-err">{t("app.bar.error", { err: errBanner })}</span>
-        ) : (
-          <span>{t("app.bar.idle")}</span>
-        )}
-        <span
-          className="rclone-ver"
-          title={version ? `rclone ${version}` : undefined}
-        >
-          {!version
-            ? t("app.rclone.starting")
-            : /mt-sftp/i.test(version)
-              ? t("app.rclone.custom")
-              : `rclone ${version}`}
-        </span>
-      </footer>
+              {reconnecting ? (
+                // Le lien est tombe : on le dit clairement, la file repart seule.
+                <span className="xfer-text is-retry">
+                  {tn("app.bar.lost", queue.length, { size: humanSize(remaining) })}
+                </span>
+              ) : allStalled ? (
+                // Rien n'avance plus, mais on n'a pas encore la preuve d'une
+                // coupure : on decrit ce qu'on voit, sans rien conclure.
+                <span className="xfer-text is-retry">
+                  {tn("app.bar.stalled", queue.length, { size: humanSize(remaining) })}
+                </span>
+              ) : (
+                <span className="xfer-text">
+                  {tn("app.bar.progress", queue.length, {
+                    pct,
+                    size: humanSize(remaining),
+                    speed: t("common.perSecond", { size: humanSize(smoothSpeed) }),
+                  })}
+                  {etaText}
+                </span>
+              )}
+            </>
+          ) : errBanner ? (
+            <span className="xfer-err">{t("app.bar.error", { err: errBanner })}</span>
+          ) : (
+            <span>{t("app.bar.idle")}</span>
+          )}
+          <span
+            className="rclone-ver"
+            title={version ? `rclone ${version}` : undefined}
+          >
+            {!version
+              ? t("app.rclone.starting")
+              : /mt-sftp/i.test(version)
+                ? t("app.rclone.custom")
+                : `rclone ${version}`}
+          </span>
+        </footer>
+      )}
     </div>
   );
 }

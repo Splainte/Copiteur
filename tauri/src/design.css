@@ -1,0 +1,1948 @@
+/* ============================================================
+   Copiteur — BETA DESIGN : habillages A (volet), B (ilots), C (classique)
+   pour macOS 27 (Liquid Glass) et Windows 11 (Fluent 2).
+
+   Tout est range sous `.app[data-design=…]` : l'habillage « actuelle » ne
+   recoit AUCUNE regle d'ici (a part le conteneur .shell, neutre), il reste
+   pixel pour pixel celui de la 1.2.
+
+   Rappel du decor natif (cf. design_mac.rs) :
+   - macOS : barre d'outils NATIVE au-dessus de la page (la page lui reserve
+     `--tb-h`), verre natif SOUS la page la ou un element porte `data-glass`
+     (la page y reste transparente), pastille de B en verre natif AU-DESSUS.
+   - Windows : Mica natif derriere toute la fenetre (page transparente la ou
+     on veut le voir), tout le reste en HTML au gabarit Fluent 2.
+   ============================================================ */
+
+/* ---- Conteneur commun ----------------------------------------------------- */
+.shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.app[data-design="actuelle"] .transfers-host {
+  display: contents;
+}
+.tb-band {
+  flex: 0 0 var(--tb-h, 52px);
+  height: var(--tb-h, 52px);
+  position: relative;
+}
+
+/* ============================================================
+   JETONS macOS 27
+   ============================================================ */
+.app[data-os="macos"]:not([data-design="actuelle"]) {
+  --m-window: #ffffff;
+  --m-content: #ffffff;
+  --m-text: rgba(0, 0, 0, 0.85);
+  --m-text-2: rgba(0, 0, 0, 0.5);
+  --m-text-3: rgba(0, 0, 0, 0.26);
+  --m-sep: rgba(0, 0, 0, 0.09);
+  --m-sep-strong: rgba(0, 0, 0, 0.16);
+  --m-hover: rgba(0, 0, 0, 0.045);
+  --m-stripe: rgba(0, 0, 0, 0.026);
+  --m-sel: var(--cp-accent);
+  --m-sel-text: var(--cp-accent-text);
+  --m-sel-inactive: rgba(0, 0, 0, 0.085);
+  --m-field: rgba(0, 0, 0, 0.045);
+  --m-field-hover: rgba(0, 0, 0, 0.065);
+  --m-control: rgba(255, 255, 255, 0.9);
+  --m-control-stroke: rgba(0, 0, 0, 0.1);
+  --m-side-sel: rgba(0, 0, 0, 0.085);
+  --m-side-text: rgba(0, 0, 0, 0.82);
+  --m-card: #ffffff;
+  --m-menu: rgba(246, 246, 248, 0.98);
+  --m-shadow-card: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.05), 0 10px 30px -10px rgba(0, 0, 0, 0.12);
+  --m-shadow-pop: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 12px 40px rgba(0, 0, 0, 0.2);
+
+  /* Les composants existants lisent les --cp-* : on les recale sur la charte. */
+  --cp-text: var(--m-text);
+  --cp-text-muted: var(--m-text-2);
+  --cp-stroke: var(--m-sep);
+  --cp-stroke-strong: var(--m-sep-strong);
+  --cp-control: var(--m-field);
+  --cp-control-hover: var(--m-hover);
+  --cp-control-active: rgba(0, 0, 0, 0.1);
+  --cp-field: var(--m-field);
+  --cp-field-hover: var(--m-field-hover);
+  --cp-surface: var(--m-content);
+  --cp-menu-bg: var(--m-menu);
+  --cp-menu-stroke: rgba(0, 0, 0, 0.08);
+  --cp-menu-shadow: var(--m-shadow-pop);
+  --cp-radius: 8px;
+
+  color: var(--m-text);
+  font-size: 13px;
+  letter-spacing: -0.005em;
+}
+@media (prefers-color-scheme: dark) {
+  .app[data-os="macos"]:not([data-design="actuelle"]) {
+    --m-window: #1f1f21;
+    --m-content: #1f1f21;
+    --m-text: rgba(255, 255, 255, 0.88);
+    --m-text-2: rgba(255, 255, 255, 0.55);
+    --m-text-3: rgba(255, 255, 255, 0.25);
+    --m-sep: rgba(255, 255, 255, 0.09);
+    --m-sep-strong: rgba(255, 255, 255, 0.18);
+    --m-hover: rgba(255, 255, 255, 0.05);
+    --m-stripe: rgba(255, 255, 255, 0.028);
+    --m-sel-inactive: rgba(255, 255, 255, 0.11);
+    --m-field: rgba(255, 255, 255, 0.07);
+    --m-field-hover: rgba(255, 255, 255, 0.1);
+    --m-control: rgba(255, 255, 255, 0.1);
+    --m-control-stroke: rgba(255, 255, 255, 0.08);
+    --m-side-sel: rgba(255, 255, 255, 0.11);
+    --m-side-text: rgba(255, 255, 255, 0.86);
+    --m-card: #262628;
+    --m-menu: rgba(40, 40, 43, 0.98);
+    --m-shadow-card: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -10px rgba(0, 0, 0, 0.55);
+    --m-shadow-pop: 0 0 0 0.5px rgba(255, 255, 255, 0.1), 0 14px 44px rgba(0, 0, 0, 0.55);
+    --cp-control-active: rgba(255, 255, 255, 0.14);
+    --cp-menu-stroke: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* ---- macOS : en-tete de panneau (barre de chemin) ------------------------- */
+.app[data-os="macos"]:not([data-design="actuelle"]) .explorer-head {
+  height: 40px;
+  padding: 0 10px 0 12px;
+  gap: 4px;
+  border-bottom: 1px solid var(--m-sep);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .explorer-title {
+  font-weight: 650;
+  font-size: 13px;
+  margin-right: 4px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .explorer:not(.is-active) .explorer-title {
+  color: var(--m-text-2);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .nav-btn,
+.app[data-os="macos"]:not([data-design="actuelle"]) .view-btn {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--m-text-2);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .nav-btn:hover:not(:disabled),
+.app[data-os="macos"]:not([data-design="actuelle"]) .view-btn:hover {
+  background: var(--m-hover);
+  color: var(--m-text);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .nav-btn:disabled {
+  opacity: 0.4;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .view-btns {
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--m-field);
+  gap: 0;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .view-btn {
+  width: 30px;
+  height: 24px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .view-btn.on {
+  background: var(--m-control);
+  border: 0;
+  color: var(--m-text);
+  box-shadow: 0 0 0 0.5px var(--m-control-stroke), 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .nav-btn.on {
+  background: color-mix(in srgb, var(--cp-accent) 18%, transparent);
+  color: var(--cp-accent);
+  border: 0;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .crumbs,
+.app[data-os="macos"]:not([data-design="actuelle"]) .url-bar,
+.app[data-os="macos"]:not([data-design="actuelle"]) .search-bar {
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--m-field);
+  padding-left: 10px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .crumbs-mirror {
+  background: transparent;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .url-bar:focus,
+.app[data-os="macos"]:not([data-design="actuelle"]) .search-bar:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cp-accent) 40%, transparent);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .crumb {
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .crumbs > .crumb-wrap:last-child .crumb {
+  font-weight: 600;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .crumb-sep {
+  color: var(--m-text-3);
+}
+
+/* ---- macOS : liste de fichiers ------------------------------------------- */
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-head {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--m-text-2);
+  border-bottom: 1px solid var(--m-sep);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .fh-cell {
+  padding: 6px 10px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .fh-cell + .fh-cell::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 1px;
+  background: var(--m-sep);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table {
+  font-size: 13px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table td {
+  height: 26px;
+  padding: 0 10px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table tbody tr:nth-child(even) td {
+  background: var(--m-stripe);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table tbody tr:hover {
+  background: transparent;
+}
+/* Selection facon Finder : pilule pleine largeur aux bouts arrondis, couleur
+   d'accent dans le panneau actif, gris dans l'autre (comme une liste qui n'a
+   pas le focus). */
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table tbody tr.row-selected td {
+  background: var(--m-sel);
+  color: var(--m-sel-text);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table tbody tr.row-selected td:first-child {
+  border-radius: 7px 0 0 7px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table tbody tr.row-selected td:last-child {
+  border-radius: 0 7px 7px 0;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .explorer:not(.is-active) .files-table tbody tr.row-selected td {
+  background: var(--m-sel-inactive);
+  color: var(--m-text);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table tbody tr.row-selected .c-date,
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table tbody tr.row-selected .c-type,
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table tbody tr.row-selected .c-size {
+  color: color-mix(in srgb, var(--m-sel-text) 82%, transparent);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .explorer:not(.is-active) .files-table tbody tr.row-selected .c-date,
+.app[data-os="macos"]:not([data-design="actuelle"]) .explorer:not(.is-active) .files-table tbody tr.row-selected .c-type,
+.app[data-os="macos"]:not([data-design="actuelle"]) .explorer:not(.is-active) .files-table tbody tr.row-selected .c-size {
+  color: var(--m-text-2);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-table tbody tr.row-selected {
+  background: transparent;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-table tbody tr.row-selected {
+  background: transparent;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-scroll {
+  padding: 4px 6px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .cell-icon {
+  width: 17px;
+  height: 17px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .tile {
+  border-radius: 10px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .tile.tile-selected {
+  background: var(--m-sel-inactive);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .explorer.is-active .tile.tile-selected .tile-name {
+  background: var(--m-sel);
+  color: var(--m-sel-text);
+  border-radius: 5px;
+  padding: 0 4px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .files-empty {
+  padding-top: 40px;
+  font-size: 13px;
+  color: var(--m-text-3);
+}
+
+/* ---- macOS : arbre de navigation (B et C) -------------------------------- */
+.app[data-os="macos"]:not([data-design="actuelle"]) .nav-pane {
+  font-size: 13px;
+  border-right: 1px solid var(--m-sep);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .tree-section-title {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--m-text-2);
+  padding: 6px 10px 4px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .tree-row {
+  height: 26px;
+  border-radius: 7px;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .tree-row.is-current {
+  background: var(--m-side-sel);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .nav-status,
+.app[data-os="macos"]:not([data-design="actuelle"]) .pane-status {
+  border-top: 1px solid var(--m-sep);
+  font-size: 11px;
+  color: var(--m-text-2);
+}
+
+/* ---- macOS : menus HTML restants (menu contextuel des fichiers…) ---------- */
+.app[data-os="macos"]:not([data-design="actuelle"]) .ctx-menu,
+.app[data-os="macos"]:not([data-design="actuelle"]) .crumb-menu,
+.app[data-os="macos"]:not([data-design="actuelle"]) .flyout {
+  border-radius: 12px;
+  padding: 5px;
+  -webkit-backdrop-filter: blur(30px) saturate(1.8);
+  backdrop-filter: blur(30px) saturate(1.8);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .ctx-item {
+  border-radius: 7px;
+  padding: 4px 10px;
+}
+
+/* ---- macOS : feuilles (modales) ------------------------------------------ */
+.app[data-os="macos"]:not([data-design="actuelle"]) .modal {
+  border-radius: 22px;
+  padding: 20px 22px 18px;
+  border: 0;
+  box-shadow: var(--m-shadow-pop);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .btn-ghost,
+.app[data-os="macos"]:not([data-design="actuelle"]) .btn-accent {
+  height: 30px;
+  border-radius: 999px;
+  padding: 0 18px;
+  font-weight: 500;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .btn-ghost {
+  border: 0;
+  background: var(--m-field);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .modal-backdrop {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+/* ---- macOS : panneau des transferts -------------------------------------- */
+.app[data-os="macos"]:not([data-design="actuelle"]) .tab-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .tab-btn.is-active {
+  background: var(--m-field);
+  color: var(--m-text);
+}
+.app[data-os="macos"]:not([data-design="actuelle"]) .transfers-tabs {
+  gap: 2px;
+}
+
+/* ============================================================
+   JETONS Windows 11 (Fluent 2, d'apres Robloader)
+   ============================================================ */
+.app[data-os="windows"]:not([data-design="actuelle"]),
+.app[data-os="linux"]:not([data-design="actuelle"]) {
+  --w-accent: var(--cp-accent);
+  --w-accent-hover: color-mix(in srgb, var(--cp-accent) 90%, #fff);
+  --w-accent-text: var(--cp-accent-text);
+  --w-layer: rgba(255, 255, 255, 0.5);
+  --w-layer-stroke: rgba(0, 0, 0, 0.06);
+  --w-card: rgba(255, 255, 255, 0.72);
+  --w-card-solid: #fbfbfb;
+  --w-card-stroke: rgba(0, 0, 0, 0.07);
+  --w-text: #1a1a1a;
+  --w-text-2: #5d5d5d;
+  --w-text-3: #8a8a8a;
+  --w-control: rgba(255, 255, 255, 0.7);
+  --w-control-hover: rgba(249, 249, 249, 0.5);
+  --w-control-stroke: rgba(0, 0, 0, 0.06);
+  --w-control-stroke-bottom: rgba(0, 0, 0, 0.16);
+  --w-subtle-hover: rgba(0, 0, 0, 0.04);
+  --w-subtle-press: rgba(0, 0, 0, 0.025);
+  --w-sel: color-mix(in srgb, var(--cp-accent) 14%, rgba(255, 255, 255, 0.4));
+  --w-sel-hover: color-mix(in srgb, var(--cp-accent) 20%, rgba(255, 255, 255, 0.4));
+  --w-divider: rgba(0, 0, 0, 0.08);
+  --w-menu: #f9f9f9;
+  --w-menu-stroke: rgba(0, 0, 0, 0.1);
+  --w-flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.14);
+  --w-ring-track: rgba(0, 0, 0, 0.1);
+
+  --cp-text: var(--w-text);
+  --cp-text-muted: var(--w-text-2);
+  --cp-stroke: var(--w-divider);
+  --cp-stroke-strong: rgba(0, 0, 0, 0.22);
+  --cp-control: var(--w-control);
+  --cp-control-hover: var(--w-subtle-hover);
+  --cp-control-active: rgba(0, 0, 0, 0.08);
+  --cp-field: var(--w-control);
+  --cp-field-hover: var(--w-control-hover);
+  --cp-surface: transparent;
+  --cp-menu-bg: var(--w-menu);
+  --cp-menu-stroke: var(--w-menu-stroke);
+  --cp-menu-shadow: var(--w-flyout-shadow);
+  --cp-radius: 4px;
+
+  color: var(--w-text);
+  font-size: 13px;
+}
+@media (prefers-color-scheme: dark) {
+  .app[data-os="windows"]:not([data-design="actuelle"]),
+  .app[data-os="linux"]:not([data-design="actuelle"]) {
+    --w-accent: color-mix(in srgb, var(--cp-accent) 55%, #fff);
+    --w-accent-hover: color-mix(in srgb, var(--cp-accent) 65%, #fff);
+    --w-accent-text: #000;
+    --w-layer: rgba(58, 58, 58, 0.3);
+    --w-layer-stroke: rgba(255, 255, 255, 0.06);
+    --w-card: rgba(255, 255, 255, 0.05);
+    --w-card-solid: #2b2b2b;
+    --w-card-stroke: rgba(0, 0, 0, 0.18);
+    --w-text: #ffffff;
+    --w-text-2: #c5c5c5;
+    --w-text-3: #9a9a9a;
+    --w-control: rgba(255, 255, 255, 0.06);
+    --w-control-hover: rgba(255, 255, 255, 0.08);
+    --w-control-stroke: rgba(255, 255, 255, 0.07);
+    --w-control-stroke-bottom: rgba(255, 255, 255, 0.03);
+    --w-subtle-hover: rgba(255, 255, 255, 0.06);
+    --w-subtle-press: rgba(255, 255, 255, 0.04);
+    --w-sel: color-mix(in srgb, var(--cp-accent) 22%, rgba(255, 255, 255, 0.04));
+    --w-sel-hover: color-mix(in srgb, var(--cp-accent) 28%, rgba(255, 255, 255, 0.04));
+    --w-divider: rgba(255, 255, 255, 0.08);
+    --w-menu: #2c2c2c;
+    --w-menu-stroke: rgba(0, 0, 0, 0.35);
+    --w-flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+    --w-ring-track: rgba(255, 255, 255, 0.12);
+    --cp-stroke-strong: rgba(255, 255, 255, 0.3);
+    --cp-control-active: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* ---- Windows : barre de titre 48 px -------------------------------------- */
+.w11-titlebar {
+  flex: 0 0 48px;
+  height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  position: relative;
+  z-index: 5;
+}
+.w11-app {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 16px;
+  min-width: 0;
+  height: 100%;
+}
+.w11-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+.w11-name {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.w11-ver {
+  font-size: 12px;
+  color: var(--w-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.w11-center {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
+}
+.w11-right {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 2px;
+}
+.w11-right > .w11-tool,
+.w11-right > .debug-wrap {
+  margin-top: 8px;
+}
+.w11-tool {
+  position: relative;
+  width: 36px;
+  height: 32px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--w-text);
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+.w11-tool svg,
+.w11-tool .uicon {
+  width: 16px;
+  height: 16px;
+}
+.w11-tool:hover {
+  background: var(--w-subtle-hover);
+}
+.w11-tool.is-on {
+  background: var(--w-subtle-hover);
+}
+.w11-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--w-accent);
+  color: var(--w-accent-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+}
+.w11-caption {
+  display: flex;
+  margin-left: 6px;
+}
+.w11-caption button {
+  width: 46px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--w-text);
+  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
+  font-size: 10px;
+  cursor: default;
+}
+.w11-caption button:hover {
+  background: var(--w-subtle-hover);
+}
+.w11-caption .w11-close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+/* ---- Menu Debug (Windows) ------------------------------------------------- */
+.debug-wrap {
+  position: relative;
+}
+.titlebar .debug-wrap {
+  margin-left: auto;
+  margin-right: 6px;
+}
+.titlebar .debug-wrap + .win-buttons {
+  margin-left: 0;
+}
+.debug-btn {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--cp-accent) 60%, transparent);
+  background: color-mix(in srgb, var(--cp-accent) 10%, transparent);
+  color: var(--cp-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+}
+.debug-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.debug-btn:hover,
+.debug-btn.is-open {
+  background: color-mix(in srgb, var(--cp-accent) 18%, transparent);
+}
+.debug-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 200;
+  width: 330px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--cp-menu-stroke);
+  background: var(--cp-menu-bg);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.14);
+  animation: flyout-in 0.16s cubic-bezier(0, 0, 0, 1);
+}
+@keyframes flyout-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+.debug-head {
+  padding: 8px 12px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cp-text-muted);
+}
+.debug-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--cp-text);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+.debug-item:hover {
+  background: var(--cp-control-hover);
+}
+.debug-check {
+  width: 16px;
+  flex: 0 0 auto;
+  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets", sans-serif;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--cp-accent);
+}
+.debug-texts {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.debug-name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+}
+.debug-key {
+  float: right;
+  margin-left: 12px;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--cp-text-muted);
+}
+.debug-hint {
+  font-size: 12px;
+  color: var(--cp-text-muted);
+  line-height: 16px;
+}
+
+/* ---- Windows : controles Fluent ------------------------------------------- */
+.app[data-os="windows"]:not([data-design="actuelle"]) .btn-ghost,
+.app[data-os="windows"]:not([data-design="actuelle"]) .btn-accent {
+  height: 32px;
+  border-radius: 4px;
+  font-weight: 400;
+  padding: 0 14px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .btn-ghost {
+  background: var(--w-control);
+  border: 1px solid var(--w-control-stroke);
+  border-bottom-color: var(--w-control-stroke-bottom);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .btn-accent {
+  background: var(--w-accent);
+  color: var(--w-accent-text);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom-color: rgba(0, 0, 0, 0.4);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .modal {
+  border-radius: 8px;
+  padding: 24px;
+  background: var(--w-card-solid);
+  border: 1px solid var(--w-menu-stroke);
+  box-shadow: 0 32px 64px rgba(0, 0, 0, 0.28), 0 2px 21px rgba(0, 0, 0, 0.22);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .modal-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .modal-actions {
+  margin: 20px -24px -24px;
+  padding: 24px;
+  background: color-mix(in srgb, var(--w-card-solid) 70%, var(--w-subtle-hover));
+  border-top: 1px solid var(--w-divider);
+  border-radius: 0 0 8px 8px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .modal-actions .modal-actions {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .modal-actions:not(.modal-actions-split) > * {
+  flex: 1 1 0;
+}
+
+.app[data-os="windows"]:not([data-design="actuelle"]) .link-btn {
+  color: var(--w-accent);
+}
+
+/* ---- Windows : en-tete de panneau ----------------------------------------- */
+.app[data-os="windows"]:not([data-design="actuelle"]) .explorer-head {
+  height: 44px;
+  padding: 0 8px 0 12px;
+  gap: 4px;
+  border-bottom: 1px solid var(--w-divider);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .explorer-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-right: 6px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .nav-btn,
+.app[data-os="windows"]:not([data-design="actuelle"]) .view-btn {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 4px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .nav-btn .uicon,
+.app[data-os="windows"]:not([data-design="actuelle"]) .view-btn .uicon {
+  width: 14px;
+  height: 14px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .nav-btn:hover:not(:disabled),
+.app[data-os="windows"]:not([data-design="actuelle"]) .view-btn:hover {
+  background: var(--w-subtle-hover);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .view-btn.on,
+.app[data-os="windows"]:not([data-design="actuelle"]) .nav-btn.on {
+  background: var(--w-subtle-hover);
+  border: 0;
+  box-shadow: inset 0 -2px 0 var(--w-accent);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .crumbs,
+.app[data-os="windows"]:not([data-design="actuelle"]) .url-bar,
+.app[data-os="windows"]:not([data-design="actuelle"]) .search-bar {
+  height: 32px;
+  border-radius: 4px;
+  background: var(--w-control);
+  border: 1px solid var(--w-control-stroke);
+  border-bottom-color: var(--w-control-stroke-bottom);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .url-bar:focus,
+.app[data-os="windows"]:not([data-design="actuelle"]) .search-bar:focus {
+  border-color: var(--w-control-stroke);
+  box-shadow: inset 0 -2px 0 var(--w-accent);
+  background: var(--w-card-solid);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .crumbs-mirror {
+  border-color: transparent;
+  background: transparent;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .crumb {
+  padding: 3px 6px;
+}
+
+/* ---- Windows : liste de fichiers (Details de l'Explorateur) --------------- */
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-head {
+  font-size: 12px;
+  color: var(--w-text-2);
+  border-bottom: 1px solid var(--w-divider);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .fh-cell {
+  padding: 7px 10px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .fh-cell:hover {
+  background: var(--w-subtle-hover);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-table {
+  font-size: 13px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-table td {
+  height: 32px;
+  padding: 0 10px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-scroll {
+  padding: 2px 4px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-table tbody tr:hover td {
+  background: var(--w-subtle-hover);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-table tbody tr:hover {
+  background: transparent;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-table tbody tr.row-selected td {
+  background: var(--w-sel);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-table tbody tr.row-selected:hover td {
+  background: var(--w-sel-hover);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-table tbody tr td:first-child {
+  border-radius: 4px 0 0 4px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-table tbody tr td:last-child {
+  border-radius: 0 4px 4px 0;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .explorer:not(.is-active) .files-table tbody tr.row-selected td {
+  background: var(--w-subtle-hover);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .cell-icon {
+  width: 18px;
+  height: 18px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .tile.tile-selected {
+  background: var(--w-sel);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .tile {
+  border-radius: 4px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .files-empty {
+  padding-top: 40px;
+  color: var(--w-text-3);
+}
+
+/* ---- Windows : arbre (B et C) ------------------------------------------- */
+.app[data-os="windows"]:not([data-design="actuelle"]) .nav-pane {
+  font-size: 13px;
+  border-right: 1px solid var(--w-divider);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .tree-section-title {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--w-text-2);
+  padding: 8px 12px 4px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .tree-row {
+  height: 32px;
+  border-radius: 4px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .tree-row.is-current {
+  background: var(--w-subtle-hover);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .tree-row.is-current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  margin-top: -8px;
+  border-radius: 2px;
+  background: var(--w-accent);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .nav-status,
+.app[data-os="windows"]:not([data-design="actuelle"]) .pane-status {
+  font-size: 12px;
+  color: var(--w-text-2);
+  border-top: 1px solid var(--w-divider);
+}
+
+/* ---- Windows : menus ------------------------------------------------------ */
+.app[data-os="windows"]:not([data-design="actuelle"]) .ctx-menu,
+.app[data-os="windows"]:not([data-design="actuelle"]) .crumb-menu,
+.flyout {
+  border-radius: 8px;
+  padding: 4px;
+  border: 1px solid var(--cp-menu-stroke);
+  background: var(--cp-menu-bg);
+  box-shadow: var(--cp-menu-shadow);
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .ctx-item {
+  border-radius: 4px;
+  padding: 7px 12px;
+}
+.app[data-os="windows"]:not([data-design="actuelle"]) .ctx-item:hover:not(:disabled) {
+  background: var(--w-subtle-hover);
+  color: var(--w-text);
+}
+
+/* ---- Flyout generique (menus HTML : serveur, volet) ----------------------- */
+.flyout {
+  position: fixed;
+  z-index: 220;
+  min-width: 220px;
+  max-width: 320px;
+  animation: flyout-in 0.16s cubic-bezier(0, 0, 0, 1);
+}
+.flyout-item {
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--cp-text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+.flyout-item:hover:not(:disabled) {
+  background: var(--cp-control-hover);
+}
+.flyout-item:disabled {
+  opacity: 0.4;
+}
+.flyout-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--cp-stroke);
+}
+
+/* ---- Bouton serveur (Windows : barre de titre de B) ----------------------- */
+.server-btn {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 0 12px;
+  border-radius: 4px;
+  border: 1px solid var(--w-control-stroke);
+  border-bottom-color: var(--w-control-stroke-bottom);
+  background: var(--w-control);
+  color: var(--cp-text);
+  font: inherit;
+  cursor: default;
+  min-width: 0;
+}
+.server-btn.is-wide {
+  width: clamp(280px, 34vw, 460px);
+}
+.server-btn:hover {
+  background: var(--w-control-hover);
+}
+.server-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cp-text-muted);
+  opacity: 0.5;
+  flex: 0 0 auto;
+}
+.server-dot.is-on {
+  background: #3fb950;
+  opacity: 1;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #3fb950 22%, transparent);
+}
+.server-dot.is-busy {
+  background: var(--cp-accent);
+  opacity: 1;
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.server-texts {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.server-label {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.server-sub {
+  font-size: 12px;
+  color: var(--cp-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.server-caret {
+  width: 12px;
+  height: 12px;
+  margin-left: auto;
+  color: var(--cp-text-muted);
+  flex: 0 0 auto;
+}
+
+/* ---- Feuille « Nouvelle connexion » --------------------------------------- */
+.sheet-connect {
+  width: min(460px, 92vw);
+}
+.sheet-head {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+.sheet-head .modal-title {
+  margin: 0;
+}
+.sheet-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--cp-accent) 16%, transparent);
+  color: var(--cp-accent);
+  flex: 0 0 auto;
+}
+.sheet-icon svg {
+  width: 22px;
+  height: 22px;
+}
+.sheet-sub {
+  font-size: 12px;
+  color: var(--cp-text-muted);
+  margin-top: 2px;
+}
+.sheet-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 9px 12px;
+  align-items: center;
+}
+.sheet-label {
+  text-align: right;
+  color: var(--cp-text-muted);
+  font-size: 13px;
+}
+.sheet-field {
+  height: 30px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--cp-stroke);
+  border-radius: 7px;
+  background: var(--cp-field);
+  color: var(--cp-text);
+  font: inherit;
+  outline: none;
+}
+.sheet-field:focus {
+  border-color: var(--cp-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cp-accent) 35%, transparent);
+}
+.sheet-port {
+  width: 80px;
+}
+.sheet-rename {
+  width: 100%;
+}
+.sheet-error {
+  margin-top: 14px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--cp-err) 14%, transparent);
+  color: var(--cp-err);
+  font-size: 12px;
+}
+.sheet-connect .modal-actions {
+  margin-top: 20px;
+}
+.app[data-os="macos"] .sheet-field {
+  border: 0;
+  background: var(--m-field, var(--cp-field));
+  border-radius: 8px;
+}
+.app[data-os="windows"] .sheet-field {
+  border-radius: 4px;
+  border: 1px solid var(--w-control-stroke, var(--cp-stroke));
+  border-bottom-color: var(--w-control-stroke-bottom, var(--cp-stroke));
+  background: var(--w-control, var(--cp-field));
+  height: 32px;
+}
+.app[data-os="windows"] .sheet-field:focus {
+  box-shadow: inset 0 -2px 0 var(--w-accent, var(--cp-accent));
+  border-color: var(--w-control-stroke, var(--cp-stroke));
+}
+.app[data-os="windows"] .sheet-icon {
+  border-radius: 8px;
+}
+
+/* ============================================================
+   A · VOLET
+   ============================================================ */
+.app[data-design="volet"] {
+  display: grid;
+  grid-template-columns: 268px minmax(0, 1fr);
+  grid-template-rows: var(--tb-h, 52px) auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "side tb"
+    "side err"
+    "side main"
+    "side xfer"
+    "side foot";
+}
+.app[data-design="volet"] .shell {
+  display: contents;
+}
+.app[data-design="volet"] > .tb-band,
+.app[data-design="volet"] > .w11-titlebar {
+  grid-area: tb;
+}
+.app[data-design="volet"] > .conn-error {
+  grid-area: err;
+  margin: 0 12px 8px;
+  position: relative;
+  z-index: 2;
+}
+.app[data-design="volet"] .sidebar {
+  grid-area: side;
+}
+.app[data-design="volet"] .explorers {
+  grid-area: main;
+}
+.app[data-design="volet"] .transfers-host {
+  grid-area: xfer;
+}
+.app[data-design="volet"] > .transfer-bar {
+  grid-area: foot;
+}
+
+/* Le volet lui-meme */
+.sidebar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  user-select: none;
+}
+.sidebar-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.side-section {
+  margin-bottom: 10px;
+}
+.side-section-title {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--cp-text-muted);
+  padding: 6px 10px 3px;
+}
+.side-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 8px;
+  cursor: default;
+  white-space: nowrap;
+}
+.side-icon {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.side-glyph {
+  width: 17px;
+  height: 17px;
+}
+.side-ficon {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.side-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.side-row.is-on .side-label {
+  font-weight: 600;
+}
+.side-on {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #34c759;
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, #34c759 25%, transparent);
+  flex: 0 0 auto;
+  margin-right: 2px;
+}
+.side-row.is-current2 {
+  background: var(--cp-control-hover);
+}
+.side-row.is-dim .side-label {
+  color: var(--cp-text-muted);
+}
+.side-row.is-drop {
+  background: color-mix(in srgb, var(--cp-accent) 24%, transparent) !important;
+  box-shadow: inset 0 0 0 1px var(--cp-accent);
+}
+.side-eject {
+  width: 22px;
+  height: 22px;
+  margin-right: -4px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cp-text-muted);
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+.side-eject svg {
+  width: 13px;
+  height: 13px;
+}
+.side-eject:hover {
+  background: var(--cp-control-hover);
+  color: var(--cp-text);
+}
+.side-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.6px solid var(--cp-accent);
+  border-right-color: transparent;
+  animation: cp-spin 0.7s linear infinite;
+  flex: 0 0 auto;
+}
+
+/* Explorateurs de A : une seule surface, deux panneaux separes par un filet */
+.app[data-design="volet"] .explorers {
+  display: flex;
+  gap: 0;
+  padding: 0;
+  min-height: 0;
+  position: relative;
+  z-index: 1;
+}
+.app[data-design="volet"] .explorer {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.app[data-design="volet"] .explorer + .explorer {
+  border-left: 1px solid var(--cp-stroke);
+}
+.app[data-design="volet"] .explorer.is-drop {
+  box-shadow: inset 0 0 0 2px var(--cp-accent);
+  background: color-mix(in srgb, var(--cp-accent) 7%, transparent);
+}
+.pane-status {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 10px;
+  padding: 6px 14px 7px;
+  font-variant-numeric: tabular-nums;
+}
+.pane-status-sel {
+  color: var(--cp-text);
+}
+
+/* Tiroir des transferts (bas de la zone de contenu) */
+.app[data-design="volet"] .transfers-host {
+  position: relative;
+  z-index: 1;
+  min-height: 0;
+}
+.app[data-design="volet"] .transfers-panel {
+  max-height: none;
+  height: 236px;
+  padding: 6px 0 0;
+  border-top: 1px solid var(--cp-stroke);
+}
+.xfer-hide svg {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+}
+.xfer-hide {
+  color: var(--cp-text-muted) !important;
+}
+
+/* --- A sur macOS : verre natif sous le volet, tout le reste opaque --------- */
+.app[data-design="volet"][data-os="macos"] {
+  background: transparent;
+}
+.app[data-design="volet"][data-os="macos"] .sidebar {
+  margin: 8px 0 8px 8px;
+  width: 252px;
+  border-radius: 18px;
+  padding-top: calc(var(--tb-h, 52px) - 8px);
+  /* Peint la fenetre AUTOUR du volet (le volet reste un trou transparent par
+     lequel on voit le verre natif) : une ombre geante, sans flou, qui suit
+     l'arrondi. Les autres zones passent au-dessus (z-index). */
+  box-shadow: 0 0 0 200vmax var(--m-window);
+  z-index: 0;
+}
+.app[data-design="volet"][data-os="macos"] .sidebar-scroll {
+  padding: 2px 10px 12px;
+}
+.app[data-design="volet"][data-os="macos"] > .tb-band,
+.app[data-design="volet"][data-os="macos"] .explorers,
+.app[data-design="volet"][data-os="macos"] .transfers-host {
+  background: var(--m-content);
+}
+.app[data-design="volet"][data-os="macos"] > .tb-band {
+  position: relative;
+  z-index: 1;
+}
+.app[data-design="volet"][data-os="macos"] .side-row {
+  color: var(--m-side-text);
+}
+.app[data-design="volet"][data-os="macos"] .side-icon {
+  color: var(--cp-accent);
+}
+.app[data-design="volet"][data-os="macos"] .side-row.is-current {
+  background: var(--m-side-sel);
+}
+.app[data-design="volet"][data-os="macos"] .side-row.is-dim .side-icon {
+  color: var(--m-text-2);
+}
+.app[data-design="volet"][data-os="macos"] .side-section-title {
+  color: var(--m-text-2);
+  padding-left: 8px;
+}
+.app[data-design="volet"][data-os="macos"] .transfers-panel {
+  background: color-mix(in srgb, var(--m-content) 92%, var(--m-sep));
+}
+
+/* --- A sur Windows : volet de navigation sur le Mica ----------------------- */
+.app[data-design="volet"][data-os="windows"],
+.app[data-design="volet"][data-os="linux"] {
+  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-rows: 48px auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "tb tb"
+    "side err"
+    "side main"
+    "side xfer"
+    "side foot";
+}
+.app[data-design="volet"]:not([data-os="macos"]) .sidebar-scroll {
+  padding: 0 4px 12px 4px;
+}
+.app[data-design="volet"]:not([data-os="macos"]) .side-section-title {
+  padding: 10px 14px 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.app[data-design="volet"]:not([data-os="macos"]) .side-row {
+  height: 36px;
+  padding: 0 12px;
+  margin: 2px 4px;
+  border-radius: 4px;
+  gap: 12px;
+}
+.app[data-design="volet"]:not([data-os="macos"]) .side-row:hover {
+  background: var(--w-subtle-hover);
+}
+.app[data-design="volet"]:not([data-os="macos"]) .side-row.is-current {
+  background: var(--w-subtle-hover);
+}
+.app[data-design="volet"]:not([data-os="macos"]) .side-row.is-current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  margin-top: -8px;
+  border-radius: 2px;
+  background: var(--w-accent);
+}
+.app[data-design="volet"]:not([data-os="macos"]) .side-glyph {
+  color: var(--w-text-2);
+}
+/* La zone de contenu est une « couche » posee sur le Mica, arrondie en haut a
+   gauche, comme l'Explorateur et les Parametres de Windows 11. */
+.app[data-design="volet"]:not([data-os="macos"]) .explorers,
+.app[data-design="volet"]:not([data-os="macos"]) .transfers-host,
+.app[data-design="volet"]:not([data-os="macos"]) > .transfer-bar {
+  background: var(--w-layer);
+  border-left: 1px solid var(--w-layer-stroke);
+}
+.app[data-design="volet"]:not([data-os="macos"]) .explorers {
+  border-top: 1px solid var(--w-layer-stroke);
+  border-top-left-radius: 8px;
+}
+.app[data-design="volet"]:not([data-os="macos"]) > .transfer-bar {
+  height: 32px;
+  border-top: 1px solid var(--w-divider);
+}
+
+/* ============================================================
+   B · ILOTS
+   ============================================================ */
+.app[data-design="ilots"] .shell {
+  position: relative;
+}
+.app[data-design="ilots"] .explorers {
+  gap: 12px;
+  padding: 6px 12px 12px;
+}
+.app[data-design="ilots"] .explorer {
+  border: 0;
+  border-radius: 16px;
+  background: var(--m-card, var(--w-card));
+  box-shadow: var(--m-shadow-card, none);
+}
+.app[data-design="ilots"] .explorer.is-active {
+  box-shadow: var(--m-shadow-card, none), 0 0 0 2px color-mix(in srgb, var(--cp-accent) 70%, transparent);
+}
+.app[data-design="ilots"] .explorer.is-drop {
+  box-shadow: 0 0 0 3px var(--cp-accent);
+}
+.app[data-design="ilots"] .transfers-host {
+  position: absolute;
+  left: 50%;
+  bottom: 74px;
+  transform: translateX(-50%);
+  width: min(780px, calc(100% - 48px));
+  z-index: 30;
+  animation: float-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes float-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 10px) scale(0.98);
+  }
+}
+.app[data-design="ilots"] .transfers-panel {
+  max-height: 340px;
+  min-height: 150px;
+  border: 0;
+  border-radius: 18px;
+  padding: 10px 0 4px;
+  background: var(--m-card, var(--w-card-solid));
+  box-shadow: var(--m-shadow-pop, var(--w-flyout-shadow));
+  overflow: hidden;
+}
+
+/* B sur macOS : fond de fenetre teinte, cartes blanches */
+.app[data-design="ilots"][data-os="macos"] {
+  background: #ececf0;
+}
+@media (prefers-color-scheme: dark) {
+  .app[data-design="ilots"][data-os="macos"] {
+    background: #151517;
+  }
+}
+.app[data-design="ilots"][data-os="macos"] .explorer-head {
+  border-bottom-color: transparent;
+}
+.app[data-design="ilots"][data-os="macos"] .nav-pane {
+  border-right: 0;
+  background: color-mix(in srgb, var(--m-card) 94%, var(--m-sep-strong));
+  margin: 0 0 8px 8px;
+  border-radius: 12px;
+}
+
+/* B sur Windows : cartes Fluent sur le Mica */
+.app[data-design="ilots"]:not([data-os="macos"]) .explorer {
+  border-radius: 8px;
+  background: var(--w-card);
+  border: 1px solid var(--w-card-stroke);
+}
+.app[data-design="ilots"]:not([data-os="macos"]) .explorer.is-active {
+  border-color: color-mix(in srgb, var(--w-accent) 60%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--w-accent) 60%, transparent);
+}
+.app[data-design="ilots"]:not([data-os="macos"]) .transfers-panel {
+  border-radius: 8px;
+  border: 1px solid var(--w-menu-stroke);
+}
+
+/* Pastille de transferts (HTML : Windows et apercu macOS) */
+.xfer-pill {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 31;
+  width: 300px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px 0 10px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--cp-text);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+  background: color-mix(in srgb, var(--m-card, var(--w-card-solid)) 62%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(24px) saturate(1.8);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 0 0 0.5px rgba(0, 0, 0, 0.1),
+    0 10px 30px rgba(0, 0, 0, 0.18);
+  animation: pill-in 0.3s cubic-bezier(0.2, 0.9, 0.25, 1.2);
+}
+@keyframes pill-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 14px) scale(0.92);
+  }
+}
+.app[data-os="windows"] .xfer-pill {
+  border-radius: 8px;
+  height: 52px;
+  width: 320px;
+  border: 1px solid var(--w-menu-stroke);
+  box-shadow: var(--w-flyout-shadow);
+}
+.pill-ring {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+}
+.pill-ring svg {
+  width: 30px;
+  height: 30px;
+  transform: rotate(-90deg);
+}
+.pill-track {
+  fill: none;
+  stroke: var(--cp-stroke);
+  stroke-width: 2.2;
+}
+.pill-fill {
+  fill: none;
+  stroke: var(--cp-accent);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.3s ease;
+}
+.pill-arrows {
+  fill: none;
+  stroke: var(--cp-text);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: rotate(90deg);
+  transform-origin: 10px 10px;
+}
+.pill-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+  line-height: 1.25;
+}
+.pill-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.pill-sub {
+  font-size: 11.5px;
+  color: var(--cp-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.pill-caret {
+  width: 14px;
+  height: 14px;
+  color: var(--cp-text-muted);
+  flex: 0 0 auto;
+}
+
+/* ============================================================
+   C · CLASSIQUE
+   ============================================================ */
+/* macOS : barre d'outils native (champs de connexion dedans), puis la
+   disposition actuelle, sur la vibrancy d'origine. */
+.app[data-design="classique"][data-os="macos"] .explorers {
+  gap: 10px;
+  padding: 4px 10px 10px;
+}
+.app[data-design="classique"][data-os="macos"] .explorer {
+  border: 0;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--m-content) 86%, transparent);
+  box-shadow: 0 0 0 0.5px var(--m-sep-strong), 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.app[data-design="classique"][data-os="macos"] .explorer.is-active {
+  box-shadow: 0 0 0 0.5px var(--m-sep-strong), 0 0 0 2.5px color-mix(in srgb, var(--cp-accent) 75%, transparent);
+}
+.app[data-design="classique"][data-os="macos"] .files-table tbody tr:nth-child(even) td {
+  background: transparent;
+}
+.app[data-design="classique"][data-os="macos"] .transfer-bar {
+  height: 34px;
+  border-top: 0;
+  font-size: 12px;
+}
+.app[data-design="classique"][data-os="macos"] .transfers-panel {
+  border-top: 0;
+  margin: 0 10px 6px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--m-content) 86%, transparent);
+  box-shadow: 0 0 0 0.5px var(--m-sep-strong);
+}
+@media (prefers-color-scheme: dark) {
+  .app[data-design="classique"][data-os="macos"] {
+    background-color: rgba(0, 0, 0, 0.3);
+  }
+}
+
+/* Windows : disposition actuelle, gabarit Fluent strict. */
+.app[data-design="classique"]:not([data-os="macos"]) .connect-bar {
+  padding: 0 16px 12px;
+  gap: 8px;
+}
+.app[data-design="classique"]:not([data-os="macos"]) .conn-field {
+  height: 32px;
+  border-radius: 4px;
+  background: var(--w-control);
+  border: 1px solid var(--w-control-stroke);
+  border-bottom-color: var(--w-control-stroke-bottom);
+}
+.app[data-design="classique"]:not([data-os="macos"]) .conn-field:focus {
+  background: var(--w-card-solid);
+  border-color: var(--w-control-stroke);
+  box-shadow: inset 0 -2px 0 var(--w-accent);
+}
+.app[data-design="classique"]:not([data-os="macos"]) .conn-btn {
+  height: 32px;
+  border-radius: 4px;
+  background: var(--w-accent);
+  color: var(--w-accent-text);
+  font-weight: 400;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom-color: rgba(0, 0, 0, 0.4);
+}
+.app[data-design="classique"]:not([data-os="macos"]) .gear-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  background: transparent;
+  border: 0;
+}
+.app[data-design="classique"]:not([data-os="macos"]) .gear-btn:hover {
+  background: var(--w-subtle-hover);
+}
+.app[data-design="classique"]:not([data-os="macos"]) .select__btn {
+  height: 32px;
+  border-radius: 4px;
+}
+.app[data-design="classique"]:not([data-os="macos"]) .explorers {
+  gap: 8px;
+  padding: 0 8px 8px;
+  background: transparent;
+}
+.app[data-design="classique"]:not([data-os="macos"]) .explorer {
+  border-radius: 8px;
+  background: var(--w-layer);
+  border: 1px solid var(--w-layer-stroke);
+}
+.app[data-design="classique"]:not([data-os="macos"]) .explorer.is-active {
+  border-color: color-mix(in srgb, var(--w-accent) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--w-accent) 55%, transparent);
+}
+.app[data-design="classique"]:not([data-os="macos"]) .transfers-panel {
+  margin: 0 8px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--w-layer-stroke);
+  background: var(--w-layer);
+}
+.app[data-design="classique"]:not([data-os="macos"]) .transfer-bar {
+  height: 32px;
+  border-top: 1px solid var(--w-divider);
+}
+
+/* ============================================================
+   APERCU NAVIGATEUR (outillage de capture, jamais dans l'app) :
+   imitation du decor natif pour juger la mise en page.
+   ============================================================ */
+html.apercu-mac {
+  background:
+    radial-gradient(120% 90% at 15% 10%, #9fc3ff 0%, transparent 55%),
+    radial-gradient(90% 80% at 85% 25%, #f5b3d9 0%, transparent 60%),
+    radial-gradient(100% 90% at 50% 100%, #ffd59a 0%, transparent 60%),
+    #c9d6f2 !important;
+}
+@media (prefers-color-scheme: dark) {
+  html.apercu-mac {
+    background:
+      radial-gradient(120% 90% at 15% 10%, #1f3c7a 0%, transparent 55%),
+      radial-gradient(90% 80% at 85% 25%, #5b2350 0%, transparent 60%),
+      radial-gradient(100% 90% at 50% 100%, #6b4316 0%, transparent 60%),
+      #10131c !important;
+  }
+}
+html.apercu-mac .app[data-design="actuelle"],
+html.apercu-mac .app[data-design="classique"] {
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  backdrop-filter: blur(40px) saturate(1.4);
+  background-color: rgba(236, 236, 240, 0.78);
+}
+@media (prefers-color-scheme: dark) {
+  html.apercu-mac .app[data-design="actuelle"],
+  html.apercu-mac .app[data-design="classique"] {
+    background-color: rgba(30, 30, 34, 0.82);
+  }
+}
+html.apercu-mac [data-glass] {
+  -webkit-backdrop-filter: blur(26px) saturate(1.7) brightness(1.08);
+  backdrop-filter: blur(26px) saturate(1.7) brightness(1.08);
+  background: rgba(255, 255, 255, 0.34);
+}
+html.apercu-mac [data-glass]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+    inset 0 1px 1px rgba(255, 255, 255, 0.8),
+    0 6px 24px rgba(0, 0, 0, 0.1);
+}
+@media (prefers-color-scheme: dark) {
+  html.apercu-mac [data-glass] {
+    background: rgba(40, 40, 46, 0.42);
+  }
+  html.apercu-mac [data-glass]::after {
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+      inset 0 1px 1px rgba(255, 255, 255, 0.2),
+      0 6px 24px rgba(0, 0, 0, 0.35);
+  }
+}
+html.apercu-win .app {
+  background: #f3f3f3;
+}
+@media (prefers-color-scheme: dark) {
+  html.apercu-win .app {
+    background: #202020;
+  }
+}
+.tbsim {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 12px;
+  z-index: 3;
+}
+.app[data-design="volet"] .tbsim {
+  /* la bande de A commence au ras du volet : feux et titre sont au-dessus */
+  left: -260px;
+}
+.tbsim-lights {
+  display: flex;
+  gap: 8px;
+  padding: 0 8px 0 8px;
+}
+.tbsim-lights i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ff5f57;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.15);
+}
+.tbsim-lights i:nth-child(2) {
+  background: #febc2e;
+}
+.tbsim-lights i:nth-child(3) {
+  background: #28c840;
+}
+.tbsim-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  font-size: 14px;
+}
+.tbsim-title span {
+  font-size: 12px;
+  color: var(--cp-text-muted);
+}
+.tbsim-flex {
+  flex: 1 1 auto;
+}
+.tbsim-space {
+  width: 8px;
+}
+.tbsim-btn,
+.tbsim-menu,
+.tbsim-field {
+  position: relative;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--cp-text);
+  font: inherit;
+  background: rgba(255, 255, 255, 0.55);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  backdrop-filter: blur(16px) saturate(1.6);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 0 0 0.5px rgba(0, 0, 0, 0.12),
+    0 3px 10px rgba(0, 0, 0, 0.08);
+}
+@media (prefers-color-scheme: dark) {
+  .tbsim-btn,
+  .tbsim-menu,
+  .tbsim-field {
+    background: rgba(70, 70, 76, 0.55);
+    box-shadow:
+      inset 0 0 0 0.5px rgba(255, 255, 255, 0.14),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      0 0 0 0.5px rgba(0, 0, 0, 0.4),
+      0 3px 10px rgba(0, 0, 0, 0.3);
+  }
+}
+.tbsim-btn {
+  width: 36px;
+  display: grid;
+  place-items: center;
+}
+.tbsim-btn svg,
+.tbsim-menu svg {
+  width: 18px;
+  height: 18px;
+}
+.tbsim-btn.is-prominent {
+  width: auto;
+  padding: 0 16px;
+  background: var(--cp-accent);
+  color: var(--cp-accent-text);
+  font-weight: 500;
+}
+.tbsim-btn.is-selected {
+  color: var(--cp-accent);
+}
+.tbsim-badge {
+  position: absolute;
+  top: -4px;
+  right: -8px;
+  padding: 0 5px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--cp-accent);
+  color: var(--cp-accent-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.tbsim-menuwrap {
+  position: relative;
+}
+.tbsim-menuwrap.is-centered {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.tbsim-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 14px;
+  max-width: 280px;
+}
+.tbsim-menu span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tbsim-chev {
+  width: 12px !important;
+  height: 12px !important;
+  opacity: 0.6;
+}
+.tbsim-field {
+  height: 30px;
+  padding: 0 12px;
+  outline: none;
+}
+.tbsim-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 250px;
+  padding: 5px;
+  border-radius: 12px;
+  background: var(--cp-menu-bg);
+  box-shadow: var(--cp-menu-shadow);
+}
+.tbsim-dropdown hr {
+  border: 0;
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--cp-stroke);
+}
+.tbsim-head {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--cp-text-muted);
+}
+.tbsim-dropdown button {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--cp-text);
+  font: inherit;
+  text-align: left;
+}
+.tbsim-dropdown button:hover:not(:disabled) {
+  background: var(--cp-accent);
+  color: var(--cp-accent-text);
+}
+.tbsim-dropdown button:disabled {
+  opacity: 0.4;
+}
+.tbsim-dropdown small {
+  display: block;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.tbsim-check {
+  width: 14px;
+}

@@ -319,6 +319,7 @@ export function TransfersPanel({
   onClear,
   onEditResend,
   onEditStop,
+  onHide,
 }: {
   queue: Xfer[];
   done: Xfer[];
@@ -338,6 +339,8 @@ export function TransfersPanel({
   onClear: (tab: Tab) => void;
   onEditResend: (e: EditItem) => void;
   onEditStop: (id: number) => void;
+  // BETA DESIGN : habillages A et B, la liste se replie (bouton « Masquer »).
+  onHide?: () => void;
 }) {
   useT();
   const rows =
@@ -404,6 +407,13 @@ export function TransfersPanel({
                 {t("panels.xfer.clear")}
               </button>
             )}
+          {onHide && (
+            <button className="link-btn xfer-hide" onClick={onHide} title={t("design.xfer.hide")}>
+              <svg viewBox="0 0 16 16" aria-hidden>
+                <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 

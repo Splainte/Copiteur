@@ -34,6 +34,8 @@ export type PaneBus = {
   refresh: () => void;
   clearSelection: () => void;
   selectAll: () => void;
+  // Ouvre un dossier dans ce panneau (volet lateral de l'habillage « Volet »).
+  navigate: (path: string) => void;
 };
 
 // Charge utile d'un glisser / copier (source d'un transfert).

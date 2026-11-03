@@ -102,6 +102,8 @@ export function FilePane({
   startAt,
   startDir,
   onSetStartDir,
+  hideNav,
+  onDirChange,
 }: {
   title: string;
   side: Side;
@@ -143,6 +145,11 @@ export function FilePane({
   // « Demarrer ici » / « Ne plus demarrer ici » du menu clic droit.
   startDir?: string;
   onSetStartDir?: (path: string) => void;
+  // BETA DESIGN : l'habillage « Volet » porte la navigation dans un volet
+  // lateral commun aux deux panneaux — le panneau masque alors son arbre.
+  hideNav?: boolean;
+  // Dossier courant publie vers App (le volet lateral surligne l'emplacement).
+  onDirChange?: (dir: string) => void;
 }) {
   const isLocal = side === "local";
   // Abonne le panneau au changement de langue (re-rendu dans la nouvelle langue).
@@ -658,7 +665,12 @@ export function FilePane({
     // Porte sur les elements VISIBLES : selectionner des fichiers caches qu'on
     // n'affiche pas les exposerait a une suppression a l'aveugle.
     bus.selectAll = () => setSelected(new Set(sorted.map((e) => e.Path)));
+    bus.navigate = (p: string) => navigate(p);
   });
+  useEffect(() => {
+    onDirChange?.(dir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dir]);
 
   const selectedEntries = () => sorted.filter((e) => selected.has(e.Path));
 
@@ -1697,6 +1709,7 @@ export function FilePane({
       </header>
 
       <div className="explorer-body">
+        {!hideNav && (<>
         <NavTree
           // Remonte tout l'arbre a chaque (re)connexion : sans ca, les noeuds
           // deja deplies garderaient en cache les sous-dossiers de l'ancien
@@ -1732,6 +1745,7 @@ export function FilePane({
         />
         {/* Poignee de redimensionnement du volet de navigation. */}
         <div className="pane-splitter" onMouseDown={resizeNav(navW)} />
+        </>)}
 
         <div
           className="files-pane"
@@ -1938,6 +1952,12 @@ export function FilePane({
           </div>
         </div>
       </div>
+      {hideNav && status && (
+        <footer className="pane-status">
+          <span>{status.count}</span>
+          {status.sel && <span className="pane-status-sel">{status.sel}</span>}
+        </footer>
+      )}
 
       {menu && (
         <div
