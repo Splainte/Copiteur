@@ -28,7 +28,8 @@ use objc2_app_kit::{
     NSControlStateValueOn, NSControlTextEditingDelegate, NSEventType, NSFocusRingType, NSFont,
     NSFontWeightBold, NSFontWeightSemibold, NSGlassEffectView, NSImage, NSImageView, NSItemBadge,
     NSLayoutAttribute, NSLayoutConstraint, NSLineBreakMode, NSMenu, NSMenuItem, NSMenuToolbarItem,
-    NSProgressIndicator, NSProgressIndicatorStyle, NSSecureTextField, NSStackView, NSTextField,
+    NSProgressIndicator, NSProgressIndicatorStyle, NSSecureTextField, NSSegmentSwitchTracking,
+    NSSegmentedControl, NSStackView, NSTextField,
     NSTextFieldDelegate, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem, NSToolbarItemStyle,
     NSToolbarSpaceItemIdentifier, NSUserInterfaceLayoutOrientation, NSView,
@@ -76,6 +77,7 @@ struct State {
     items: HashMap<String, Retained<NSToolbarItem>>,
     titles: HashMap<String, (Retained<NSTextField>, Retained<NSTextField>)>,
     fields: Vec<(String, Retained<NSTextField>)>,
+    segments: Vec<(String, Retained<NSSegmentedControl>)>,
     glass: Vec<Retained<NSView>>,
     pill: Option<PillViews>,
     vibrancy: Option<bool>,
@@ -172,6 +174,25 @@ define_class!(
         #[unsafe(method(onPill:))]
         fn on_pill(&self, _sender: Option<&AnyObject>) {
             self.emit("pill", "click", None, None);
+        }
+
+        #[unsafe(method(onSegment:))]
+        fn on_segment(&self, sender: Option<&AnyObject>) {
+            let Some(ctl) = sender.and_then(|s| s.downcast_ref::<NSSegmentedControl>()) else {
+                return;
+            };
+            let ptr = ctl as *const NSSegmentedControl;
+            let id = STATE.with(|s| {
+                s.borrow()
+                    .segments
+                    .iter()
+                    .find(|(_, c)| Retained::as_ptr(c) == ptr)
+                    .map(|(id, _)| id.clone())
+            });
+            if let Some(id) = id {
+                let value = ctl.selectedSegment().to_string();
+                self.emit(&id, "change", None, Some(value));
+            }
         }
     }
 );
@@ -374,6 +395,38 @@ impl Controller {
                     }
                 }
                 item.setLabel(&NSString::from_str(placeholder));
+            }
+            TbItem::Segment { id, labels, selected } => {
+                if fresh {
+                    let titles: Vec<Retained<NSString>> = labels.iter().map(|l| NSString::from_str(l)).collect();
+                    let ctl = unsafe {
+                        NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
+                            &NSArray::from_retained_slice(&titles),
+                            NSSegmentSwitchTracking::SelectOne,
+                            Some(self.as_target()),
+                            Some(sel!(onSegment:)),
+                            mtm,
+                        )
+                    };
+                    ctl.setSelectedSegment(*selected as isize);
+                    item.setView(Some(&ctl));
+                    STATE.with(|s| s.borrow_mut().segments.push((id.clone(), ctl)));
+                } else {
+                    let ctl = STATE.with(|s| {
+                        s.borrow().segments.iter().find(|(i, _)| i == id).map(|(_, c)| c.clone())
+                    });
+                    if let Some(ctl) = ctl {
+                        for (k, l) in labels.iter().enumerate() {
+                            ctl.setLabel_forSegment(&NSString::from_str(l), k as isize);
+                        }
+                        if ctl.selectedSegment() != *selected as isize {
+                            ctl.setSelectedSegment(*selected as isize);
+                        }
+                        // Le libelle « Transferts · 42 % » change de largeur.
+                        ctl.sizeToFit();
+                    }
+                }
+                item.setLabel(&NSString::from_str(labels.first().map(String::as_str).unwrap_or("")));
             }
             TbItem::Flex | TbItem::Space => {}
         }
@@ -674,6 +727,7 @@ pub fn apply(app: &AppHandle, spec: ChromeSpec) -> f64 {
             st.items.clear();
             st.titles.clear();
             st.fields.clear();
+            st.segments.clear();
             st.spec = spec.toolbar.clone();
             st.seq += 1;
             st.seq

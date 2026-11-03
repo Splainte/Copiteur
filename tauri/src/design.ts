@@ -17,8 +17,15 @@ import { useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { t, type Key } from "./i18n";
 
-export type Layout = "actuelle" | "volet" | "ilots" | "classique";
-export const LAYOUTS: Layout[] = ["actuelle", "volet", "ilots", "classique"];
+// Seconde serie (03/11/2026) : Robin a retenu B « Îlots » sur les deux
+// systemes ; les trois propositions declinent la zone des transferts. Les
+// habillages de la premiere serie (volet, ilots, classique) restent dans le
+// code mais ne sont plus proposes.
+export type Layout = "actuelle" | "volet" | "ilots" | "classique" | "bas" | "colonne" | "vue";
+export const LAYOUTS: Layout[] = ["actuelle", "bas", "colonne", "vue"];
+// Famille d'habillage (styles communs des Îlots, cf. design.css).
+export const familyOf = (d: Layout): string =>
+  d === "actuelle" ? "actuelle" : d === "bas" || d === "colonne" || d === "vue" || d === "ilots" ? "ilots" : d;
 
 const KEY = "copiteur.design";
 const isMac = navigator.userAgent.includes("Macintosh");
@@ -26,13 +33,13 @@ const isMac = navigator.userAgent.includes("Macintosh");
 const isLayout = (v: unknown): v is Layout =>
   typeof v === "string" && (LAYOUTS as string[]).includes(v);
 
-// Premier lancement de la beta : on ouvre directement sur la proposition A.
+// Premier lancement (ou ancien choix qui n'est plus propose) : B1.
 let current: Layout = (() => {
   try {
     const v = localStorage.getItem(KEY);
-    return isLayout(v) ? v : "volet";
+    return isLayout(v) ? v : "bas";
   } catch {
-    return "volet";
+    return "bas";
   }
 })();
 const listeners = new Set<() => void>();

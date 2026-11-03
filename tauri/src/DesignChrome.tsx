@@ -323,3 +323,32 @@ export function TransferPill({
     </button>
   );
 }
+
+// ---- B3 : bascule « Fichiers / Transferts » (Windows ; macOS l'a en natif) ---
+export function ViewSwitch({
+  view,
+  onView,
+  badge,
+}: {
+  view: "files" | "transfers";
+  onView: (v: "files" | "transfers") => void;
+  badge: string;
+}) {
+  useLang();
+  return (
+    <div className="view-switch" role="tablist" onMouseDown={(e) => e.stopPropagation()}>
+      {(["files", "transfers"] as const).map((v) => (
+        <button
+          key={v}
+          role="tab"
+          aria-selected={view === v}
+          className={"view-switch-btn" + (view === v ? " is-on" : "")}
+          onClick={() => onView(v)}
+        >
+          {t(v === "files" ? "design.view.files" : "design.view.transfers")}
+          {v === "transfers" && badge && <span className="view-switch-badge">{badge}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}

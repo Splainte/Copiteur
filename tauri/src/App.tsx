@@ -30,21 +30,22 @@ import {
 import { FilePane } from "./FilePane";
 import { ServersDropdown } from "./ServersDropdown";
 import { SettingsDialog } from "./SettingsDialog";
-import { TransfersPanel, isStalled, type Tab } from "./TransfersPanel";
+import { TransfersPanel, XferStrip, isStalled, type Tab, type XferSummary } from "./TransfersPanel";
 import { JournalDialog } from "./JournalDialog";
 import { logEvent } from "./journal";
 import { useUpdater } from "./Updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { UiIcon } from "./icons";
-import { t, tn, tx, useLang } from "./i18n";
+import { locale, t, tn, tx, useLang } from "./i18n";
 import { FirstRunLanguage } from "./i18n/LanguagePicker";
-import { useDesign } from "./design";
+import { familyOf, useDesign } from "./design";
 import { Sidebar } from "./Sidebar";
 import {
   ConnectSheet,
   DebugMenu,
   ServerButton,
   TransferPill,
+  ViewSwitch,
   WinTitleBar,
   serverMenuEntries,
 } from "./DesignChrome";
@@ -115,6 +116,9 @@ export default function App() {
   const layout = useDesign();
   const [connectSheet, setConnectSheet] = useState(false);
   const [xferOpen, setXferOpen] = useState(false);
+  // Seconde serie (Îlots) : îlot / colonne replies, et vue courante de B3.
+  const [xferCollapsed, setXferCollapsed] = useState(false);
+  const [view, setView] = useState<"files" | "transfers">("files");
   const [dirs, setDirs] = useState<Record<Side, string>>({ local: "/", remote: "/" });
   const [renameSrv, setRenameSrv] = useState<{ old: string; value: string } | null>(null);
   const [active, setActive] = useState<Side | null>("local");
@@ -1933,6 +1937,8 @@ export default function App() {
   const activeCount = queue.length + preparing;
   const prevActive = useRef(0);
   useEffect(() => {
+    // Un nouveau lot fait apparaitre la zone des transferts — sans la deplier
+    // si on l'avait repliee expres.
     if (activeCount > 0 && prevActive.current === 0) setXferOpen(true);
     prevActive.current = activeCount;
   }, [activeCount]);
@@ -1945,6 +1951,41 @@ export default function App() {
         : `${pct} % · ${t("common.perSecond", { size: humanSize(smoothSpeed) })}${etaText}`
       : t("design.xfer.idle");
   const currentServer = servers.find((x) => x.label === remoteKey);
+  // Seconde serie : resume des transferts (îlot, colonne, vue, barre d'outils).
+  const xferState: XferSummary["state"] =
+    queue.length === 0 ? "idle" : reconnecting || allStalled ? "retry" : "run";
+  const speedText = t("common.perSecond", { size: humanSize(smoothSpeed) });
+  const summary: XferSummary = {
+    active: queue.length + preparing,
+    pct: queue.length > 0 ? pct : null,
+    remaining: humanSize(remaining),
+    speed: speedText,
+    endAt:
+      eta > 0
+        ? new Date(Date.now() + eta * 1000).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })
+        : "",
+    line:
+      queue.length === 0
+        ? t("design.xfer.idle")
+        : xferState === "retry"
+          ? t("design.xfer.paused")
+          : `${speedText} · ${t("design.xfer.remaining", { size: humanSize(remaining) })}${etaText}`,
+    state: xferState,
+    failed: failed.length,
+  };
+  // Bouton « Transferts » (barre d'outils de B1 / B2) : fait apparaitre la zone
+  // si elle est cachee, sinon la replie / la deplie.
+  const xferShown = anyXfer || xferOpen;
+  const toggleXfer = () => {
+    if (layout === "vue") {
+      setView((v) => (v === "files" ? "transfers" : "files"));
+      return;
+    }
+    if (!xferShown) {
+      setXferOpen(true);
+      setXferCollapsed(false);
+    } else setXferCollapsed((c) => !c);
+  };
   const serverEntries = serverMenuEntries({
     servers,
     remoteKey,
@@ -1965,8 +2006,9 @@ export default function App() {
     xferCount: queue.length + preparing,
     xferPct: queue.length > 0 ? pct : null,
     xferSummary,
-    xferOpen,
+    xferOpen: layout === "vue" ? view === "transfers" : xferShown && !xferCollapsed,
     anyXfer,
+    view,
     handlers: {
       pick: (label) => {
         const s = servers.find((x) => x.label === label);
@@ -1974,7 +2016,8 @@ export default function App() {
       },
       newConnection,
       disconnect,
-      toggleTransfers: () => setXferOpen((o) => !o),
+      toggleTransfers: toggleXfer,
+      view: (v) => setView(v),
       journal: () => setShowJournal(true),
       settings: () => setShowSettings(true),
       field: (id, v) =>
@@ -2044,6 +2087,7 @@ export default function App() {
       className="app"
       data-os={osName}
       data-design={layout}
+      data-family={familyOf(layout)}
       style={{ ["--tb-h" as string]: `${tbH}px` }}
       onContextMenu={(e) => {
         // Coupe le menu natif du navigateur partout, sauf dans les champs texte.
@@ -2060,7 +2104,13 @@ export default function App() {
         <WinTitleBar
           version={appVersion}
           center={
-            layout === "ilots" ? (
+            layout === "vue" ? (
+              <ViewSwitch
+                view={view}
+                onView={setView}
+                badge={summary.active > 0 ? `${summary.pct ?? 0} %` : summary.failed > 0 ? "!" : ""}
+              />
+            ) : layout === "ilots" ? (
               <ServerButton
                 wide
                 label={connected && currentServer ? currentServer.label : t("design.conn.pick")}
@@ -2076,7 +2126,36 @@ export default function App() {
             ) : null
           }
           right={
-            layout === "classique" ? null : (
+            layout === "classique" ? null : familyOf(layout) === "ilots" && layout !== "ilots" ? (
+              <>
+                {layout !== "vue" && (
+                  <button
+                    className={"w11-tool" + (xferShown && !xferCollapsed ? " is-on" : "")}
+                    title={t("design.xfer.button")}
+                    onClick={toggleXfer}
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden>
+                      <path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    {summary.active > 0 && <span className="w11-badge">{summary.active}</span>}
+                  </button>
+                )}
+                <ServerButton
+                  label={connected && currentServer ? currentServer.label : t("design.conn.pick")}
+                  connected={connected}
+                  connecting={connecting}
+                  entries={serverEntries}
+                />
+                <button className="w11-tool" title={t("app.conn.journalTitle")} onClick={() => setShowJournal(true)}>
+                  <UiIcon name="journal" />
+                </button>
+                <button className="w11-tool" title={t("app.conn.settings")} onClick={() => setShowSettings(true)}>
+                  <svg viewBox="0 0 16 16" aria-hidden>
+                    <path d="M8 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8zM6.9 1.5h2.2l.4 1.8 1.2.7 1.8-.6 1.1 1.9-1.4 1.2v1.4l1.4 1.2-1.1 1.9-1.8-.6-1.2.7-.4 1.8H6.9l-.4-1.8-1.2-.7-1.8.6-1.1-1.9L3.8 8.7V7.3L2.4 6.1l1.1-1.9 1.8.6 1.2-.7z" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </>
+            ) : (
               <>
                 {layout === "volet" && (
                   <button
@@ -2170,7 +2249,7 @@ export default function App() {
 
       {connErr && !connectSheet && <div className="conn-error">{connErr}</div>}
 
-      <div className="shell">
+      <div className={"shell" + (layout === "vue" && view === "transfers" ? " is-xferview" : "")}>
         {layout === "volet" && (
           <Sidebar
             servers={servers}
@@ -2250,11 +2329,12 @@ export default function App() {
             onSetStartDir={setStartDir}
           />
         </main>
-        {(layout === "volet" || layout === "ilots"
-          ? xferOpen && (anyXfer || layout === "volet")
-          : anyXfer) && (
-          <div className="transfers-host">
-            <TransfersPanel
+        {familyOf(layout) !== "ilots" || layout === "ilots"
+          ? (layout === "volet" || layout === "ilots"
+              ? xferOpen && (anyXfer || layout === "volet")
+              : anyXfer) && (
+              <div className="transfers-host">
+                <TransfersPanel
               queue={queue}
               done={done}
               failed={failed}
@@ -2275,7 +2355,69 @@ export default function App() {
               onEditStop={stopEdit}
               onHide={layout === "volet" || layout === "ilots" ? () => setXferOpen(false) : undefined}
             />
+              </div>
+            )
+          : null}
+        {/* Seconde serie : B1 îlot du bas, B2 colonne (repliable), B3 page
+            dediee + bande de suivi sous les panneaux. */}
+        {(layout === "bas" || layout === "colonne") && xferShown && (
+          <div className={"transfers-host" + (xferCollapsed ? " is-collapsed" : "")}>
+            <TransfersPanel
+              queue={queue}
+              done={done}
+              failed={failed}
+              cancelled={cancelled}
+              edits={edits}
+              tab={tab}
+              onTab={setTab}
+              preparing={preparing}
+              now={Date.now()}
+              settings={settings}
+              onCancel={cancelXfer}
+              onCancelAll={cancelAll}
+              onRetry={retryXfer}
+              onRetryFailed={retryFailed}
+              onRetryCancelled={retryCancelled}
+              onClear={clearTab}
+              onEditResend={resendEdit}
+              onEditStop={stopEdit}
+              variant={layout === "bas" ? "island" : layout === "colonne" ? "column" : "page"}
+                summary={summary}
+                collapsed={xferCollapsed}
+                onToggleCollapse={() => setXferCollapsed((c) => !c)}
+            />
           </div>
+        )}
+        {layout === "vue" && view === "transfers" && (
+          <div className="transfers-host">
+            <TransfersPanel
+              queue={queue}
+              done={done}
+              failed={failed}
+              cancelled={cancelled}
+              edits={edits}
+              tab={tab}
+              onTab={setTab}
+              preparing={preparing}
+              now={Date.now()}
+              settings={settings}
+              onCancel={cancelXfer}
+              onCancelAll={cancelAll}
+              onRetry={retryXfer}
+              onRetryFailed={retryFailed}
+              onRetryCancelled={retryCancelled}
+              onClear={clearTab}
+              onEditResend={resendEdit}
+              onEditStop={stopEdit}
+              variant="page"
+                summary={summary}
+                collapsed={xferCollapsed}
+                onToggleCollapse={() => setXferCollapsed((c) => !c)}
+            />
+          </div>
+        )}
+        {layout === "vue" && view === "files" && (summary.active > 0 || summary.failed > 0) && (
+          <XferStrip summary={summary} onOpen={() => setView("transfers")} />
         )}
         {layout === "ilots" && anyXfer && (!isMac || isPreview) && (
           <TransferPill

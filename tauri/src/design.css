@@ -487,8 +487,13 @@
   gap: 2px;
 }
 .w11-right > .w11-tool,
-.w11-right > .debug-wrap {
+.w11-right > .debug-wrap,
+.w11-right > .server-btn {
   margin-top: 8px;
+}
+.w11-right > .server-btn {
+  margin-right: 4px;
+  max-width: 280px;
 }
 .w11-tool {
   position: relative;
@@ -1404,23 +1409,23 @@
 /* ============================================================
    B · ILOTS
    ============================================================ */
-.app[data-design="ilots"] .shell {
+.app[data-family="ilots"] .shell {
   position: relative;
 }
-.app[data-design="ilots"] .explorers {
+.app[data-family="ilots"] .explorers {
   gap: 12px;
   padding: 6px 12px 12px;
 }
-.app[data-design="ilots"] .explorer {
+.app[data-family="ilots"] .explorer {
   border: 0;
   border-radius: 16px;
   background: var(--m-card, var(--w-card));
   box-shadow: var(--m-shadow-card, none);
 }
-.app[data-design="ilots"] .explorer.is-active {
+.app[data-family="ilots"] .explorer.is-active {
   box-shadow: var(--m-shadow-card, none), 0 0 0 2px color-mix(in srgb, var(--cp-accent) 70%, transparent);
 }
-.app[data-design="ilots"] .explorer.is-drop {
+.app[data-family="ilots"] .explorer.is-drop {
   box-shadow: 0 0 0 3px var(--cp-accent);
 }
 .app[data-design="ilots"] .transfers-host {
@@ -1450,18 +1455,18 @@
 }
 
 /* B sur macOS : fond de fenetre teinte, cartes blanches */
-.app[data-design="ilots"][data-os="macos"] {
+.app[data-family="ilots"][data-os="macos"] {
   background: #ececf0;
 }
 @media (prefers-color-scheme: dark) {
-  .app[data-design="ilots"][data-os="macos"] {
+  .app[data-family="ilots"][data-os="macos"] {
     background: #151517;
   }
 }
-.app[data-design="ilots"][data-os="macos"] .explorer-head {
+.app[data-family="ilots"][data-os="macos"] .explorer-head {
   border-bottom-color: transparent;
 }
-.app[data-design="ilots"][data-os="macos"] .nav-pane {
+.app[data-family="ilots"][data-os="macos"] .nav-pane {
   border-right: 0;
   background: color-mix(in srgb, var(--m-card) 94%, var(--m-sep-strong));
   margin: 0 0 8px 8px;
@@ -1469,12 +1474,12 @@
 }
 
 /* B sur Windows : cartes Fluent sur le Mica */
-.app[data-design="ilots"]:not([data-os="macos"]) .explorer {
+.app[data-family="ilots"]:not([data-os="macos"]) .explorer {
   border-radius: 8px;
   background: var(--w-card);
   border: 1px solid var(--w-card-stroke);
 }
-.app[data-design="ilots"]:not([data-os="macos"]) .explorer.is-active {
+.app[data-family="ilots"]:not([data-os="macos"]) .explorer.is-active {
   border-color: color-mix(in srgb, var(--w-accent) 60%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--w-accent) 60%, transparent);
 }
@@ -1945,4 +1950,855 @@ html.apercu-win .app {
 }
 .tbsim-check {
   width: 14px;
+}
+
+/* ============================================================
+   SECONDE SERIE — Îlots + trois zones de transferts
+   B1 « bas » : îlot sous les panneaux · B2 « colonne » : îlot a droite
+   B3 « vue » : page Transferts + bande de suivi.
+   Jetons communs : carte (--x-card), filet, accent, teintes d'etat.
+   ============================================================ */
+.app[data-family="ilots"] {
+  --x-card: var(--m-card, var(--w-card));
+  --x-card-solid: var(--m-card, var(--w-card-solid));
+  --x-shadow: var(--m-shadow-card, none);
+  --x-radius: 16px;
+  --x-gap: 12px;
+  --x-sep: var(--cp-stroke);
+  --x-soft: color-mix(in srgb, var(--cp-text) 5%, transparent);
+  --x-accent: var(--w-accent, var(--cp-accent));
+  --x-warn: #e8930c;
+  --x-err: var(--cp-err);
+  --x-ok: #34c759;
+}
+.app[data-family="ilots"][data-os="windows"],
+.app[data-family="ilots"][data-os="linux"] {
+  --x-radius: 8px;
+  --x-ok: #0f7b0f;
+  --x-warn: #9d5d00;
+}
+@media (prefers-color-scheme: dark) {
+  .app[data-family="ilots"][data-os="windows"],
+  .app[data-family="ilots"][data-os="linux"] {
+    --x-ok: #6ccb5f;
+    --x-warn: #fce100;
+  }
+}
+.app[data-family="ilots"]:not([data-design="ilots"]) .shell {
+  padding: 6px var(--x-gap) var(--x-gap);
+  gap: var(--x-gap);
+  min-height: 0;
+}
+.app[data-family="ilots"]:not([data-design="ilots"]) .explorers {
+  padding: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Carte commune des zones de transferts */
+.app[data-family="ilots"] .xfer-island,
+.app[data-family="ilots"] .xfer-column,
+.app[data-family="ilots"] .xfer-rail,
+.app[data-family="ilots"] .xfer-page-side,
+.app[data-family="ilots"] .xfer-page-list,
+.app[data-family="ilots"] .xfer-strip {
+  background: var(--x-card);
+  border-radius: var(--x-radius);
+  box-shadow: var(--x-shadow);
+}
+.app[data-family="ilots"]:not([data-os="macos"]) .xfer-island,
+.app[data-family="ilots"]:not([data-os="macos"]) .xfer-column,
+.app[data-family="ilots"]:not([data-os="macos"]) .xfer-rail,
+.app[data-family="ilots"]:not([data-os="macos"]) .xfer-page-side,
+.app[data-family="ilots"]:not([data-os="macos"]) .xfer-page-list,
+.app[data-family="ilots"]:not([data-os="macos"]) .xfer-strip {
+  border: 1px solid var(--w-card-stroke);
+}
+.app[data-family="ilots"] .transfers-panel {
+  border-top: 0;
+  padding: 0;
+  max-height: none;
+}
+
+/* ---- Pastilles d'onglets (segmentees) ---- */
+.xfer-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--x-soft);
+  flex: 0 0 auto;
+}
+.xfer-seg.is-wrap {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  border-radius: 999px;
+  margin: 0 12px 8px;
+}
+.xfer-seg.is-wrap .xfer-seg-btn {
+  justify-content: center;
+  padding: 0 4px;
+  gap: 3px;
+  font-size: 11.5px;
+  min-width: 0;
+  overflow: hidden;
+}
+.xfer-seg.is-wrap .xfer-seg-btn > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xfer-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cp-text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: default;
+  white-space: nowrap;
+}
+.xfer-seg-btn:hover {
+  color: var(--cp-text);
+}
+.xfer-seg-btn.is-on {
+  background: var(--x-card-solid);
+  color: var(--cp-text);
+  box-shadow: 0 0 0 0.5px var(--cp-stroke-strong), 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+.xfer-seg-n {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--x-soft);
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.xfer-seg-btn.is-alert .xfer-seg-n {
+  background: var(--x-err);
+  color: #fff;
+}
+.app[data-os="windows"] .xfer-seg {
+  border-radius: 4px;
+}
+.app[data-os="windows"] .xfer-seg-btn {
+  border-radius: 3px;
+}
+.xfer-icon-btn {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cp-text-muted);
+  cursor: default;
+}
+.xfer-icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.xfer-icon-btn:hover {
+  background: var(--x-soft);
+  color: var(--cp-text);
+}
+.app[data-os="windows"] .xfer-icon-btn {
+  border-radius: 4px;
+}
+.xfer-flex {
+  flex: 1 1 auto;
+}
+
+/* ---- Anneau de progression ---- */
+.xfer-ring {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.xfer-ring > svg:first-child {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+.xfer-ring-track {
+  fill: none;
+  stroke: var(--x-soft);
+  stroke-width: 3.2;
+}
+.xfer-ring-fill {
+  fill: none;
+  stroke: var(--x-accent);
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.4s ease;
+}
+.xfer-ring.is-retry .xfer-ring-fill {
+  stroke: var(--x-warn);
+}
+.xfer-ring-glyph {
+  width: 46%;
+  height: 46%;
+  color: var(--cp-text-muted);
+}
+.xfer-ring.is-big .xfer-ring-track,
+.xfer-ring.is-big .xfer-ring-fill {
+  stroke-width: 2.6;
+}
+.xfer-ring-pct {
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Lignes communes ---- */
+.app[data-family="ilots"] .transfers-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 6px;
+}
+.app[data-family="ilots"] .xfer-empty {
+  padding: 18px 12px;
+  color: var(--cp-text-muted);
+  text-align: center;
+}
+.xfer-dir {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--x-accent);
+  background: color-mix(in srgb, var(--x-accent) 13%, transparent);
+}
+.xfer-dir.is-up {
+  color: #af52de;
+  background: color-mix(in srgb, #af52de 13%, transparent);
+}
+.xfer-dir-glyph {
+  width: 13px;
+  height: 13px;
+}
+
+/* ---- B1 · îlot du bas ---- */
+.app[data-design="bas"] .transfers-host {
+  flex: 0 0 auto;
+  height: 236px;
+  min-height: 0;
+  display: flex;
+}
+.app[data-design="bas"] .transfers-host.is-collapsed {
+  height: auto;
+}
+.xfer-island {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.xfer-island-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  padding: 0 10px 0 16px;
+}
+.xfer-island:not(.is-collapsed) .xfer-island-head {
+  border-bottom: 1px solid var(--x-sep);
+}
+.xfer-island-title {
+  font-weight: 650;
+  font-size: 13px;
+}
+.xfer-island-sum {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--cp-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.xfer-island-sum.is-retry {
+  color: var(--x-warn);
+}
+.xfer-island-pct {
+  font-weight: 650;
+  color: var(--cp-text);
+}
+.xfer-island-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xfer-minibar {
+  width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--x-soft);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.xfer-minibar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--x-accent);
+  transition: width 0.3s ease;
+}
+.xfer-island-sum.is-retry .xfer-minibar > span {
+  background: var(--x-warn);
+}
+.xfer-island-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.xfer-island .transfers-list {
+  padding: 6px 8px 8px;
+}
+/* La ligne d'origine, en version îlot : arrondie, la teinte de progression
+   reste en fond (c'est l'interface actuelle, simplement re-habillee). */
+.app[data-design="bas"] .transfers-list.is-virtual .xfer-row {
+  height: 30px;
+  border-radius: 8px;
+  padding: 0 10px;
+  overflow: hidden;
+}
+.app[data-design="bas"] .xfer-wash {
+  background: color-mix(in srgb, var(--x-accent) 16%, transparent);
+}
+.app[data-design="bas"] .transfers-list.is-virtual .xfer-row:hover {
+  background: var(--x-soft);
+}
+
+/* ---- B2 · colonne a droite ---- */
+.app[data-design="colonne"] .shell {
+  flex-direction: row;
+}
+/* Deux panneaux + la colonne : l'arbre de chaque panneau se fait plus etroit. */
+.app[data-design="colonne"] .nav-pane {
+  flex-basis: 168px !important;
+  width: 168px !important;
+  min-width: 120px;
+}
+.app[data-design="colonne"] .transfers-host {
+  flex: 0 0 300px;
+  display: flex;
+  min-height: 0;
+}
+.app[data-design="colonne"] .transfers-host.is-collapsed {
+  flex-basis: 58px;
+}
+.xfer-column {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.xfer-col-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 10px 12px 14px;
+}
+.xfer-col-sum {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.xfer-col-title {
+  font-weight: 650;
+  font-size: 14px;
+}
+.xfer-col-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--cp-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xfer-col-sub.is-retry {
+  color: var(--x-warn);
+}
+.xfer-col-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 0 16px 6px;
+  min-height: 4px;
+}
+.xfer-column .transfers-list {
+  border-top: 1px solid var(--x-sep);
+  padding: 6px 8px 8px;
+}
+.xfer-card {
+  position: relative;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 8px;
+  border-radius: 10px;
+}
+.xfer-card:hover {
+  background: var(--x-soft);
+}
+.xfer-card-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.xfer-card-name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xfer-card.is-done .xfer-card-name {
+  color: var(--cp-text-muted);
+  font-weight: 400;
+}
+.xfer-card-sub {
+  display: flex;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--cp-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.xfer-card-sub .xfer-stat {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: inherit;
+}
+.xfer-card-size {
+  flex: 0 0 auto;
+}
+.xfer-card-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--x-soft);
+  overflow: hidden;
+  margin-top: 3px;
+}
+.xfer-card-bar > span,
+.xfer-tbar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--x-accent);
+  transition: width 0.3s ease;
+}
+.xfer-card-bar > span.is-retry,
+.xfer-tbar > span.is-retry {
+  background: var(--x-warn);
+}
+.xfer-card-bar > span.is-err,
+.xfer-tbar > span.is-err {
+  background: var(--x-err);
+}
+.xfer-card .xfer-act,
+.xfer-trow .xfer-act {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.xfer-card:hover .xfer-act,
+.xfer-trow:hover .xfer-act,
+.xfer-card.is-err .xfer-act,
+.xfer-trow.is-err .xfer-act {
+  opacity: 1;
+}
+/* Rail (colonne repliee) */
+.xfer-rail {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0;
+  border: 0;
+  color: var(--cp-text);
+  font: inherit;
+  cursor: default;
+}
+.xfer-rail:hover {
+  background: color-mix(in srgb, var(--x-card) 80%, var(--x-soft));
+}
+.xfer-rail-n {
+  font-weight: 650;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.xfer-rail-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--cp-text-muted);
+  letter-spacing: 0.02em;
+}
+.xfer-rail-alert {
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--x-err);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
+/* ---- B3 · vue Transferts + bande de suivi ---- */
+.shell.is-xferview .explorers {
+  display: none;
+}
+.app[data-design="vue"] .transfers-host {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+.xfer-page {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
+  gap: var(--x-gap);
+  min-height: 0;
+}
+.xfer-page-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 26px 16px 16px;
+  min-height: 0;
+  overflow-y: auto;
+}
+.xfer-page-title {
+  margin-top: 14px;
+  font-size: 15px;
+  font-weight: 650;
+  text-align: center;
+}
+.xfer-page-stats {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 6px 14px;
+  margin: 16px 0 6px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.xfer-page-stats dt {
+  color: var(--cp-text-muted);
+  text-align: right;
+}
+.xfer-page-stats dd {
+  margin: 0;
+  font-weight: 600;
+}
+.xfer-page-nav {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--x-sep);
+}
+.xfer-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cp-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: default;
+}
+.xfer-nav:hover {
+  background: var(--x-soft);
+}
+.xfer-nav.is-on {
+  background: color-mix(in srgb, var(--x-accent) 16%, transparent);
+  font-weight: 600;
+}
+.xfer-nav-n {
+  font-size: 12px;
+  color: var(--cp-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.xfer-nav.is-alert .xfer-nav-n {
+  color: var(--x-err);
+  font-weight: 650;
+}
+.app[data-os="windows"] .xfer-nav {
+  border-radius: 4px;
+}
+.app[data-os="windows"] .xfer-nav.is-on {
+  background: var(--w-subtle-hover);
+  position: relative;
+}
+.app[data-os="windows"] .xfer-nav.is-on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  margin-top: -8px;
+  border-radius: 2px;
+  background: var(--w-accent);
+}
+.xfer-page-tools {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 0 10px;
+}
+.xfer-page-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.xfer-thead,
+.xfer-trow {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 84px 170px 132px 64px 28px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+}
+.xfer-thead {
+  height: 38px;
+  border-bottom: 1px solid var(--x-sep);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--cp-text-muted);
+  flex: 0 0 auto;
+}
+.xfer-page-list .transfers-list {
+  padding: 4px 6px 6px;
+}
+.xfer-trow {
+  height: 40px;
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.xfer-trow:hover {
+  background: var(--x-soft);
+}
+.xfer-tname {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+}
+.xfer-trel {
+  font-size: 11.5px;
+  color: var(--cp-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xfer-tsize,
+.xfer-tpct {
+  font-size: 12px;
+  color: var(--cp-text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.xfer-tprog {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.xfer-tbar {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--x-soft);
+  overflow: hidden;
+}
+.xfer-tpct {
+  flex: 0 0 38px;
+}
+.xfer-trow .xfer-stat,
+.xfer-trow .xfer-streams {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xfer-trow.is-done .xfer-tname {
+  color: var(--cp-text-muted);
+}
+/* Bande de suivi (vue Fichiers) */
+.xfer-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 46px;
+  padding: 0 16px 0 12px;
+  border: 0;
+  color: var(--cp-text);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+.xfer-strip:hover {
+  background: color-mix(in srgb, var(--x-card) 85%, var(--x-soft));
+}
+.xfer-strip-title {
+  font-weight: 650;
+  white-space: nowrap;
+}
+.xfer-strip-bar {
+  flex: 0 1 260px;
+  min-width: 80px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--x-soft);
+  overflow: hidden;
+}
+.xfer-strip-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--x-accent);
+  transition: width 0.3s ease;
+}
+.xfer-strip.is-retry .xfer-strip-bar > span {
+  background: var(--x-warn);
+}
+.xfer-strip-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--cp-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xfer-strip-link {
+  margin-left: auto;
+  color: var(--x-accent);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+/* Bascule Fichiers / Transferts (barre de titre Windows) */
+.view-switch {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 6px;
+  background: var(--w-subtle-hover, var(--x-soft));
+  border: 1px solid var(--w-control-stroke, transparent);
+}
+.view-switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--cp-text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: default;
+}
+.view-switch-btn.is-on {
+  background: var(--w-card-solid, var(--x-card-solid));
+  color: var(--cp-text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.view-switch-badge {
+  padding: 0 6px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--w-accent, var(--cp-accent));
+  color: var(--w-accent-text, #fff);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+}
+/* Imitation (apercu) du segment natif macOS */
+.tbsim-seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow:
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.7),
+    0 0 0 0.5px rgba(0, 0, 0, 0.12),
+    0 3px 10px rgba(0, 0, 0, 0.08);
+}
+.tbsim-seg.is-centered {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.tbsim-seg button {
+  height: 28px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cp-text);
+  font: inherit;
+}
+.tbsim-seg button.is-on {
+  background: var(--cp-accent);
+  color: var(--cp-accent-text);
+}
+@media (prefers-color-scheme: dark) {
+  .tbsim-seg {
+    background: rgba(70, 70, 76, 0.55);
+  }
 }

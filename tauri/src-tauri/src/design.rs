@@ -19,11 +19,13 @@ use tauri::{AppHandle, Manager, Wry};
 
 /// Identifiant, nom francais, nom anglais (menu macOS).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+// Seconde serie (03/11/2026) : B « Îlots » retenu, trois facons de presenter
+// les transferts (cf. src/design.ts).
 pub const DESIGNS: [(&str, &str, &str); 4] = [
     ("actuelle", "Actuelle (1.2)", "Current (1.2)"),
-    ("volet", "A · Volet", "A · Sidebar"),
-    ("ilots", "B · Îlots", "B · Islands"),
-    ("classique", "C · Classique 27", "C · Classic 27"),
+    ("bas", "B1 · Îlot du bas", "B1 · Bottom island"),
+    ("colonne", "B2 · Colonne", "B2 · Side column"),
+    ("vue", "B3 · Vue Transferts", "B3 · Transfers view"),
 ];
 
 pub const MENU_PREFIX: &str = "design:";
@@ -96,6 +98,12 @@ pub enum TbItem {
         secure: bool,
         width: f64,
     },
+    #[serde(rename_all = "camelCase")]
+    Segment {
+        id: String,
+        labels: Vec<String>,
+        selected: i64,
+    },
 }
 
 impl TbItem {
@@ -105,7 +113,8 @@ impl TbItem {
             TbItem::Title { id, .. }
             | TbItem::Button { id, .. }
             | TbItem::Menu { id, .. }
-            | TbItem::Field { id, .. } => Some(id),
+            | TbItem::Field { id, .. }
+            | TbItem::Segment { id, .. } => Some(id),
             TbItem::Flex | TbItem::Space => None,
         }
     }

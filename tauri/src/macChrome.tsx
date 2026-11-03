@@ -43,7 +43,8 @@ export type TbItem =
   | { kind: "space" }
   | { kind: "button"; id: string; symbol: string; label: string; tip: string; prominent: boolean; enabled: boolean; badge: string; selected: boolean }
   | { kind: "menu"; id: string; symbol: string; title: string; tip: string; entries: MenuEntry[] }
-  | { kind: "field"; id: string; placeholder: string; value: string; secure: boolean; width: number };
+  | { kind: "field"; id: string; placeholder: string; value: string; secure: boolean; width: number }
+  | { kind: "segment"; id: string; labels: string[]; selected: number };
 export type ToolbarSpec = { id: string; items: TbItem[]; centered: string[] };
 export type Region = { id: string; x: number; y: number; w: number; h: number; radius: number; anchor: string };
 export type Pill = { visible: boolean; title: string; sub: string; progress: number; open: boolean; width: number; bottom: number };
@@ -63,6 +64,7 @@ type Handlers = {
   field: (id: string, value: string) => void;
   connect: () => void;
   rename: () => void;
+  view: (v: "files" | "transfers") => void;
 };
 
 type Opts = {
@@ -78,6 +80,7 @@ type Opts = {
   xferSummary: string;
   xferOpen: boolean;
   anyXfer: boolean;
+  view: "files" | "transfers";
   handlers: Handlers;
 };
 
@@ -170,6 +173,50 @@ function buildToolbar(o: Opts): ToolbarSpec | null {
           button("connect", "bolt.horizontal", o.connecting ? t("app.conn.connecting") : t("app.conn.connect"), { prominent: true }),
           { ...server, title: o.connected && o.remoteKey ? o.remoteKey : t("design.conn.saved") },
           { kind: "space" },
+          journal,
+          settings,
+        ],
+      };
+    // Seconde serie (Îlots) : la connexion est calee a droite, a cote du
+    // journal et des parametres.
+    case "bas":
+    case "colonne":
+      return {
+        id: "copiteur." + o.layout,
+        centered: [],
+        items: [
+          title(0),
+          { kind: "flex" },
+          button("transfers", "arrow.up.arrow.down", t("design.xfer.button"), {
+            badge: o.xferCount > 0 ? (o.xferPct !== null ? `${o.xferPct} %` : String(o.xferCount)) : "",
+            selected: o.xferOpen,
+          }),
+          { kind: "space" },
+          server,
+          journal,
+          settings,
+        ],
+      };
+    case "vue":
+      return {
+        id: "copiteur.vue",
+        centered: ["view"],
+        items: [
+          title(0),
+          { kind: "flex" },
+          {
+            kind: "segment",
+            id: "view",
+            labels: [
+              t("design.view.files"),
+              // Le nombre (et non le pourcentage) : le libelle change rarement de
+              // largeur, la barre ne « saute » pas a chaque battement.
+              o.xferCount > 0 ? `${t("design.view.transfers")} · ${o.xferCount}` : t("design.view.transfers"),
+            ],
+            selected: o.view === "transfers" ? 1 : 0,
+          },
+          { kind: "flex" },
+          server,
           journal,
           settings,
         ],
@@ -323,6 +370,7 @@ export function useMacChrome(o: Opts): number {
 }
 
 function dispatch(h: Handlers, p: { id: string; kind: string; entry?: string; value?: string }) {
+  if (p.kind === "change" && p.id === "view") return h.view(p.value === "1" ? "transfers" : "files");
   if (p.kind === "change" && p.value !== undefined) return h.field(p.id, p.value);
   if (p.kind === "submit") return h.connect();
   if (p.kind === "menu" && p.entry) {
@@ -443,6 +491,20 @@ export function ToolbarSim() {
                     )}
                   </div>
                 )}
+              </span>
+            );
+          case "segment":
+            return (
+              <span key={i} className={"tbsim-seg" + (centered.has(it.id) ? " is-centered" : "")}>
+                {it.labels.map((l, k) => (
+                  <button
+                    key={k}
+                    className={k === it.selected ? "is-on" : ""}
+                    onClick={() => h && dispatch(h, { id: it.id, kind: "change", value: String(k) })}
+                  >
+                    {l}
+                  </button>
+                ))}
               </span>
             );
           case "field":
