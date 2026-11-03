@@ -183,6 +183,10 @@ export type Xfer = {
   // (serveur qui refuse trop de connexions), jusqu'a 1 (mono-connexion). Absent
   // = pas encore degrade, on prend la valeur du reglage.
   upStreams?: number;
+  // TELECHARGEMENT seulement : nombre de flux EFFECTIF quand il est inferieur au
+  // reglage `streams` (rabaisse apres un morceau casse, cf. failXfer). Absent =
+  // le reglage.
+  downStreams?: number;
   // Date (ms) du dernier octet arrive, pour reperer un transfert FIGE sans
   // toucher aux delais reseau (cf. STALL_MS).
   movedAt?: number;
@@ -499,18 +503,19 @@ export function parseSize(s: string): number {
 // fallback (`x.upStreams`, cf. failXfer) ; telechargement -> `streams`. Un
 // fichier sous le seuil de decoupe (`cutoff`) n'est jamais decoupe par rclone,
 // quel que soit le reglage : 1 flux.
-// `fallback` = un ENVOI rabaisse par un refus de connexions du serveur (a
-// signaler visuellement) ; un simple « 1 flux » de petit fichier n'en est PAS un
+// `fallback` = un transfert rabaisse (envoi refuse par le serveur, ou
+// telechargement dont un morceau a casse ; a signaler visuellement) ; un simple « 1 flux » de petit fichier n'en est PAS un
 // (c'est normal), on ne l'alarme donc pas.
 export function xferStreams(
   x: Xfer,
   s: Settings,
 ): { n: number; fallback: boolean } {
   const isUpload = x.dstFs.startsWith(REMOTE);
-  const requested = isUpload ? (x.upStreams ?? s.uploadStreams) : s.streams;
+  const requested = isUpload ? (x.upStreams ?? s.uploadStreams) : (x.downStreams ?? s.streams);
   const n = x.size >= parseSize(s.cutoff) ? Math.max(1, requested) : 1;
-  const fallback =
-    isUpload && x.upStreams !== undefined && x.upStreams < s.uploadStreams;
+  const fallback = isUpload
+    ? x.upStreams !== undefined && x.upStreams < s.uploadStreams
+    : x.downStreams !== undefined && x.downStreams < s.streams;
   return { n, fallback };
 }
 

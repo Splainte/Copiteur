@@ -28,6 +28,8 @@ export default {
     "Le serveur n'a pas su fournir d'empreinte vérifiable — nouvelle tentative sans vérification par empreinte. ({err})",
   "app.err.streamFallback":
     "Le serveur a refusé {from} connexions simultanées en envoi — nouvelle tentative avec {to}. ({err})",
+  "app.err.downFallback":
+    "La connexion n'a pas suivi {from} flux en téléchargement — nouvelle tentative avec {to}. ({err})",
 
   // Dialogue : fichier deja present
   "app.conflict.title": "Le fichier existe déjà",

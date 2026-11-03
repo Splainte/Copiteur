@@ -60,6 +60,9 @@ const NETWORK_ERROR =
 // au 2e essai. On la traite donc comme une coupure reseau : reprise auto.
 const RETRYABLE_ERROR = /(incompatible remotes|can't move object|can't copy)/i;
 
+// Echec d'un telechargement DECOUPE en plusieurs flux (un des morceaux a casse).
+const MULTI_THREAD_ERROR = /multi-thread copy/i;
+
 // Echec qui sent le NOM DE FICHIER plutot que le reseau : la destination refuse
 // d'ecrire ce nom (caracteres interdits sous Windows, par exemple).
 const NAME_ERROR = /(invalid argument|illegal (byte sequence|character)|not permitted|cannot create)/i;
@@ -197,6 +200,16 @@ export default function App() {
   // est recalee sur le dernier id attribue chaque fois que la file se vide (cf.
   // l'effet lie a `pending`), si bien que le lot suivant repart de zero.
   const batchAnchorRef = useRef(0);
+  // Un transfert relance garde son id d'ORIGINE, qui peut etre inferieur a
+  // l'ancre du lot courant (posee quand la file s'est videe, apres un echec ou
+  // une annulation) : il serait alors exclu du calcul de progression (« 0 % »,
+  // « restant » a 0, alors que la copie tourne). Toute remise en file passe
+  // donc par ici, qui abaisse l'ancre juste sous le plus petit id relance.
+  const rejoinBatch = (ids: Iterable<number>) => {
+    const minId = Math.min(...ids);
+    if (Number.isFinite(minId))
+      batchAnchorRef.current = Math.min(batchAnchorRef.current, minId - 1);
+  };
   const panes = useRef<Record<Side, PaneBus>>({
     local: { side: "local", dir: "/", selected: [], refresh: () => {}, clearSelection: () => {}, selectAll: () => {} },
     remote: { side: "remote", dir: "/", selected: [], refresh: () => {}, clearSelection: () => {}, selectAll: () => {} },
@@ -273,6 +286,12 @@ export default function App() {
   // Ce serveur s'est revele incapable de calculer des empreintes : on a bascule
   // la connexion en `disable_hashcheck`. Un seul basculement par connexion.
   const noHashRef = useRef(false);
+  // Plafond de flux en TELECHARGEMENT pour la connexion courante (null = le
+  // reglage). Abaisse quand un telechargement multi-flux casse (lien qui ne
+  // suit pas : VPN, Tailscale, 4G, NAS au processeur modeste), pour que les
+  // fichiers suivants partent directement avec moins de flux au lieu
+  // d'echouer chacun a leur tour. Remis a zero a chaque connexion.
+  const downCapRef = useRef<number | null>(null);
   // Passe a vrai quand la connexion sans empreinte est REELLEMENT en place
   // (config reecrite + cache vide). C'est le signal qui autorise la relance.
   const [noHashReady, setNoHashReady] = useState(false);
@@ -579,6 +598,7 @@ export default function App() {
     // cassees, le premier echec le revelera et on rebasculera tout seul.
     noHashRef.current = false;
     setNoHashReady(false);
+    downCapRef.current = null;
     lastConnRef.current = { label, host: h, user: u, pass: p, port: pt };
     try {
       // Identite du serveur AVANT tout envoi du mot de passe : sa cle doit etre
@@ -1168,6 +1188,7 @@ export default function App() {
     );
     if (!stuck.length) return;
     const ids = new Set(stuck.map((x) => x.id));
+    rejoinBatch(ids);
     setXfers((prev) =>
       prev.map((p) =>
         ids.has(p.id)
@@ -1219,13 +1240,30 @@ export default function App() {
           p.bytes === 0 &&
           curUp > 1;
         const nextUp = streamFallback ? Math.max(1, Math.floor(curUp / 2)) : p.upStreams;
+        // Fallback TELECHARGEMENT : un morceau d'un telechargement multi-flux a
+        // casse (« multi-thread copy: failed to write chunk: connection lost »),
+        // typiquement un lien qui ne suit pas autant de flux : l'un d'eux finit
+        // affame et coupe au bout du delai. Relancer a l'identique echouait en
+        // boucle (constate : 16 flux par Tailscale vers un NAS DS418, blocage a
+        // 77 % a chaque essai ; 4 flux passent). On divise donc les flux par
+        // deux, pour ce fichier ET pour la suite de la connexion.
+        const curDown = p.downStreams ?? settingsRef.current.streams;
+        const downFallback =
+          !nameFault &&
+          !hashFault &&
+          !p.dstFs.startsWith(REMOTE) &&
+          MULTI_THREAD_ERROR.test(err) &&
+          curDown > 1;
+        const nextDown = downFallback ? Math.max(1, Math.floor(curDown / 2)) : p.downStreams;
+        if (downFallback && nextDown !== undefined)
+          downCapRef.current = Math.min(downCapRef.current ?? nextDown, nextDown);
         // Coupure reseau OU alea transitoire de rclone OU fallback de flux => on
         // reprend tout seul (0 = tentatives illimitees). Pas la peine pour une
         // empreinte cassee : `disableHashCheck` vient de relancer proprement.
         const retry =
           !nameFault &&
           !hashFault &&
-          (streamFallback || NETWORK_ERROR.test(err) || RETRYABLE_ERROR.test(err)) &&
+          (streamFallback || downFallback || NETWORK_ERROR.test(err) || RETRYABLE_ERROR.test(err)) &&
           (max === 0 || attempts < max);
         return {
           ...p,
@@ -1241,6 +1279,7 @@ export default function App() {
           status: retry ? ("retry" as const) : ("error" as const),
           nextTry: retry ? Date.now() + backoff(attempts) : 0,
           upStreams: nextUp,
+          downStreams: nextDown,
           // Marque l'echec comme « probablement le nom » : le message brut de
           // rclone parle d'empreintes, ce qui n'aide personne.
           nameFault,
@@ -1251,7 +1290,9 @@ export default function App() {
               ? t("app.err.hashRetry", { err })
               : streamFallback
                 ? t("app.err.streamFallback", { from: curUp ?? "", to: nextUp ?? "", err })
-                : err,
+                : downFallback
+                  ? t("app.err.downFallback", { from: curDown, to: nextDown ?? "", err })
+                  : err,
         };
       }),
     );
@@ -1264,6 +1305,7 @@ export default function App() {
     const cut = x.dstRemote.lastIndexOf("/");
     const dstRemote =
       cut < 0 ? clean : `${x.dstRemote.slice(0, cut)}/${clean}`;
+    rejoinBatch([x.id]);
     setXfers((prev) =>
       prev.map((p) =>
         p.id === x.id
@@ -1338,6 +1380,11 @@ export default function App() {
         // pas -> exactement l'ancien comportement mono-connexion.
         const isUpload = x.dstFs.startsWith(REMOTE);
         const upStreams = x.upStreams ?? settingsRef.current.uploadStreams;
+        // Telechargement : le reglage, rabaisse par un echec precedent de ce
+        // fichier ou de la connexion (cf. failXfer). Au reglage plein, pas de
+        // `_config` : le bloc global suffit.
+        const wanted = settingsRef.current.streams;
+        const downStreams = Math.min(x.downStreams ?? wanted, downCapRef.current ?? wanted);
         const { jobid } = await rc<{ jobid: number }>("operations/copyfile", {
           srcFs: x.srcFs,
           srcRemote: x.srcRemote,
@@ -1347,7 +1394,9 @@ export default function App() {
           _group: x.group,
           ...(isUpload
             ? { _config: { MultiThreadStreams: upStreams } }
-            : {}),
+            : downStreams < wanted
+              ? { _config: { MultiThreadStreams: downStreams } }
+              : {}),
         });
         // Annule pendant le demarrage : le job existe deja cote rclone, il faut
         // l'arreter — sinon la copie continuerait dans le dos de l'utilisateur.
@@ -1363,6 +1412,8 @@ export default function App() {
                   jobid,
                   status: "running" as const,
                   bytes: 0,
+                  // Flux reellement demandes (affiches a cote du debit).
+                  downStreams: isUpload || downStreams >= wanted ? p.downStreams : downStreams,
                   error: "",
                   // Le compte a rebours « figé » part du lancement : sans ca,
                   // un transfert qui n'a pas encore recu son premier octet
@@ -1713,14 +1764,7 @@ export default function App() {
   // Remet un transfert echoue dans la file (compteur de tentatives remis a zero).
   const requeue = useCallback((ids: Set<number>) => {
     if (ids.size === 0) return;
-    // Un transfert relancé garde son id d'ORIGINE, qui peut être inférieur à
-    // l'ancre du lot courant (posée quand la file s'est vidée après une
-    // annulation) — il tomberait alors sous l'ancre et serait exclu du calcul de
-    // progression : « restant » à 0 et barre figée, alors que la copie tourne.
-    // On abaisse l'ancre juste sous le plus petit id relancé pour les réintégrer
-    // au lot courant.
-    const minId = Math.min(...ids);
-    batchAnchorRef.current = Math.min(batchAnchorRef.current, minId - 1);
+    rejoinBatch(ids);
     setXfers((prev) =>
       prev.map((p) =>
         ids.has(p.id)
@@ -1817,11 +1861,19 @@ export default function App() {
       // Le panneau garde sinon le focus clavier : au retour du focus dans la
       // fenetre (fin d'un deplacement par la barre du haut), le navigateur le
       // lui rendait et il se re-selectionnait aussitot.
+      // Jamais un champ de saisie (barre d'adresse, recherche) : on perdrait ce
+      // qu'on tapait, par exemple en allant copier un chemin dans le Finder.
       const el = document.activeElement as HTMLElement | null;
-      if (el && el.closest(".explorer")) el.blur();
+      if (el && el.closest(".explorer") && !el.matches("input, textarea")) el.blur();
     };
     const onClick = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest(".explorer")) deselect();
+      const target = e.target as HTMLElement;
+      // Element retire de la page par le clic lui-meme (le fil d'Ariane qui
+      // laisse place a la barre d'adresse) : il n'est plus « dans » un panneau,
+      // mais le clic y a bien eu lieu. Le prendre pour un clic exterieur
+      // refermait aussitot la barre d'adresse.
+      if (!target.isConnected) return;
+      if (!target.closest(".explorer")) deselect();
     };
     // Une zone de deplacement de fenetre (barre du haut) ne produit jamais de
     // « click » : le systeme prend la main des l'appui pour deplacer la
@@ -1881,8 +1933,16 @@ export default function App() {
         if (x.id <= anchor || x.status === "error" || x.status === "cancelled")
           continue;
         totalBytes += x.size;
+        // Borne de securite a la taille du fichier : un compteur rclone qui
+        // deborde (octets d'une tentative precedente non remis a zero, cf.
+        // `core/stats-reset` au lancement) ne doit jamais faire afficher plus
+        // de 100 % au lot.
         doneBytes +=
-          x.status === "done" ? x.size : x.status === "running" ? x.bytes : 0;
+          x.status === "done"
+            ? x.size
+            : x.status === "running"
+              ? Math.min(x.bytes, x.size)
+              : 0;
       }
 
       const anyRunning = queue.some(
