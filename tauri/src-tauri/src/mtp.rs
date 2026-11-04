@@ -102,7 +102,10 @@ pub struct Mtp {
     ids: Mutex<HashMap<String, u32>>,
     /// Remotes deja poses dans rclone : remote -> (url, vie du daemon rclone).
     configured: Mutex<HashMap<String, (String, u64)>>,
+    /// Dernier lancement et nombre d'echecs d'affilee : les relances s'espacent
+    /// (5 s, 10 s, 20 s… jusqu'a 5 min) pour un programme qui meurt aussitot.
     last_spawn: Mutex<Option<Instant>>,
+    failures: Mutex<u32>,
     stopping: AtomicBool,
     http: reqwest::Client,
 }
@@ -125,6 +128,7 @@ impl Default for Mtp {
             ids: Mutex::new(HashMap::new()),
             configured: Mutex::new(HashMap::new()),
             last_spawn: Mutex::new(None),
+            failures: Mutex::new(0),
             stopping: AtomicBool::new(false),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(4))
@@ -157,18 +161,20 @@ impl Mtp {
         self.stopping.store(false, Ordering::Relaxed);
     }
     fn kill(&self) {
-        if let Some(mut p) = lock(&self.proc).take() {
+        // Pris hors du verrou : l'attente ci-dessous ne bloque personne.
+        let taken = lock(&self.proc).take();
+        if let Some(mut p) = taken {
             // Fermer son entree standard suffit a l'arreter proprement (sessions
             // MTP refermees) ; on le tue s'il traine.
             drop(p._stdin);
-            for _ in 0..30 {
+            for _ in 0..150 {
                 match p.child.try_wait() {
                     Ok(None) => std::thread::sleep(Duration::from_millis(10)),
                     _ => return,
                 }
             }
             let _ = p.child.kill();
-            let _ = p.child.try_wait();
+            let _ = p.child.wait();
         }
         lock(&self.base).clear();
     }
@@ -191,13 +197,21 @@ impl Mtp {
                 return;
             }
             // Mort : on oublie son port et les remotes qui pointaient dessus.
+            // Mort sans avoir jamais annonce son port = echec de lancement.
+            if lock(&self.base).is_empty() {
+                *lock(&self.failures) += 1;
+            } else {
+                *lock(&self.failures) = 0;
+            }
             *guard = None;
             lock(&self.base).clear();
             lock(&self.configured).clear();
         }
         {
             let mut last = lock(&self.last_spawn);
-            if last.is_some_and(|t| t.elapsed() < Duration::from_secs(5)) {
+            let fails = (*lock(&self.failures)).min(6);
+            let wait = Duration::from_secs((5u64 << fails).min(300));
+            if last.is_some_and(|t| t.elapsed() < wait) {
                 return;
             }
             *last = Some(Instant::now());
@@ -213,7 +227,9 @@ impl Mtp {
         cmd.env("COPITEUR_MTP_TOKEN", &self.token)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            // Journal du programme sur la sortie d'erreur de l'app (comme
+            // rclone) : indispensable pour diagnostiquer un souci USB.
+            .stderr(Stdio::inherit());
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -231,11 +247,20 @@ impl Mtp {
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
-            if reader.read_line(&mut line).is_ok() {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) {
-                    if let Some(port) = v.get("port").and_then(|p| p.as_u64()).filter(|p| *p > 0 && *p < 65536) {
-                        *lock(&base) = format!("http://127.0.0.1:{port}");
-                    }
+            // La ligne du port parmi les toutes premieres (tolere un eventuel
+            // message parasite avant elle).
+            for _ in 0..20 {
+                line.clear();
+                if !reader.read_line(&mut line).is_ok_and(|n| n > 0) {
+                    break;
+                }
+                let port = serde_json::from_str::<serde_json::Value>(line.trim())
+                    .ok()
+                    .and_then(|v| v.get("port").and_then(|p| p.as_u64()))
+                    .filter(|p| *p > 0 && *p < 65536);
+                if let Some(port) = port {
+                    *lock(&base) = format!("http://127.0.0.1:{port}");
+                    break;
                 }
             }
             let mut sink = String::new();
@@ -311,7 +336,11 @@ pub fn phones_supported(state: State<'_, Mtp>) -> bool {
 /// Liste des telephones branches. Pose au passage (ou repose, si rclone ou le
 /// programme ont ete relances) le remote rclone de chaque telephone pret.
 #[tauri::command]
-pub async fn phones_list(state: State<'_, Mtp>, rc: State<'_, Rclone>) -> Result<Vec<Phone>, String> {
+pub async fn phones_list(
+    app: AppHandle,
+    state: State<'_, Mtp>,
+    rc: State<'_, Rclone>,
+) -> Result<Vec<Phone>, String> {
     if !state.supported() {
         return Ok(Vec::new());
     }
@@ -344,7 +373,7 @@ pub async fn phones_list(state: State<'_, Mtp>, rc: State<'_, Rclone>) -> Result
             let url = format!("{base}/dav/{}", d.id);
             let gen = rclone::generation(&rc);
             let known = lock(&state.configured).get(&remote).cloned();
-            if known.as_ref().is_some_and(|(u, g)| *u == url && *g == gen) {
+            if known.is_some_and(|(u, g)| u == url && g == gen) {
                 ready = format!("{remote}:");
             } else {
                 let params = json!({
@@ -356,12 +385,9 @@ pub async fn phones_list(state: State<'_, Mtp>, rc: State<'_, Rclone>) -> Result
                         "bearer_token": state.token,
                     },
                 });
-                if let Ok((_, g)) = rclone::call_internal(&rc, "config/create", &params).await {
-                    // L'adresse a change (programme relance sur un autre port) :
-                    // rclone garde en cache les connexions vers l'ancienne.
-                    if known.is_some_and(|(u, _)| u != url) {
-                        let _ = rclone::call_internal(&rc, "fs/cache/clear", &json!({})).await;
-                    }
+                // (`config/create` vide aussi le cache rclone de CE remote : une
+                // adresse qui change n'y laisse pas d'ancienne connexion.)
+                if let Ok((_, g)) = rclone::call_internal(&app, &rc, "config/create", &params).await {
                     lock(&state.configured).insert(remote.clone(), (url, g));
                     ready = format!("{remote}:");
                 }

@@ -455,6 +455,44 @@ fn is_safe_fs(fs: &str) -> bool {
     b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
 }
 
+/// Parametres « speciaux » de l'API RC (prefixe `_`) que le front emploie. Les
+/// autres (`_filter` : lecture de fichiers au choix…) sont refuses.
+const ALLOWED_UNDERSCORE: &[&str] = &["_async", "_group", "_config"];
+
+/// Reglages qu'un `_config` (par appel) a le droit de surcharger. PIEGE : sans
+/// cette liste, `_config` acceptait N'IMPORTE QUEL reglage rclone — dont
+/// `BackupDir` / `CompareDest` / `CopyDest`, qui prennent un `fs`… donc une
+/// chaine `:sftp,ssh='programme':` qui fait EXECUTER un programme, ou
+/// `MetadataMapper`, qui en lance un directement.
+const ALLOWED_CALL_CONFIG: &[&str] = &[
+    "MultiThreadStreams",
+    "IgnoreTimes",
+    "ConnectTimeout",
+    "Timeout",
+    "LowLevelRetries",
+];
+
+/// Reglages globaux de transfert que le front pose (bloc `main` d'`options/set`,
+/// cf. `xferConfig` dans files.ts). Meme raison que ci-dessus : rien d'autre.
+const ALLOWED_MAIN_OPTIONS: &[&str] = &[
+    "MultiThreadStreams",
+    "MultiThreadChunkSize",
+    "MultiThreadCutoff",
+    "Timeout",
+    "ConnectTimeout",
+    "Inplace",
+    "BwLimit",
+];
+
+/// Toutes les cles d'un objet JSON appartiennent a la liste.
+fn only_keys(v: Option<&Value>, allowed: &[&str]) -> bool {
+    match v {
+        None => true,
+        Some(Value::Object(o)) => o.keys().all(|k| allowed.contains(&k.as_str())),
+        Some(_) => false,
+    }
+}
+
 /// Verifie qu'un appel RC est l'un de ceux que l'app emet. Rend la raison du
 /// refus, journalisee cote front comme n'importe quelle erreur rclone.
 fn check_call(method: &str, params: &Value) -> Result<(), String> {
@@ -462,6 +500,15 @@ fn check_call(method: &str, params: &Value) -> Result<(), String> {
         return Err(format!("appel rclone refusé : {method}"));
     }
     if let Some(obj) = params.as_object() {
+        if let Some(bad) = obj
+            .keys()
+            .find(|k| k.starts_with('_') && !ALLOWED_UNDERSCORE.contains(&k.as_str()))
+        {
+            return Err(format!("appel rclone refusé : paramètre « {bad} »"));
+        }
+        if !only_keys(obj.get("_config"), ALLOWED_CALL_CONFIG) {
+            return Err("appel rclone refusé : réglage non autorisé".into());
+        }
         for key in ["fs", "srcFs", "dstFs"] {
             if let Some(v) = obj.get(key) {
                 let ok = v.as_str().is_some_and(is_safe_fs);
@@ -494,7 +541,7 @@ fn check_call(method: &str, params: &Value) -> Result<(), String> {
             let only_main = params
                 .as_object()
                 .is_some_and(|o| o.keys().all(|k| k == "main"));
-            if !only_main {
+            if !only_main || !only_keys(params.get("main"), ALLOWED_MAIN_OPTIONS) {
                 return Err("appel rclone refusé : options non autorisées".into());
             }
         }
@@ -506,9 +553,19 @@ fn check_call(method: &str, params: &Value) -> Result<(), String> {
 /// Appel RC INTERNE au backend (hors liste blanche : reserve au code Rust, ex.
 /// mtp.rs qui pose les remotes des telephones). Rend aussi la « vie » du
 /// daemon qui a repondu.
-pub(crate) async fn call_internal(state: &Rclone, method: &str, params: &Value) -> Result<(Value, u64), String> {
+pub(crate) async fn call_internal(
+    app: &AppHandle,
+    state: &Rclone,
+    method: &str,
+    params: &Value,
+) -> Result<(Value, u64), String> {
     let (base, auth, http, err) = {
         let started = ensure_alive(state);
+        // Relance faite ICI : le front doit le savoir comme pour `rc_call`
+        // (reglages globaux et remotes des serveurs a reposer).
+        if matches!(started, Ok(true)) {
+            let _ = app.emit("copiteur://rclone-relance", ());
+        }
         let base = lock(&state.base).clone();
         let auth = lock(&state.auth).clone();
         let err = started.err().unwrap_or_else(|| lock(&state.error).clone());
@@ -799,6 +856,9 @@ mod tests {
             ("operations/copyfile", json!({ "srcFs": "srv1:/a", "srcRemote": "x:y.mp4", "dstFs": "D:\\", "dstRemote": "x.mp4" })),
             ("sync/move", json!({ "srcFs": "/a", "dstFs": "/b/c:d" })),
             ("options/set", json!({ "main": { "Inplace": true } })),
+            ("options/set", json!({ "main": { "MultiThreadStreams": 16, "MultiThreadChunkSize": "128M", "MultiThreadCutoff": "256M", "Timeout": "1m0s", "ConnectTimeout": "30s", "Inplace": true, "BwLimit": "0" } })),
+            ("operations/copyfile", json!({ "srcFs": "tel1:/DCIM", "srcRemote": "a", "dstFs": "/x", "dstRemote": "a", "_async": true, "_group": "copy/3", "_config": { "MultiThreadStreams": 0, "IgnoreTimes": true } })),
+            ("operations/list", json!({ "fs": "srv1:", "remote": "", "_config": { "ConnectTimeout": "12s", "Timeout": "12s", "LowLevelRetries": 1 } })),
             ("core/stats-reset", json!({ "group": "copy/12" })),
             ("config/create", json!({ "name": "srv1", "type": "sftp", "parameters": { "host": "h", "user": "u", "pass": "p", "port": "22", "concurrency": "64", "disable_hashcheck": "true" }, "opt": { "obscure": true } })),
             ("config/create", json!({ "name": "srv9999", "type": "sftp", "parameters": { "host": "h" } })),
@@ -891,6 +951,14 @@ mod tests {
             ("config/create", json!({ "name": "tel1", "type": "sftp", "parameters": { "host": "h" } })),
             ("options/set", json!({ "sftp": { "ssh": "calc.exe" } })),
             ("options/set", json!({ "main": {}, "rc": { "NoAuth": true } })),
+            // Reglages qui prennent un `fs` (remote a la volee + `ssh`) ou
+            // lancent un programme : par appel comme en global.
+            ("operations/copyfile", json!({ "srcFs": "/tmp", "srcRemote": "a", "dstFs": "/tmp", "dstRemote": "b", "_config": { "BackupDir": ":sftp,host=x,ssh='calc.exe':" } })),
+            ("operations/copyfile", json!({ "srcFs": "/tmp", "srcRemote": "a", "dstFs": "/tmp", "dstRemote": "b", "_config": { "MetadataMapper": ["calc.exe"], "Metadata": true } })),
+            ("operations/copyfile", json!({ "srcFs": "/tmp", "srcRemote": "a", "dstFs": "/tmp", "dstRemote": "b", "_config": "x" })),
+            ("operations/list", json!({ "fs": "/tmp", "remote": "", "_filter": { "FilesFrom": ["/etc/passwd"] } })),
+            ("options/set", json!({ "main": { "CompareDest": [":sftp,ssh='calc.exe':"] } })),
+            ("options/set", json!({ "main": { "Inplace": true, "BackupDir": "/x" } })),
         ];
         for (m, p) in ko {
             assert!(check_call(m, &p).is_err(), "{m} {p} devrait etre refuse");
