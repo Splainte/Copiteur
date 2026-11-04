@@ -71,7 +71,11 @@ const NETWORK_ERROR =
 // (rename du fichier .partial, avec des fs instancies sous des `_config`
 // divergents en pleine concurrence) : constate ~25 fois sur 295, chaque fois OK
 // au 2e essai. On la traite donc comme une coupure reseau : reprise auto.
-const RETRYABLE_ERROR = /(incompatible remotes|can't move object|can't copy)/i;
+// « didn't find section » : remote momentanement absent (daemon rclone relance,
+// remote repose une seconde plus tard). « job not found » : le job a disparu
+// avec un daemon relance — on relance la copie.
+const RETRYABLE_ERROR =
+  /(incompatible remotes|can't move object|can't copy|didn't find section|job not found)/i;
 
 // Echec d'un telechargement DECOUPE en plusieurs flux (un des morceaux a casse).
 const MULTI_THREAD_ERROR = /multi-thread copy/i;
@@ -216,10 +220,14 @@ export default function App() {
   // Remote rclone attribue a chaque serveur pour la session (« srv1 »…). Stable :
   // une reconnexion reprend le meme, donc les transferts en file aussi.
   const remoteIds = useRef<Map<string, string>>(new Map());
+  // Compteur (jamais reutilise) : un serveur oublie puis recree sous le meme
+  // nom recoit un remote NEUF, aucune copie ou edition en cours de l'ancien ne
+  // peut atterrir sur le nouveau.
+  const remoteSeq = useRef(0);
   const remoteFor = (label: string): string => {
     let r = remoteIds.current.get(label);
     if (!r) {
-      r = `srv${remoteIds.current.size + 1}`;
+      r = `srv${++remoteSeq.current}`;
       remoteIds.current.set(label, r);
     }
     return r;
@@ -729,10 +737,15 @@ export default function App() {
   // `pane`. Deja connecte : on l'affiche simplement (les deux panneaux peuvent
   // montrer le meme serveur). `force` refait la connexion (identifiants
   // modifies, nouvelle tentative apres un echec).
-  const connectServer = async (s: Server, pane: PaneId, force = false) => {
+  // `fromSheet` : connexion lancee par la feuille (nouveau serveur, ou serveur
+  // modifie) — le panneau ne bascule qu'une fois connecte ; d'ici la, la
+  // feuille montre l'attente et l'erreur, et le panneau garde ce qu'il affichait.
+  const connectServer = async (s: Server, pane: PaneId, force = false, fromSheet = false) => {
     const label = s.label;
-    setPaneSrc(pane, { kind: "server", label });
-    setActive(pane);
+    if (!fromSheet) {
+      setPaneSrc(pane, { kind: "server", label });
+      setActive(pane);
+    }
     const existing = connsRef.current[label];
     if (!force && existing && (existing.state === "ok" || existing.state === "connecting")) return;
     const remote = remoteFor(label);
@@ -750,7 +763,7 @@ export default function App() {
     // Si elles sont cassees, le premier echec le revelera et on rebasculera.
     noHashRef.current.delete(remote);
     setNoHashReady((r) => r.filter((x) => x !== remote));
-    delete downCapRef.current[remote];
+    delete downCapRef.current[fsName];
     const memStart = s.startDir ?? servers.find((x) => x.label === label)?.startDir ?? "";
     setConns((c) => ({
       ...c,
@@ -854,6 +867,10 @@ export default function App() {
           ? { ...c, [label]: { ...c[label], state: "ok", err: "", startAt, epoch: c[label].epoch + 1 } }
           : c,
       );
+      if (fromSheet) {
+        setPaneSrc(pane, { kind: "server", label });
+        setActive(pane);
+      }
       logEvent("info", "connexion", t("app.log.connected", { target: `${u}@${h}:${pt}` }));
       // Enregistre / met a jour le serveur (label = nom donne, ou user@host).
       const saved = await invoke<Server[]>("save_server", {
@@ -898,12 +915,25 @@ export default function App() {
   // Renomme un serveur memorise. On migre au passage ses dossiers epingles
   // (cloisonnes par nom), sa connexion et les panneaux qui l'affichent.
   const renameServer = (oldLabel: string, newLabel: string) => {
+    if (newLabel === oldLabel) return;
+    // Nom deja pris : le backend refuserait, mais la liste qu'il renvoie
+    // contient alors l'AUTRE serveur sous ce nom — on ne doit surtout pas
+    // migrer (le panneau « B » viserait le serveur A).
+    if (servers.some((s) => s.label === newLabel)) {
+      setNotice(t("app.notice.nameTaken", { name: newLabel }));
+      return;
+    }
+    // Connexion en cours : elle ecrirait sous l'ancien nom. On attend.
+    if (connsRef.current[oldLabel]?.state === "connecting") {
+      setNotice(t("app.notice.renameWait"));
+      return;
+    }
     invoke<Server[]>("rename_server", { oldLabel, newLabel })
       .then((saved) => {
         setServers(saved);
         // La migration n'a lieu que si le backend a bien applique le renommage
-        // (nom non vide et non deja pris) — sinon `saved` garde l'ancien label.
-        if (!saved.some((s) => s.label === newLabel)) return;
+        // (l'ancien nom a disparu, le nouveau est la).
+        if (saved.some((s) => s.label === oldLabel) || !saved.some((s) => s.label === newLabel)) return;
         const old = localStorage.getItem(pinStoreKey(`server:${oldLabel}`));
         if (old !== null) {
           localStorage.setItem(pinStoreKey(`server:${newLabel}`), old);
@@ -985,6 +1015,13 @@ export default function App() {
   // Oublier un serveur : il est d'abord deconnecte (refuse pendant une copie).
   const forgetServer = (label: string) => {
     if (!disconnectServer(label)) return;
+    const r = remoteIds.current.get(label);
+    remoteIds.current.delete(label);
+    // Un Cmd+V apres « Oublier » ne doit plus rien copier depuis ce serveur.
+    if (r && clipboard.current?.loc.remote === r + ":") {
+      clipboard.current = null;
+      setClipboardReady(false);
+    }
     deleteServer(label);
   };
 
@@ -1027,6 +1064,7 @@ export default function App() {
         startDir: servers.find((x) => x.label === label)?.startDir ?? "",
       },
       sheetPane,
+      true,
       true,
     );
   };
@@ -1143,7 +1181,17 @@ export default function App() {
     // MEME source des deux cotes (le meme serveur, le disque local dans les deux
     // panneaux…) : copier un dossier sur lui-meme ou dans son propre
     // sous-dossier ecraserait (ecriture directe) ou boucle sans fin. On refuse.
-    const sameSource = src.loc.kind === destLoc.kind && src.loc.remote === destLoc.remote;
+    // Deux serveurs memorises peuvent etre le MEME compte sur la meme machine
+    // (adresse locale et adresse Tailscale…) : meme garde-fou. (Ecriture
+    // directe : « Remplacer » un fichier par lui-meme le viderait.)
+    const account = (l: Loc) => {
+      if (l.kind !== "server") return l.kind + "|" + l.remote;
+      const c = Object.values(connsRef.current).find((x) => x.remote === l.remote);
+      return c
+        ? `server|${c.server.user}@${c.server.host.toLowerCase()}:${c.server.port || "22"}`
+        : "server|" + l.remote;
+    };
+    const sameSource = account(src.loc) === account(destLoc);
     // Disque local de macOS et Windows : insensible a la casse.
     const fold = destLoc.kind === "local" && !isLinux;
     const norm = (d: string) => {
@@ -1555,11 +1603,15 @@ export default function App() {
     // Empreinte inexploitable cote serveur : ce n'est pas une corruption, c'est
     // une verification impossible. On corrige la connexion au lieu de blamer le
     // fichier. (Le marquage `hashFault` sert a relancer les bons transferts.)
+    // Seul le cote dont l'empreinte est inexploitable est bascule (copie
+    // serveur -> serveur : l'autre garde sa verification).
     if (isBrokenHashSupport(err)) {
       const x = xfersRef.current.find((p) => p.id === id);
-      if (x)
-        for (const f of [x.srcFs, x.dstFs])
-          if (fsKind(f) === "server") void disableHashCheck(fsRemote(f));
+      const m = HASH_DIFFER.exec(err);
+      if (x && m) {
+        if (!IS_MD5.test(m[1]) && fsKind(x.srcFs) === "server") void disableHashCheck(fsRemote(x.srcFs));
+        if (!IS_MD5.test(m[2]) && fsKind(x.dstFs) === "server") void disableHashCheck(fsRemote(x.dstFs));
+      }
     }
     setXfers((prev) =>
       prev.map((p) => {
@@ -1895,6 +1947,20 @@ export default function App() {
     setSmoothSpeed(nextSpeed);
   }, [tick]);
 
+  const lastRefresh = useRef(0);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Relistage differe (minuterie, pas le battement : celui-ci s'arrete des que
+  // la file est vide, la derniere copie doit pourtant apparaitre).
+  const refreshSoon = useCallback(() => {
+    if (refreshTimer.current) return;
+    const wait = Math.max(0, 2000 - (Date.now() - lastRefresh.current));
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      lastRefresh.current = Date.now();
+      panes.current.left.refresh();
+      panes.current.right.refresh();
+    }, wait);
+  }, []);
   // ---- Suivi temps reel des transferts en cours ----------------------------
   useEffect(() => {
     let cancelled = false;
@@ -2019,14 +2085,18 @@ export default function App() {
                   .catch(() => {});
             }
           }
-        } catch {
-          /* daemon occupe : on retentera au prochain battement */
+        } catch (e) {
+          // Job disparu (daemon rclone relance) : sans ca la ligne resterait
+          // « en cours » a jamais — et bloquerait tout un telephone, qui ne
+          // copie qu'un fichier a la fois. On la relance.
+          if (/job not found/i.test(String(e))) failXfer(x.id, String(e));
+          /* sinon daemon occupe : on retentera au prochain battement */
         }
       }
-      if (anyFinished && !cancelled) {
-        panes.current.left.refresh();
-        panes.current.right.refresh();
-      }
+      // Relistage des panneaux apres des copies terminees, au plus toutes les
+      // 2 s : une rafale de petits fichiers relistait a chaque fichier (couteux
+      // sur un telephone, ou un gros dossier se liste lentement).
+      if (anyFinished && !cancelled) refreshSoon();
     })();
     return () => {
       cancelled = true;

@@ -643,6 +643,18 @@ export function FilePane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, isLocal, roots.length, connKey, startAt]);
 
+  // La source devient indisponible (telephone debranche…) : on oublie la liste et
+  // la selection, qui ne designent plus rien de joignable.
+  useEffect(() => {
+    if (enabled) return;
+    setEntries([]);
+    setSelected(new Set());
+    setAnchor(null);
+    setLead(null);
+    setRenaming(null);
+    setMenu(null);
+  }, [enabled]);
+
   // Ce qui est REELLEMENT affiche : `entries` reste la liste complete (les noms
   // caches comptent pour les collisions de renommage), on ne masque qu'ici.
   // Basculer le reglage est donc instantane, sans relister.
@@ -775,6 +787,7 @@ export function FilePane({
 
   // Suppression : ouvre la confirmation, puis supprime via rclone.
   const askDelete = () => {
+    if (!enabled) return;
     const items = selectedEntries();
     if (items.length) setDel(items);
   };
@@ -989,6 +1002,7 @@ export function FilePane({
   };
 
   const startRename = (e: Entry) => {
+    if (!enabled) return;
     skipBlur.current = false;
     setRenaming({ path: e.Path, value: e.Name });
   };
@@ -1316,7 +1330,9 @@ export function FilePane({
     // suppression) : le panneau ne doit plus rien faire au clavier. `del` est
     // deja intercepte en amont par un ecouteur `window`, mais on double la garde
     // ici pour les modales d'App.
-    if (anyModal || del) return;
+    // Source pas prete (telephone debranche, serveur deconnecte) : la liste
+    // affichee n'a plus de cible valable, aucune action clavier.
+    if (anyModal || del || !enabled) return;
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === "INPUT") return;
     const arrow =

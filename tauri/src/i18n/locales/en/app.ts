@@ -155,6 +155,8 @@ export default {
   // Copy safeguards (same source on both sides).
   "app.notice.sameFolder": "Source and destination are the same folder: nothing to copy.",
   "app.notice.intoItself": "A folder cannot be copied into itself: it was skipped.",
+  "app.notice.nameTaken": "A server is already called “{name}”.",
+  "app.notice.renameWait": "Connecting: rename this server once it is connected.",
 
   "app.log.disconnected": "Disconnected from {name}",
   "app.log.phonePlugged": "Phone plugged in: {name}",

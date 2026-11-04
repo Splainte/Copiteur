@@ -165,6 +165,8 @@ export default {
   // Garde-fous de copie (meme source des deux cotes).
   "app.notice.sameFolder": "La source et la destination sont le même dossier : rien à copier.",
   "app.notice.intoItself": "Un dossier ne peut pas être copié dans lui-même : il a été écarté.",
+  "app.notice.nameTaken": "Un serveur s'appelle déjà « {name} ».",
+  "app.notice.renameWait": "Connexion en cours : renomme ce serveur une fois connecté.",
 
   "app.log.disconnected": "Déconnecté de {name}",
   "app.log.phonePlugged": "Téléphone branché : {name}",
