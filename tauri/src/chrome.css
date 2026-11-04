@@ -1100,9 +1100,6 @@
     opacity 0.18s ease,
     transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.app .transfers-host.is-collapsed {
-  height: 48px;
-}
 .app .transfers-host.is-hidden {
   height: 0;
   margin-top: calc(-1 * var(--x-gap));
@@ -1127,7 +1124,7 @@
   height: 48px;
   padding: 0 10px 0 16px;
 }
-.xfer-island:not(.is-collapsed) .xfer-island-head {
+.xfer-island .xfer-island-head {
   border-bottom: 1px solid var(--x-sep);
 }
 .xfer-island-title {

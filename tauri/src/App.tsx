@@ -201,9 +201,8 @@ export default function App() {
   const [connectSheet, setConnectSheet] = useState<"new" | "edit" | null>(null);
   const [renameSrv, setRenameSrv] = useState<{ old: string; value: string } | null>(null);
   // Zone des transferts sous les panneaux : visible ou cachee EN ENTIER (bouton
-  // Transferts de la barre du haut), et repliee sur sa ligne de resume.
+  // Transferts de la barre du haut, ou chevron de l'îlot).
   const [xferOpen, setXferOpen] = useState(false);
-  const [xferCollapsed, setXferCollapsed] = useState(false);
   // L'utilisateur a cache la zone lui-meme : un nouveau lot ne la fait plus
   // reapparaitre (le bouton Transferts s'etire en pilule de progression).
   const userHidXfer = useRef(false);
@@ -2454,6 +2453,12 @@ export default function App() {
     userHidXfer.current = !next;
     setXferOpen(next);
   };
+  // Chevron de l'îlot : meme effet que le bouton Transferts quand la zone est
+  // ouverte (cachee entierement, le bouton reprend la progression).
+  const hideXfer = () => {
+    userHidXfer.current = true;
+    setXferOpen(false);
+  };
   // Zone cachee pendant une copie : le bouton s'etire en pilule de progression.
   const showProgress = !xferOpen && summary.active > 0;
   // ---- Panneaux : source resolue, selecteur, message d'attente --------------
@@ -2794,7 +2799,7 @@ export default function App() {
         {/* Îlot des transferts sous les panneaux. Toujours monte : il apparait
             et disparait en ANIMANT sa hauteur (cf. chrome.css). */}
         <div
-          className={"transfers-host" + (xferCollapsed ? " is-collapsed" : "") + (xferOpen ? "" : " is-hidden")}
+          className={"transfers-host" + (xferOpen ? "" : " is-hidden")}
           aria-hidden={!xferOpen}
         >
           <TransfersPanel
@@ -2817,8 +2822,7 @@ export default function App() {
             onEditResend={resendEdit}
             onEditStop={stopEdit}
             summary={summary}
-            collapsed={xferCollapsed}
-            onToggleCollapse={() => setXferCollapsed((c) => !c)}
+            onHide={hideXfer}
           />
         </div>
       </div>

@@ -329,8 +329,7 @@ export function TransfersPanel({
   onEditResend,
   onEditStop,
   summary,
-  collapsed,
-  onToggleCollapse,
+  onHide,
 }: {
   queue: Xfer[];
   done: Xfer[];
@@ -350,10 +349,12 @@ export function TransfersPanel({
   onClear: (tab: Tab) => void;
   onEditResend: (e: EditItem) => void;
   onEditStop: (id: number) => void;
-  // Resume affiche dans l'en-tete (reste lisible une fois l'îlot replie).
+  // Resume affiche dans l'en-tete.
   summary: XferSummary;
-  collapsed: boolean;
-  onToggleCollapse: () => void;
+  // Chevron : cache la zone EN ENTIER, exactement comme le bouton Transferts
+  // de la barre du haut (qui s'etire alors en pilule de progression). Plus
+  // d'etat « replie sur une ligne » : il ne servait a rien (demande de Robin).
+  onHide: () => void;
 }) {
   useT();
   const rows =
@@ -433,10 +434,9 @@ export function TransfersPanel({
     );
   const sum = summary;
 
-  // Îlot sous les panneaux : en-tete = onglets + resume + actions ; replie, il
-  // ne reste que cet en-tete (le resume reste lisible).
+  // Îlot sous les panneaux : en-tete = onglets + resume + actions.
   return (
-    <div className={"transfers-panel xfer-island" + (collapsed ? " is-collapsed" : "")}>
+    <div className="transfers-panel xfer-island">
       <div className="xfer-island-head">
         <span className="xfer-island-title">{t("chrome.xfer.title")}</span>
         <div className="xfer-seg" role="tablist">
@@ -466,12 +466,12 @@ export function TransfersPanel({
         <span className="xfer-island-tools">{tools}</span>
         <button
           className="xfer-icon-btn"
-          onClick={onToggleCollapse}
-          title={t(collapsed ? "chrome.xfer.expand" : "chrome.xfer.collapse")}
+          onClick={onHide}
+          title={t("chrome.xfer.hideAll")}
         >
           <svg viewBox="0 0 16 16" aria-hidden>
             <path
-              d={collapsed ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"}
+              d="M4 6l4 4 4-4"
               fill="none"
               stroke="currentColor"
               strokeWidth="1.6"
@@ -481,7 +481,7 @@ export function TransfersPanel({
           </svg>
         </button>
       </div>
-      {!collapsed && list}
+      {list}
     </div>
   );
 }
