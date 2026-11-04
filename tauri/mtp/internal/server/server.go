@@ -195,6 +195,8 @@ func statusFor(err error) int {
 		return http.StatusNotImplemented
 	case errors.Is(err, core.ErrStoreFull):
 		return http.StatusInsufficientStorage
+	case errors.Is(err, core.ErrTooLarge):
+		return http.StatusRequestEntityTooLarge
 	}
 	return http.StatusInternalServerError
 }

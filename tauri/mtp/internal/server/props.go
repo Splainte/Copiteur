@@ -72,24 +72,67 @@ func (s *Server) propfind(ctx context.Context, w http.ResponseWriter, r *http.Re
 	if err != nil {
 		return err
 	}
-	nodes := []core.Node{n}
-	if depth == "1" && n.IsDir() {
-		children, err := d.ReadDir(ctx, n)
-		if err != nil {
+	const head = `<?xml version="1.0" encoding="utf-8"?>` + "\n" + `<D:multistatus xmlns:D="DAV:">`
+	if depth == "0" || !n.IsDir() {
+		var b bytes.Buffer
+		b.WriteString(head)
+		writeResponse(&b, d, id, n)
+		b.WriteString("</D:multistatus>\n")
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		w.Header().Set("Content-Length", strconv.Itoa(b.Len()))
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write(b.Bytes())
+		return nil
+	}
+
+	// Depth 1 sur un dossier : reponse EN FLUX. Un gros dossier (DCIM/Camera,
+	// des dizaines de milliers de photos) demande un GetObjectInfo par objet,
+	// soit des minutes ; sans flux, rclone (delai d'inactivite de 1 min)
+	// abandonnerait avant le premier octet. L'en-tete 207 part avec le
+	// premier lot d'enfants (une erreur avant reste une vraie reponse
+	// d'erreur), puis chaque lot est envoye et pousse des sa lecture.
+	rc := http.NewResponseController(w)
+	started := false
+	var b bytes.Buffer
+	start := func() {
+		started = true
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		w.WriteHeader(http.StatusMultiStatus)
+		b.WriteString(head)
+		writeResponse(&b, d, id, n)
+	}
+	send := func() error {
+		_ = rc.SetWriteDeadline(time.Now().Add(IdleTimeout))
+		_, err := w.Write(b.Bytes())
+		b.Reset()
+		if err == nil {
+			err = rc.Flush()
+		}
+		return err
+	}
+	err = d.ReadDirStream(ctx, n, func(batch []core.Node) error {
+		if !started {
+			start()
+		}
+		for _, c := range batch {
+			writeResponse(&b, d, id, c)
+		}
+		return send()
+	})
+	if err != nil {
+		if !started {
 			return err
 		}
-		nodes = append(nodes, children...)
+		// 207 deja envoye : on coupe la connexion plutot que de laisser
+		// le client croire a une liste complete (rclone supprimerait des
+		// fichiers "absents" lors d'une synchro).
+		panic(http.ErrAbortHandler)
 	}
-	var b bytes.Buffer
-	b.WriteString(`<?xml version="1.0" encoding="utf-8"?>` + "\n" + `<D:multistatus xmlns:D="DAV:">`)
-	for _, c := range nodes {
-		writeResponse(&b, d, id, c)
+	if !started {
+		start() // dossier vide
 	}
 	b.WriteString("</D:multistatus>\n")
-	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	w.Header().Set("Content-Length", strconv.Itoa(b.Len()))
-	w.WriteHeader(http.StatusMultiStatus)
-	_, _ = w.Write(b.Bytes())
+	_ = send()
 	return nil
 }
 

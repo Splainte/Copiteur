@@ -10,12 +10,16 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 
 	"copiteur-mtp/internal/core"
 	"copiteur-mtp/internal/fake"
@@ -644,5 +648,136 @@ func TestConcurrency(t *testing.T) {
 	close(errs)
 	for s := range errs {
 		t.Error(s)
+	}
+}
+
+// Noms : NFD (rclone sur macOS) normalise en NFC, emoji distincts, limites
+// de longueur.
+func TestNames(t *testing.T) {
+	e := newEnv(t, fake.Options{}, nil)
+	nfd := norm.NFD.String("Été à Noël.jpg")
+	nfc := norm.NFC.String(nfd)
+	if nfd == nfc {
+		t.Fatal("test setup: NFD == NFC")
+	}
+	expect(t, e.dav("PUT", url.PathEscape(nfd), nil, []byte("nfd")), 201)
+	if !e.exists(nfc) || e.exists(nfd) {
+		t.Fatal("name not stored in NFC")
+	}
+	// relu par son nom NFD comme NFC, et remplace (pas de doublon)
+	if r := e.dav("GET", url.PathEscape(nfd), nil, nil); r.code != 200 || string(r.body) != "nfd" {
+		t.Fatalf("GET NFD: %d", r.code)
+	}
+	expect(t, e.dav("PUT", url.PathEscape(nfd), nil, []byte("v2")), 204)
+	// fichier NFD deja present sur le telephone : trouve par un chemin NFC
+	e.write(norm.NFD.String("déjà.txt"), []byte("old"))
+	if r := e.dav("GET", url.PathEscape("déjà.txt"), nil, nil); r.code != 200 || string(r.body) != "old" {
+		t.Fatalf("GET NFC of NFD file: %d", r.code)
+	}
+	// emoji : deux noms differents restent deux fichiers differents
+	expect(t, e.dav("PUT", url.PathEscape("😀.jpg"), nil, []byte("grin")), 201)
+	expect(t, e.dav("PUT", url.PathEscape("😁.jpg"), nil, []byte("beam")), 201)
+	if r := e.dav("GET", url.PathEscape("😁.jpg"), nil, nil); string(r.body) != "beam" {
+		t.Fatalf("emoji collision: %q", r.body)
+	}
+	// limites : 253 unites UTF-16 / 255 octets
+	expect(t, e.dav("PUT", strings.Repeat("a", 253), nil, []byte("x")), 201)
+	expect(t, e.dav("PUT", strings.Repeat("b", 254), nil, []byte("x")), 400)
+	expect(t, e.dav("PUT", url.PathEscape(strings.Repeat("é", 128)), nil, []byte("x")), 400) // 256 octets
+	expect(t, e.dav("MKCOL", url.PathEscape(strings.Repeat("😀", 127)), nil, nil), 400)       // 254 unites
+}
+
+// Gros dossier : apres une modification, seul le nouvel objet est relu
+// (difference de handles), et les renommages/suppressions restent justes.
+func TestIncrementalListing(t *testing.T) {
+	var calls atomic.Int64
+	e := newEnv(t, fake.Options{InfoCalls: &calls}, func(dir string) {
+		for i := range 40 {
+			_ = os.MkdirAll(filepath.Join(dir, "cam"), 0o755)
+			_ = os.WriteFile(filepath.Join(dir, "cam", fmt.Sprintf("IMG_%03d.jpg", i)), []byte("x"), 0o644)
+		}
+	})
+	e.dev.IncrementalMin = 10
+	count := func() int {
+		r := e.dav("PROPFIND", "cam/", map[string]string{"Depth": "1"}, nil)
+		expect(t, r, 207)
+		return len(parseMS(t, r.body)) - 1
+	}
+	if n := count(); n != 40 {
+		t.Fatalf("got %d", n)
+	}
+	before := calls.Load()
+	expect(t, e.dav("PUT", "cam/new.jpg", nil, []byte("n")), 201)
+	if n := count(); n != 41 {
+		t.Fatalf("after PUT: %d", n)
+	}
+	if d := calls.Load() - before; d > 3 {
+		t.Errorf("%d GetObjectInfo after one PUT in a big folder (want only the new object)", d)
+	}
+	// renommage : l'objet garde son handle, son nom doit changer
+	expect(t, e.dav("MOVE", "cam/IMG_000.jpg", map[string]string{"Destination": e.url("cam/renamed.jpg")}, nil), 201)
+	r := e.dav("PROPFIND", "cam/", map[string]string{"Depth": "1"}, nil)
+	if !strings.Contains(string(r.body), "renamed.jpg") || strings.Contains(string(r.body), "IMG_000.jpg") {
+		t.Fatal("stale name after rename in a big folder")
+	}
+	expect(t, e.dav("DELETE", "cam/IMG_001.jpg", nil, nil), 204)
+	if n := count(); n != 40 {
+		t.Fatalf("after DELETE: %d", n)
+	}
+	// expiration du cache : rafraichissement par difference aussi
+	e.dev.CacheTTL = 0
+	before = calls.Load()
+	if n := count(); n != 40 {
+		t.Fatalf("after expiry: %d", n)
+	}
+	// (1 = le dossier "cam" lui-meme, dans la racine, petite donc relue)
+	if d := calls.Load() - before; d > 1 {
+		t.Errorf("%d GetObjectInfo on an unchanged big folder", d)
+	}
+}
+
+// PROPFIND Depth 1 en flux : les premiers octets partent avant la fin de la
+// lecture d'un dossier lent (sinon rclone abandonne apres 1 min).
+func TestPropfindStreaming(t *testing.T) {
+	e := newEnv(t, fake.Options{Delay: 5 * time.Millisecond}, func(dir string) {
+		_ = os.MkdirAll(filepath.Join(dir, "big"), 0o755)
+		for i := range 500 {
+			_ = os.WriteFile(filepath.Join(dir, "big", fmt.Sprintf("f%04d", i)), nil, 0o644)
+		}
+	})
+	req, _ := http.NewRequest("PROPFIND", e.url("big/"), nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Depth", "1")
+	t0 := time.Now()
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	first := make([]byte, 64)
+	if _, err := io.ReadFull(res.Body, first); err != nil {
+		t.Fatal(err)
+	}
+	ttfb := time.Since(t0)
+	rest, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := time.Since(t0)
+	t.Logf("first bytes after %v, complete after %v", ttfb, total)
+	if res.StatusCode != 207 {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	if ttfb > time.Second || total < 2*ttfb {
+		t.Fatalf("not streamed: first bytes %v, total %v", ttfb, total)
+	}
+	if ms := parseMS(t, append(first, rest...)); len(ms) != 501 {
+		t.Fatalf("got %d responses", len(ms))
+	}
+	// deuxieme lecture : depuis le cache, d'un coup
+	t0 = time.Now()
+	r := e.dav("PROPFIND", "big/", map[string]string{"Depth": "1"}, nil)
+	if len(parseMS(t, r.body)) != 501 || time.Since(t0) > time.Second {
+		t.Fatalf("cached listing: %v", time.Since(t0))
 	}
 }

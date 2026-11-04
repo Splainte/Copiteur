@@ -106,7 +106,9 @@ function cmpVer(a, b) {
 }
 
 function goVersionOf(bin) {
-  return parseGoVersion(capture(bin, ["version"]));
+  const env = { ...process.env };
+  delete env.GOROOT; // voir goBuild
+  return parseGoVersion(capture(bin, ["version"], { env }));
 }
 
 // Ordre : PATH, cache d'outils du runner GitHub (version la plus haute),
@@ -226,10 +228,21 @@ echo $out
   return shim;
 }
 
-function goBuild(go, out, env) {
+// cacheDir : cache de compilation Go dedie (dossier de travail). Le cache
+// commun garde les drapeaux d'edition de liens de la liaison libusb d'une
+// compilation precedente (chemin vers un .a dans un dossier temporaire deja
+// supprime) : une 2e compilation echouerait ou lierait l'ancienne libusb.
+function goBuild(go, out, env, cacheDir) {
+  const childEnv = { ...process.env, GOFLAGS: "-mod=readonly", ...env };
+  if (cacheDir) childEnv.GOCACHE = cacheDir;
+  // Un GOROOT herite (autre version de Go installee) melangerait la
+  // bibliotheque standard de cette version avec le compilateur choisi
+  // (ex. Go du cache d'outils du runner) : chaque binaire go connait son
+  // propre GOROOT, on le laisse le deduire.
+  delete childEnv.GOROOT;
   run(go, ["build", "-trimpath", "-ldflags", "-s -w", "-o", out, "."], {
     cwd: MTP_DIR,
-    env: { ...process.env, GOFLAGS: "-mod=readonly", ...env },
+    env: childEnv,
   });
 }
 
@@ -266,7 +279,7 @@ async function buildMac() {
       MACOSX_DEPLOYMENT_TARGET: MACOS_MIN,
       CGO_CFLAGS: `-O2 -mmacosx-version-min=${MACOS_MIN}`,
       CGO_LDFLAGS: `-mmacosx-version-min=${MACOS_MIN}`,
-    });
+    }, join(work, "gocache"));
     // Verification : aucune libusb dynamique referencee.
     const deps = capture("otool", ["-L", out]);
     if (deps === null) die("otool -L a echoue");
@@ -306,7 +319,7 @@ async function staticLibusbCheck() {
     const prefix = await buildStaticLibusb(work, { CFLAGS: "-O2" });
     const shim = writePkgConfigShim(work, prefix, ["-lpthread"]);
     const out = join(work, "copiteur-mtp");
-    goBuild(go, out, { CGO_ENABLED: "1", PKG_CONFIG: shim });
+    goBuild(go, out, { CGO_ENABLED: "1", PKG_CONFIG: shim }, join(work, "gocache"));
     const deps = capture("ldd", [out]) || "";
     console.log(deps.trim());
     if (/libusb/i.test(deps)) die("libusb dynamique referencee");

@@ -92,6 +92,11 @@ func (m *Manager) scan() {
 	for _, ud := range list {
 		c := candidateFromDevice(ud)
 		isADB := false
+		if c != nil && !likelyMTPClass(c) {
+			// 3 points d'acces mais pas une classe MTP/PTP (adaptateur
+			// serie CH340/PL2303...) : on n'y touche pas.
+			c = nil
+		}
 		if c == nil {
 			// Telephone branche en mode "recharge uniquement" : pas
 			// d'interface MTP. On ne le voit que s'il expose ADB.
@@ -109,9 +114,12 @@ func (m *Manager) scan() {
 	}
 
 	m.mu.Lock()
-	// debranchements d'abord (un telephone rebranche change d'adresse)
+	// debranchements d'abord (un telephone rebranche change d'adresse).
+	// Un telephone qui passe de "recharge" (ADB seul) a "Transfert de
+	// fichiers" (ou l'inverse) sans changer de bus/adresse/vid/pid est
+	// traite comme debranche puis rebranche, pour etre re-sonde.
 	for key, e := range m.entries {
-		if _, ok := present[key]; !ok {
+		if _, ok := present[key]; !ok || e.adb != adb[key] {
 			m.removeLocked(e)
 		}
 	}
@@ -241,7 +249,8 @@ func likelyMTPClass(c *candidate) bool {
 
 // open : ouverture complete d'un appareil (goroutine). Calquee sur
 // mtp.SelectDevice + mtp.Device.Configure (ce que fait Kalam), mais sans
-// jamais reinitialiser un appareil tenu par un autre programme.
+// jamais reinitialiser un appareil tenu par un autre programme. Seules les
+// interfaces de classe MTP/PTP arrivent ici (filtre dans scan).
 func (m *Manager) open(e *entry) {
 	m.mu.Lock()
 	c := e.c
@@ -249,54 +258,55 @@ func (m *Manager) open(e *entry) {
 	if c == nil {
 		return
 	}
-	fail := func(dev *core.Device, s core.State, msg string) {
+	var manufacturer, product, usbSerial string
+	// L'appareil n'est cree (visible) qu'une fois son identifiant connu :
+	// n° de serie USB ; a defaut n° de serie MTP (DeviceInfo, apres la
+	// session) ; a defaut (echec avant) vid-pid-bus-adresse.
+	devFor := func(serial string) *core.Device {
+		return m.ensureDevice(e, serial, product, manufacturer)
+	}
+	fail := func(s core.State, msg string) {
 		m.mu.Lock()
 		e.nextTry = time.Now().Add(RetryInterval)
 		m.mu.Unlock()
-		if dev != nil {
-			dev.SetState(s, msg)
-			log.Printf("device %s: %s: %s", dev.ID(), s, msg)
-		}
+		dev := devFor(usbSerial)
+		dev.SetState(s, msg)
+		log.Printf("device %s: %s: %s", dev.ID(), s, msg)
+	}
+	ignore := func() {
+		m.mu.Lock()
+		e.ignored = true
+		m.mu.Unlock()
+		m.dropDevice(e)
 	}
 	t := &transport{c: c, Timeout: timeoutOpen}
 
 	if err := t.openHandle(); err != nil {
-		// Impossible d'ouvrir (Linux : droits udev). On ne l'affiche que
-		// s'il a la tete d'un MTP.
-		if !likelyMTPClass(c) {
-			m.mu.Lock()
-			e.ignored = true
-			m.mu.Unlock()
-			return
-		}
-		dev := m.ensureDevice(e, "", "", "")
+		// Impossible d'ouvrir (Linux : droits udev ; macOS : rare).
 		st, msg := core.StateError, "cannot open USB device: "+err.Error()
 		if isBusyErr(err) && !errors.Is(err, usb.ERROR_ACCESS) {
 			st, msg = core.StateBusy, busyHint+": "+err.Error()
 		}
-		fail(dev, st, msg)
+		fail(st, msg)
 		return
 	}
 
 	looksMTP, known, serr := t.interfaceLooksMTP()
 	if known && !looksMTP {
+		// ex. telephone en mode PTP, appareil photo : pas pour nous
 		t.Close()
-		m.mu.Lock()
-		e.ignored = true
-		m.mu.Unlock()
+		ignore()
 		return
 	}
 	if serr != nil {
 		log.Printf("USB %s: interface string: %v", e.key, serr)
 	}
-	manufacturer := t.stringDescr(c.devDescr.Manufacturer)
-	product := t.stringDescr(c.devDescr.Product)
-	serial := t.stringDescr(c.devDescr.SerialNumber)
+	manufacturer = t.stringDescr(c.devDescr.Manufacturer)
+	product = t.stringDescr(c.devDescr.Product)
+	usbSerial = t.stringDescr(c.devDescr.SerialNumber)
 
-	var dev *core.Device
-	if known || likelyMTPClass(c) {
-		dev = m.ensureDevice(e, serial, product, manufacturer)
-		if dev.State() != core.StateConnecting {
+	if usbSerial != "" {
+		if dev := devFor(usbSerial); dev.State() != core.StateConnecting {
 			dev.SetState(core.StateConnecting, "")
 		}
 	}
@@ -306,17 +316,10 @@ func (m *Manager) open(e *entry) {
 	}
 	if err := t.claim(); err != nil {
 		t.Close()
-		if dev == nil {
-			// pas de chaine d'interface et classe inattendue : on ignore
-			m.mu.Lock()
-			e.ignored = true
-			m.mu.Unlock()
-			return
-		}
 		if isBusyErr(err) {
-			fail(dev, core.StateBusy, busyHint+": "+err.Error())
+			fail(core.StateBusy, busyHint+": "+err.Error())
 		} else {
-			fail(dev, core.StateError, "claim interface: "+err.Error())
+			fail(core.StateError, "claim interface: "+err.Error())
 		}
 		return
 	}
@@ -324,24 +327,16 @@ func (m *Manager) open(e *entry) {
 	if !known {
 		// Pas de chaine d'interface : GetDeviceInfo hors session, comme
 		// go-mtpfs, pour verifier l'extension MTP.
-		var info mtp.DeviceInfo
+		var info rawDeviceInfo
 		_ = t.GetDeviceInfo(&info)
 		ext := strings.ToLower(info.MTPExtension)
 		if !strings.Contains(ext, "microsoft") && !strings.Contains(ext, "android") {
 			t.Close()
-			m.mu.Lock()
-			e.ignored = true
-			m.mu.Unlock()
-			if dev != nil {
-				m.dropDevice(e)
-			}
+			ignore()
 			return
 		}
-		if dev == nil {
-			dev = m.ensureDevice(e, serial, product, manufacturer)
-		}
 		if t.h == nil {
-			fail(dev, core.StateError, "GetDeviceInfo failed")
+			fail(core.StateError, "GetDeviceInfo failed")
 			return
 		}
 	}
@@ -349,13 +344,13 @@ func (m *Manager) open(e *entry) {
 	err := openSession(t)
 	if err != nil && isBusyErr(err) {
 		t.Close()
-		fail(dev, core.StateBusy, busyHint+": OpenSession: "+err.Error())
+		fail(core.StateBusy, busyHint+": OpenSession: "+err.Error())
 		return
 	}
 	if err != nil {
 		// Comme mtp.Device.Configure : reset puis nouvel essai. On tient
 		// l'interface, donc le reset ne perturbe aucun autre programme.
-		log.Printf("device %s: OpenSession failed (%v), resetting", dev.ID(), err)
+		log.Printf("USB %s: OpenSession failed (%v), resetting", e.key, err)
 		if t.h != nil {
 			_ = t.h.Reset()
 		}
@@ -369,23 +364,28 @@ func (m *Manager) open(e *entry) {
 		if err != nil {
 			t.Close()
 			if isBusyErr(err) {
-				fail(dev, core.StateBusy, busyHint+": "+err.Error())
+				fail(core.StateBusy, busyHint+": "+err.Error())
 			} else {
-				fail(dev, core.StateError, "OpenSession: "+err.Error())
+				fail(core.StateError, "OpenSession: "+err.Error())
 			}
 			return
 		}
 	}
 
 	t.Timeout = timeoutNormal
-	var info mtp.DeviceInfo
+	var info rawDeviceInfo
 	if err := t.GetDeviceInfo(&info); err != nil {
 		if t.h == nil {
-			fail(dev, core.StateError, "GetDeviceInfo: "+err.Error())
+			fail(core.StateError, "GetDeviceInfo: "+err.Error())
 			return
 		}
-		log.Printf("device %s: GetDeviceInfo: %v (continuing)", dev.ID(), err)
+		log.Printf("USB %s: GetDeviceInfo: %v (continuing)", e.key, err)
 	}
+	serial := usbSerial
+	if serial == "" {
+		serial = strings.TrimSpace(info.SerialNumber)
+	}
+	dev := devFor(serial)
 	name := strings.TrimSpace(info.Model)
 	if name == "" {
 		name = product
@@ -398,12 +398,15 @@ func (m *Manager) open(e *entry) {
 		man = manufacturer
 	}
 	dev.SetIdentity(name, man)
+	if dev.State() != core.StateConnecting {
+		dev.SetState(core.StateConnecting, "")
+	}
 
 	conn := newConn(t, &info)
 	storages, err := conn.Storages()
 	if err != nil {
 		conn.Close()
-		fail(dev, core.StateError, "storages: "+err.Error())
+		fail(core.StateError, "storages: "+err.Error())
 		return
 	}
 	m.mu.Lock()

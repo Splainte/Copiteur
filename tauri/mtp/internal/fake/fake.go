@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"copiteur-mtp/internal/core"
@@ -41,6 +42,9 @@ type Options struct {
 	NoCopy            bool // pas de CopyObject
 	NoRename          bool // pas de SetObjectPropValue(ObjectFileName)
 	NoRecursiveDelete bool // DeleteObject refuse les dossiers non vides
+
+	// InfoCalls, si non nil, compte les GetObjectInfo (tests du cache).
+	InfoCalls *atomic.Int64
 }
 
 type storage struct {
@@ -261,6 +265,9 @@ func (c *Conn) Info(h uint32) (core.Object, error) {
 		return core.Object{}, err
 	}
 	defer done()
+	if c.opts.InfoCalls != nil {
+		c.opts.InfoCalls.Add(1)
+	}
 	e, err := c.lookup(h)
 	if err != nil {
 		return core.Object{}, err

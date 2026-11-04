@@ -29,31 +29,6 @@ const (
 
 const vendorSamsung = 0x04e8
 
-// rawObjectInfo : meme disposition que mtp.ObjectInfo, mais les dates sont
-// lues comme des chaines. Le decodeur d'origine echoue (et fait echouer
-// tout GetObjectInfo) sur une date qu'il ne sait pas lire.
-type rawObjectInfo struct {
-	StorageID           uint32
-	ObjectFormat        uint16
-	ProtectionStatus    uint16
-	CompressedSize      uint32
-	ThumbFormat         uint16
-	ThumbCompressedSize uint32
-	ThumbPixWidth       uint32
-	ThumbPixHeight      uint32
-	ImagePixWidth       uint32
-	ImagePixHeight      uint32
-	ImageBitDepth       uint32
-	ParentObject        uint32
-	AssociationType     uint16
-	AssociationDesc     uint32
-	SequenceNumber      uint32
-	Filename            string
-	CaptureDate         string
-	ModificationDate    string
-	Keywords            string
-}
-
 // parseMTPDate lit une date MTP ("YYYYMMDDThhmmss[.s][Z|+hhmm]").
 // Android l'envoie en heure locale sans fuseau : on l'interprete dans le
 // fuseau du Mac. Zero si illisible.
@@ -95,7 +70,7 @@ type usbConn struct {
 	timeout int
 }
 
-func newConn(t *transport, info *mtp.DeviceInfo) *usbConn {
+func newConn(t *transport, info *rawDeviceInfo) *usbConn {
 	c := &usbConn{t: t, ops: map[uint16]bool{}, timeout: timeoutNormal}
 	for _, op := range info.OperationsSupported {
 		c.ops[op] = true
@@ -132,10 +107,29 @@ func (c *usbConn) mapErr(err error) error {
 			return fmt.Errorf("%w: %v", core.ErrBusy, err)
 		case mtp.RC_SessionNotOpen, mtp.RC_InvalidTransactionID:
 			return fmt.Errorf("%w: %v", core.ErrGone, err)
+		case mtp.RC_MTP_Object_Too_Large:
+			// typiquement un fichier >= 4 Gio vers une carte SD en FAT32
+			return fmt.Errorf("%w: %v (file too large for this storage, FAT32 limit is 4 GiB)", core.ErrTooLarge, err)
 		}
 		return fmt.Errorf("MTP: %v", err)
 	}
 	return err
+}
+
+// fatChars : caracteres refuses par les systemes de fichiers FAT/exFAT
+// (cartes SD) et par certaines versions d'Android.
+const fatChars = `:?"|*<>\`
+
+// nameErr : Android repond GeneralError (sans plus de detail) quand il
+// refuse un nom. Si le nom contient un caractere suspect, on renvoie
+// ErrBadName (400, rclone ne reessaie pas) plutot qu'une erreur generique
+// (500, rclone reessaie en boucle).
+func (c *usbConn) nameErr(mapped, raw error, name string) error {
+	var rc mtp.RCError
+	if errors.As(raw, &rc) && rc == mtp.RC_GeneralError && strings.ContainsAny(name, fatChars) {
+		return fmt.Errorf("%w: %q refused by the device (characters %s are not allowed on this storage)", core.ErrBadName, name, fatChars)
+	}
+	return mapped
 }
 
 func (c *usbConn) long() func() {
@@ -162,7 +156,7 @@ func (c *usbConn) Storages() ([]core.Storage, error) {
 			// pas de stockage logique (carte SD absente...) comme libmtp
 			continue
 		}
-		var si mtp.StorageInfo
+		var si rawStorageInfo
 		if err := c.t.GetStorageInfo(id, &si); err != nil {
 			if c.t.h == nil {
 				return nil, c.mapErr(err)
@@ -174,7 +168,7 @@ func (c *usbConn) Storages() ([]core.Storage, error) {
 		if strings.TrimSpace(desc) == "" {
 			desc = si.VolumeLabel
 		}
-		out = append(out, core.Storage{ID: id, Description: desc, Total: si.MaxCapability, Free: si.FreeSpaceInBytes})
+		out = append(out, core.Storage{ID: id, Description: desc, Total: si.Fixed.MaxCapability, Free: si.Fixed.FreeSpaceInBytes})
 	}
 	return out, nil
 }
@@ -248,16 +242,18 @@ func (c *usbConn) ReadAll(h uint32, w io.Writer) error {
 
 // CreateFolder implemente core.Conn.
 func (c *usbConn) CreateFolder(storageID, parent uint32, name string) (uint32, error) {
-	info := mtp.ObjectInfo{
-		StorageID:        storageID,
-		ObjectFormat:     mtp.OFC_Association,
-		AssociationType:  0x0001, // GenericFolder
-		ParentObject:     parent,
+	info := sendObjectInfo{
+		objectInfoFixed: objectInfoFixed{
+			StorageID:       storageID,
+			ObjectFormat:    mtp.OFC_Association,
+			AssociationType: 0x0001, // GenericFolder
+			ParentObject:    parent,
+		},
 		Filename:         name,
 		ModificationDate: time.Now(),
 	}
 	_, _, h, err := c.t.SendObjectInfo(storageID, parent, &info)
-	return h, c.mapErr(err)
+	return h, c.nameErr(c.mapErr(err), err, name)
 }
 
 // Send implemente core.Conn.
@@ -269,17 +265,19 @@ func (c *usbConn) Send(storageID, parent uint32, name string, size int64, mtime 
 	if mtime.IsZero() {
 		mtime = time.Now()
 	}
-	info := mtp.ObjectInfo{
-		StorageID:        storageID,
-		ObjectFormat:     mtp.OFC_Undefined,
-		ParentObject:     parent,
+	info := sendObjectInfo{
+		objectInfoFixed: objectInfoFixed{
+			StorageID:      storageID,
+			ObjectFormat:   mtp.OFC_Undefined,
+			ParentObject:   parent,
+			CompressedSize: compressed,
+		},
 		Filename:         name,
-		CompressedSize:   compressed,
 		ModificationDate: mtime.Local(),
 	}
 	_, _, h, err := c.t.SendObjectInfo(storageID, parent, &info)
 	if err != nil {
-		return 0, c.mapErr(err)
+		return 0, c.nameErr(c.mapErr(err), err, name)
 	}
 	defer c.long()()
 	err = c.t.SendObject(r, size)
@@ -311,7 +309,7 @@ func (c *usbConn) Rename(h uint32, name string) error {
 	if !c.ops[mtp.OC_MTP_SetObjectPropValue] {
 		return core.ErrNotSupported
 	}
-	err := c.t.SetObjectPropValue(h, mtp.OPC_ObjectFileName, &mtp.StringValue{Value: name})
+	err := c.t.SetObjectPropValue(h, mtp.OPC_ObjectFileName, &mtpString{Value: name})
 	if err == nil {
 		return nil
 	}
@@ -323,7 +321,7 @@ func (c *usbConn) Rename(h uint32, name string) error {
 			return nil
 		}
 	}
-	return c.mapErr(err)
+	return c.nameErr(c.mapErr(err), err, name)
 }
 
 func rootAsZero(parent uint32) uint32 {

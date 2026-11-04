@@ -188,14 +188,37 @@ func (d *Device) Put(ctx context.Context, p string, size int64, mtime time.Time,
 	}
 	key := pn.key()
 	defer d.invalidate(key)
+	dst := joinPath(pn.Path, name)
 
+	created, cleanup, err := d.putLocked(key, name, existing, exists, size, mtime, body)
+	if cleanup {
+		// Nettoyage par CHEMIN, verrou rendu, cache vide : apres un
+		// Resync les handles de l'ancienne session ne sont plus fiables.
+		if cerr := d.deleteFileByPath(context.WithoutCancel(ctx), dst); cerr != nil {
+			log.Printf("WARNING: could not delete the incomplete file %q: %v (it may remain on the phone)", dst, cerr)
+			return false, fmt.Errorf("%w (and the incomplete file could not be deleted: %v)", err, cerr)
+		}
+	}
+	return created, err
+}
+
+// putLocked fait l'envoi sous le verrou. cleanup = un fichier incomplet a
+// peut-etre ete laisse a l'emplacement de destination et doit etre
+// supprime par chemin (apres Resync).
+func (d *Device) putLocked(key dirKey, name string, existing Object, exists bool, size int64, mtime time.Time, body io.Reader) (created, cleanup bool, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if exists {
 		// MTP ne sait pas ecraser : on supprime d'abord.
+		//
+		// (Envoyer sous un nom temporaire puis renommer protegerait
+		// l'original si l'envoi echoue, mais rclone supprime de toute
+		// facon le fichier de destination apres un PUT rate
+		// (Object.Update -> Remove), et un renommage MTP de plus par
+		// fichier coute cher sur les gros dossiers : comportement garde.)
 		err := d.doLocked(func(c Conn) error { return c.Delete(existing.Handle) })
 		if err != nil && !errors.Is(err, ErrNotFound) {
-			return false, err
+			return false, false, err
 		}
 		d.invalidate(key)
 	}
@@ -207,63 +230,90 @@ func (d *Device) Put(ctx context.Context, p string, size int64, mtime time.Time,
 		return err
 	})
 	if err == nil && !pr.short {
-		return !exists, nil
+		return !exists, false, nil
 	}
 	if errors.Is(err, ErrGone) || errors.Is(err, ErrNotReady) {
-		return false, err
+		return false, false, err
 	}
 	if err == nil {
-		// transaction terminee avec du bourrage : on jette l'objet.
+		// Transaction terminee avec du bourrage : l'objet a la bonne taille
+		// mais finit par des zeros. Il ne doit JAMAIS rester : on insiste,
+		// puis on se rabat sur Resync + suppression par chemin.
 		log.Printf("upload of %q interrupted after %d/%d bytes (padded with zeros), deleting partial object", name, pr.got, size)
-		if derr := d.doLocked(func(c Conn) error { return c.Delete(h) }); derr != nil && !errors.Is(derr, ErrNotFound) {
-			log.Printf("could not delete partial object %q: %v", name, derr)
+		incomplete := fmt.Errorf("%w: %v", ErrIncomplete, pr.cause)
+		var derr error
+		for range 2 {
+			derr = d.doLocked(func(c Conn) error { return c.Delete(h) })
+			if derr == nil || errors.Is(derr, ErrNotFound) {
+				return false, false, incomplete
+			}
+			if errors.Is(derr, ErrGone) {
+				log.Printf("WARNING: device gone, the zero-padded file %q may remain on the phone", name)
+				return false, false, incomplete
+			}
 		}
-		return false, fmt.Errorf("%w: %v", ErrIncomplete, pr.cause)
+		log.Printf("could not delete zero-padded object %q: %v; resyncing", name, derr)
+		if rerr := d.resyncLocked(); rerr != nil {
+			return false, false, fmt.Errorf("%w (zero-padded file may remain: %v)", incomplete, rerr)
+		}
+		return false, true, incomplete
 	}
 	if errors.Is(err, ErrDesync) || pr.short {
 		log.Printf("upload of %q interrupted (%v), resyncing the MTP session", name, err)
-		rerr := d.doLocked(func(c Conn) error { return c.Resync() })
-		if rerr != nil {
-			if !errors.Is(rerr, ErrGone) {
-				d.goneLocked(fmt.Errorf("%w: resync failed: %v", ErrGone, rerr))
-			}
-			return false, err
+		if rerr := d.resyncLocked(); rerr != nil {
+			return false, false, err
 		}
-		d.deletePartialLocked(key, name)
+		// Android supprime en general lui-meme le fichier partiel ; on
+		// verifie quand meme (par chemin, une fois le verrou rendu).
 		if pr.short {
-			return false, fmt.Errorf("%w: %v", ErrIncomplete, pr.cause)
+			err = fmt.Errorf("%w: %v", ErrIncomplete, pr.cause)
 		}
-		return false, err
+		return false, true, err
 	}
 	// erreur "propre" (refus de SendObjectInfo, stockage plein pendant
-	// l'ecriture...) : supprimer l'objet s'il a ete cree.
+	// l'ecriture...) : la session est saine, le handle valide.
 	if h != 0 {
 		_ = d.doLocked(func(c Conn) error { return c.Delete(h) })
 	}
-	return false, err
+	return false, false, err
 }
 
-// deletePartialLocked supprime par son nom l'objet laisse par un upload
-// interrompu (les handles ne survivent pas forcement a la nouvelle
-// session). Appele avec mu tenu.
-func (d *Device) deletePartialLocked(key dirKey, name string) {
-	_ = d.doLocked(func(c Conn) error {
-		hs, err := c.Handles(key.storage, key.parent)
+// resyncLocked : Resync de la session puis invalidation COMPLETE du cache
+// (la nouvelle session peut renumeroter les handles : garder d'anciens
+// listings ferait lire ou supprimer un autre objet). Appele avec mu tenu.
+func (d *Device) resyncLocked() error {
+	rerr := d.doLocked(func(c Conn) error { return c.Resync() })
+	d.invalidateAll()
+	if rerr != nil && !errors.Is(rerr, ErrGone) && !errors.Is(rerr, ErrNotReady) {
+		d.goneLocked(fmt.Errorf("%w: resync failed: %v", ErrGone, rerr))
+	}
+	return rerr
+}
+
+// deleteFileByPath supprime le FICHIER p s'il existe (resolution fraiche
+// par chemin ; jamais un dossier). Sans verrou.
+func (d *Device) deleteFileByPath(ctx context.Context, p string) error {
+	var err error
+	for range 2 {
+		var n Node
+		n, err = d.Resolve(ctx, p)
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
 		if err != nil {
-			return err
+			continue
 		}
-		for _, h := range hs {
-			o, err := c.Info(h)
-			if err != nil {
-				continue
-			}
-			if o.Name == name && !o.IsDir {
-				log.Printf("deleting partial object %q", name)
-				return c.Delete(h)
-			}
+		if n.kind != nodeObject || n.Obj.IsDir {
+			return nil
 		}
-		return nil
-	})
+		log.Printf("deleting incomplete file %q", p)
+		err = d.do(func(c Conn) error { return c.Delete(n.Obj.Handle) })
+		d.invalidate(n.parent)
+		if err == nil || errors.Is(err, ErrNotFound) {
+			return nil
+		}
+	}
+	return err
 }
 
 // Delete supprime un fichier ou un dossier (recursif).
@@ -294,7 +344,7 @@ func (d *Device) deleteObj(ctx context.Context, o Object) error {
 	}
 	// Repli : suppression manuelle du contenu puis du dossier.
 	log.Printf("DeleteObject on folder %q failed (%v), deleting recursively", o.Name, err)
-	children, ferr := d.fetch(ctx, dirKey{storage: o.StorageID, parent: o.Handle})
+	children, ferr := d.fetch(ctx, dirKey{storage: o.StorageID, parent: o.Handle}, nil, nil)
 	if ferr != nil {
 		return ferr
 	}
@@ -392,20 +442,29 @@ func (d *Device) Move(ctx context.Context, src, dst string, overwrite bool) (exi
 	if err != nil {
 		return existed, err
 	}
-	defer d.invalidateAll()
 	dk := pn.key()
 	o := sn.Obj
+	defer func() {
+		if o.IsDir {
+			d.invalidateAll()
+			return
+		}
+		// fichier : seuls les deux dossiers changent ; l'objet est oublie
+		// (son nom a pu changer, il sera relu)
+		d.forget(sn.parent, o.Handle)
+		d.forget(dk, o.Handle)
+	}()
 	if dk == sn.parent {
 		if o.Name == name {
 			return existed, nil
 		}
 		err := d.do(func(c Conn) error { return c.Rename(o.Handle, name) })
 		if errors.Is(err, ErrNotSupported) && !o.IsDir {
-			return existed, d.copyThenDelete(ctx, o, dk, name)
+			return existed, d.copyThenDelete(ctx, o, dk, name, dst)
 		}
 		return existed, err
 	}
-	return existed, d.moveObj(ctx, o, sn.parent, dk, name)
+	return existed, d.moveObj(ctx, o, sn.parent, dk, name, dst)
 }
 
 func samePathFold(a, b string) bool {
@@ -414,7 +473,7 @@ func samePathFold(a, b string) bool {
 
 // moveObj deplace o (dans le dossier from) vers le dossier to sous le nom
 // name, avec repli copie+suppression.
-func (d *Device) moveObj(ctx context.Context, o Object, from, to dirKey, name string) error {
+func (d *Device) moveObj(ctx context.Context, o Object, from, to dirKey, name, dstPath string) error {
 	// MoveObject garde le nom : s'il est deja pris dans la destination, on
 	// renomme d'abord la source avec un nom temporaire.
 	destObjs, err := d.list(ctx, to)
@@ -427,15 +486,15 @@ func (d *Device) moveObj(ctx context.Context, o Object, from, to dirKey, name st
 		if err := d.do(func(c Conn) error { return c.Rename(o.Handle, tmp) }); err != nil {
 			return err
 		}
-		d.invalidate(from)
+		d.forget(from, o.Handle)
 		moveName = tmp
 	}
 	err = d.do(func(c Conn) error { return c.Move(o.Handle, to.storage, to.parent) })
 	if errors.Is(err, ErrNotSupported) {
 		if o.IsDir {
-			return d.moveDirManually(ctx, o, to, name)
+			return d.moveDirManually(ctx, o, to, name, dstPath)
 		}
-		return d.copyThenDelete(ctx, o, to, name)
+		return d.copyThenDelete(ctx, o, to, name, dstPath)
 	}
 	if err != nil {
 		return err
@@ -447,7 +506,7 @@ func (d *Device) moveObj(ctx context.Context, o Object, from, to dirKey, name st
 }
 
 // moveDirManually : repli quand MoveObject n'existe pas pour un dossier.
-func (d *Device) moveDirManually(ctx context.Context, o Object, to dirKey, name string) error {
+func (d *Device) moveDirManually(ctx context.Context, o Object, to dirKey, name, dstPath string) error {
 	var nh uint32
 	err := d.do(func(c Conn) error {
 		var err error
@@ -458,16 +517,16 @@ func (d *Device) moveDirManually(ctx context.Context, o Object, to dirKey, name 
 		return err
 	}
 	from := dirKey{storage: o.StorageID, parent: o.Handle}
-	children, err := d.fetch(ctx, from)
+	children, err := d.fetch(ctx, from, nil, nil)
 	if err != nil {
 		return err
 	}
 	nk := dirKey{storage: to.storage, parent: nh}
 	for _, ch := range children {
 		if ch.IsDir {
-			err = d.moveDirManually(ctx, ch, nk, ch.Name)
+			err = d.moveDirManually(ctx, ch, nk, ch.Name, dstPath+"/"+ch.Name)
 		} else {
-			err = d.copyThenDelete(ctx, ch, nk, ch.Name)
+			err = d.copyThenDelete(ctx, ch, nk, ch.Name, dstPath+"/"+ch.Name)
 		}
 		if err != nil {
 			return err
@@ -477,8 +536,8 @@ func (d *Device) moveDirManually(ctx context.Context, o Object, to dirKey, name 
 }
 
 // copyThenDelete : repli de MOVE pour un fichier.
-func (d *Device) copyThenDelete(ctx context.Context, o Object, to dirKey, name string) error {
-	if err := d.copyFile(ctx, o, to, name); err != nil {
+func (d *Device) copyThenDelete(ctx context.Context, o Object, to dirKey, name, dstPath string) error {
+	if err := d.copyFile(ctx, o, to, name, dstPath); err != nil {
 		return err
 	}
 	return d.deleteObj(ctx, o)
@@ -509,7 +568,7 @@ func (d *Device) Copy(ctx context.Context, src, dst string, overwrite bool) (exi
 		return existed, fmt.Errorf("%w: source and destination are the same", ErrForbidden)
 	}
 	defer d.invalidate(pn.key())
-	return existed, d.copyFile(ctx, sn.Obj, pn.key(), name)
+	return existed, d.copyFile(ctx, sn.Obj, pn.key(), name, dst)
 }
 
 func findNameSameHandle(ctx context.Context, d *Device, pn Node, name string, h uint32) (Object, bool) {
@@ -523,8 +582,9 @@ func findNameSameHandle(ctx context.Context, d *Device, pn Node, name string, h 
 
 // copyFile copie un fichier dans le dossier to sous le nom name :
 // CopyObject (+ renommage) si possible, sinon lecture vers un fichier
-// temporaire puis envoi.
-func (d *Device) copyFile(ctx context.Context, o Object, to dirKey, name string) error {
+// temporaire puis envoi. dstPath (chemin de la destination) sert au
+// nettoyage si l'envoi est interrompu.
+func (d *Device) copyFile(ctx context.Context, o Object, to dirKey, name, dstPath string) error {
 	destObjs, err := d.list(ctx, to)
 	if err != nil {
 		return err
@@ -543,6 +603,7 @@ func (d *Device) copyFile(ctx context.Context, o Object, to dirKey, name string)
 				return nil
 			}
 			err = d.do(func(c Conn) error { return c.Rename(nh, name) })
+			d.forget(to, nh)
 			if err == nil {
 				return nil
 			}
@@ -555,10 +616,10 @@ func (d *Device) copyFile(ctx context.Context, o Object, to dirKey, name string)
 		}
 		log.Printf("CopyObject unavailable for %q (%v), copying through a temporary file", o.Name, err)
 	}
-	return d.streamCopy(ctx, o, to, name)
+	return d.streamCopy(ctx, o, to, name, dstPath)
 }
 
-func (d *Device) streamCopy(ctx context.Context, o Object, to dirKey, name string) error {
+func (d *Device) streamCopy(ctx context.Context, o Object, to dirKey, name, dstPath string) error {
 	tmp, err := os.CreateTemp("", "copiteur-mtp-copy-*")
 	if err != nil {
 		return err
@@ -573,24 +634,27 @@ func (d *Device) streamCopy(ctx context.Context, o Object, to dirKey, name strin
 		return err
 	}
 	defer d.invalidate(to)
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	var h uint32
-	err = d.doLocked(func(c Conn) error {
-		var err error
-		h, err = c.Send(to.storage, to.parent, name, o.Size, o.ModTime, tmp)
-		return err
-	})
-	if errors.Is(err, ErrDesync) {
-		if rerr := d.doLocked(func(c Conn) error { return c.Resync() }); rerr != nil {
-			if !errors.Is(rerr, ErrGone) {
-				d.goneLocked(fmt.Errorf("%w: resync failed: %v", ErrGone, rerr))
-			}
+	cleanup, err := func() (bool, error) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		var h uint32
+		err := d.doLocked(func(c Conn) error {
+			var err error
+			h, err = c.Send(to.storage, to.parent, name, o.Size, o.ModTime, tmp)
 			return err
+		})
+		if errors.Is(err, ErrDesync) {
+			return d.resyncLocked() == nil, err
 		}
-		d.deletePartialLocked(to, name)
-	} else if err != nil && h != 0 {
-		_ = d.doLocked(func(c Conn) error { return c.Delete(h) })
+		if err != nil && h != 0 && !errors.Is(err, ErrGone) {
+			_ = d.doLocked(func(c Conn) error { return c.Delete(h) })
+		}
+		return false, err
+	}()
+	if cleanup {
+		if cerr := d.deleteFileByPath(context.WithoutCancel(ctx), dstPath); cerr != nil {
+			log.Printf("WARNING: could not delete the incomplete file %q: %v", dstPath, cerr)
+		}
 	}
 	return err
 }

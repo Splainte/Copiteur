@@ -22,6 +22,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 const itToken = "integration-token-0123456789abcdefghijkl"
@@ -265,6 +267,18 @@ func TestRcloneIntegration(t *testing.T) {
 		t.Fatal("zero-byte download")
 	}
 
+	// --- noms : emoji et NFD (comme les envoie rclone sur macOS) ---
+	nfdName := norm.NFD.String("😀 Été.bin")
+	writeRandom(t, filepath.Join(local, nfdName), 3000)
+	rclone(t, p, append([]string{"copyto", filepath.Join(local, nfdName), "phone:up/" + nfdName}, appFlags...)...)
+	if sha(t, filepath.Join(phone, "up", norm.NFC.String(nfdName))) != sha(t, filepath.Join(local, nfdName)) {
+		t.Fatal("emoji/NFD upload: not stored under the NFC name")
+	}
+	rclone(t, p, "copyto", "phone:up/"+norm.NFC.String(nfdName), filepath.Join(local, "emoji-back.bin"))
+	if sha(t, filepath.Join(local, "emoji-back.bin")) != sha(t, filepath.Join(local, nfdName)) {
+		t.Fatal("emoji download")
+	}
+
 	// --- dossiers, deplacements, suppressions ---
 	rclone(t, p, "mkdir", "phone:newdir/sub")
 	if st, err := os.Stat(filepath.Join(phone, "newdir", "sub")); err != nil || !st.IsDir() {
@@ -412,5 +426,28 @@ func TestProcessContract(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != 401 {
 		t.Fatalf("no token: %d", res.StatusCode)
+	}
+}
+
+// Gros dossier lent : le PROPFIND part en flux (XML en chunked) et rclone
+// le lit correctement.
+func TestRcloneStreamedListing(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	rclonePath(t)
+	phone := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(phone, "DCIM", "Camera"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 400 {
+		if err := os.WriteFile(filepath.Join(phone, "DCIM", "Camera", fmt.Sprintf("IMG_%04d.jpg", i)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := startServer(t, "--fake", phone, "--fake-delay-ms", "3")
+	ls := lsjson(t, p, "phone:DCIM/Camera")
+	if len(ls) != 400 || ls["IMG_0399.jpg"].Size != 1 {
+		t.Fatalf("got %d entries", len(ls))
 	}
 }

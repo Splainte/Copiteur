@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 type nodeKind int
@@ -80,8 +82,13 @@ func (n Node) key() dirKey {
 
 // CleanPath normalise un chemin WebDAV relatif a l'appareil : pas de "/"
 // au debut ni a la fin, pas de "." ni "..".
+//
+// Les noms recus sont normalises en NFC : rclone sur macOS envoie les noms
+// du disque local en NFD ("e" + accent combinant), alors qu'Android et le
+// reste du monde ecrivent en NFC. Sans cela, "Été.jpg" serait cree en NFD
+// sur le telephone et ne correspondrait a rien a la comparaison.
 func CleanPath(p string) string {
-	p = path.Clean("/" + p)
+	p = path.Clean("/" + norm.NFC.String(p))
 	return strings.TrimPrefix(p, "/")
 }
 
@@ -97,14 +104,24 @@ func SplitPath(p string) (string, string) {
 
 // ValidName verifie qu'un nom est acceptable pour MTP (chaine MTP : 254
 // unites UTF-16 au plus, sans "/").
+//
+// Limites : 253 unites UTF-16 (chaine MTP de 255 unites max, NUL compris,
+// avec une marge comme go-mtpfs) et 255 octets en UTF-8 (limite des
+// systemes de fichiers d'Android, ext4/f2fs).
 func ValidName(name string) error {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
 		return fmt.Errorf("%w: %q", ErrBadName, name)
 	}
-	if len(utf16.Encode([]rune(name))) > 254 {
+	if len(utf16.Encode([]rune(name))) > 253 || len(name) > 255 {
 		return fmt.Errorf("%w: name too long", ErrBadName)
 	}
 	return nil
+}
+
+// sameName compare deux noms comme le stockage Android : insensible a la
+// casse, et a la forme de normalisation Unicode (NFC/NFD).
+func sameName(a, b string) bool {
+	return a == b || strings.EqualFold(norm.NFC.String(a), norm.NFC.String(b))
 }
 
 // StorageNames calcule les noms de dossier des stockages (mode
@@ -145,7 +162,7 @@ func findName(objs []Object, name string) (Object, bool) {
 		}
 	}
 	for _, o := range objs {
-		if strings.EqualFold(o.Name, name) {
+		if sameName(o.Name, name) {
 			return o, true
 		}
 	}
@@ -183,7 +200,7 @@ func (d *Device) Resolve(ctx context.Context, p string) (Node, error) {
 		}
 		if idx < 0 {
 			for i, nm := range names {
-				if strings.EqualFold(nm, comps[0]) {
+				if sameName(nm, comps[0]) {
 					idx = i
 					break
 				}
@@ -243,6 +260,31 @@ func (d *Device) ReadDir(ctx context.Context, n Node) ([]Node, error) {
 		out[i] = Node{Path: joinPath(n.Path, o.Name), kind: nodeObject, st: n.st, stName: n.stName, Obj: o, parent: n.key()}
 	}
 	return out, nil
+}
+
+// ReadDirStream est ReadDir en flux : emit recoit les enfants par lots, au
+// fur et a mesure de leur lecture sur l'appareil (le verrou est rendu entre
+// deux lots). Une erreur d'emit interrompt la lecture.
+func (d *Device) ReadDirStream(ctx context.Context, n Node, emit func([]Node) error) error {
+	if !n.IsDir() {
+		return ErrNotDir
+	}
+	if n.kind == nodeVirtualRoot {
+		out, err := d.ReadDir(ctx, n)
+		if err != nil {
+			return err
+		}
+		return emit(out)
+	}
+	k := n.key()
+	_, err := d.listEmit(ctx, k, func(objs []Object) error {
+		out := make([]Node, len(objs))
+		for i, o := range objs {
+			out[i] = Node{Path: joinPath(n.Path, o.Name), kind: nodeObject, st: n.st, stName: n.stName, Obj: o, parent: k}
+		}
+		return emit(out)
+	})
+	return err
 }
 
 // Quota renvoie (libre, utilise) pour la racine de l'appareil ou d'un

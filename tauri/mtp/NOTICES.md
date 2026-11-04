@@ -4,8 +4,9 @@ Ce fichier recense ce qui est compilé dans le binaire `copiteur-mtp`
 (sidecar macOS). La section ci-dessous, entre les deux lignes `---`, est prête
 à être collée dans `THIRD-PARTY-NOTICES.md` à la racine du dépôt.
 
-Vérification de la liste : `go version -m <binaire>` ne montre que deux
-modules tiers (`github.com/ganeshrvel/go-mtpfs`, `github.com/ganeshrvel/usb`) ;
+Vérification de la liste : `go version -m <binaire>` ne montre que trois
+modules tiers (`github.com/ganeshrvel/go-mtpfs`, `github.com/ganeshrvel/usb`,
+`golang.org/x/text`) ;
 `go.sum` mentionne aussi `go-fuse` et `golang.org/x/sys` mais ils ne sont pas
 compilés (seul le paquet `mtp` de go-mtpfs est importé). libusb est liée
 statiquement par `tauri/scripts/build-mtp.mjs`.
@@ -111,9 +112,12 @@ programme). Pour utiliser votre propre libusb, remplacez l'archive (variables
 relancez `node scripts/build-mtp.mjs --force` et remplacez le binaire
 `copiteur-mtp` dans `Copiteur.app/Contents/MacOS/`.
 
-### Go (bibliothèque standard et environnement d'exécution) — licence BSD
+### Go (bibliothèque standard et environnement d'exécution) et golang.org/x/text — licence BSD
 
-https://go.dev — compilés dans tout programme Go.
+https://go.dev — compilés dans tout programme Go. `golang.org/x/text`
+(https://pkg.go.dev/golang.org/x/text, paquet `unicode/norm`, normalisation
+NFC des noms de fichiers) est publié par les mêmes auteurs sous la même
+licence.
 
 ```
 Copyright 2009 The Go Authors.

@@ -22,6 +22,7 @@ var (
 	ErrBadName      = errors.New("invalid file name")
 	ErrNotSupported = errors.New("operation not supported by the device")
 	ErrStoreFull    = errors.New("storage full")
+	ErrTooLarge     = errors.New("object too large for this storage")
 	ErrReadOnly     = errors.New("storage or object is read-only")
 	ErrBusy         = errors.New("device busy")
 	ErrNotReady     = errors.New("device not ready")

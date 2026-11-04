@@ -60,6 +60,11 @@ const usbBulkLen = 5*4 + usbHdrLen
 // La pile USB Linux envoie 16 Kio par appel (selon libusb).
 const rwBufSize = 0x4000
 
+// Taille des blocs envoyes par bulkWrite : multiple de toutes les tailles
+// de paquet USB (64/512/1024 octets), pour que seul le dernier bloc puisse
+// etre un paquet court.
+const sendChunkSize = 256 << 10
+
 type sessionData struct {
 	tid uint32
 	sid uint32
@@ -328,6 +333,9 @@ func (d *transport) RunTransaction(req *mtp.Container, rep *mtp.Container,
 		_, ok1 := err.(usb.Error)
 		if ok1 || ok2 {
 			log.Printf("fatal USB error %v; closing connection", err)
+			// Modification : delai court pour la fermeture (le delai courant
+			// peut etre celui d'une operation longue, 120 s).
+			d.Timeout = timeoutClose
 			d.Close()
 		}
 		return err
@@ -464,19 +472,29 @@ func (d *transport) bulkWrite(hdr *usbBulkHeader, r io.Reader, size int64, progr
 		}
 	}
 
-	var buf [rwBufSize]byte
+	// Modification : lecture par blocs PLEINS (io.ReadFull) de
+	// sendChunkSize, multiple de la taille de paquet. L'original faisait un
+	// seul r.Read par tour : avec un corps HTTP, une lecture partielle
+	// (tampon de 4 Kio) donnait un paquet USB COURT au milieu du conteneur.
+	// Android (MtpFfsHandle::receiveFile) abandonne alors l'envoi (< 4 Gio)
+	// ou, pour un fichier >= 4 Gio (longueur 0xFFFFFFFF), prend le paquet
+	// court pour la fin du fichier et le tronque sans erreur.
+	buf := make([]byte, sendChunkSize)
 	var lastTransfer int
 
 	for size > 0 {
-		var m int
-		toread := buf[:]
+		toread := buf
 		if int64(len(toread)) > size {
 			toread = buf[:int(size)]
 		}
 
-		m, err = r.Read(toread)
-		if err != nil {
-			break
+		m, rerr := io.ReadFull(r, toread)
+		if rerr != nil {
+			// Modification : erreur de la source (client parti...) ->
+			// retour immediat, SANS paquet nul final : pour un fichier
+			// >= 4 Gio, le paquet nul ferait valider au telephone un
+			// fichier tronque. La session est alors desynchronisee (Resync).
+			return n, rerr
 		}
 		size -= int64(m)
 
@@ -601,7 +619,7 @@ func (d *transport) SendData(req *mtp.Container, rep *mtp.Container, value any) 
 	return d.RunTransaction(req, rep, nil, &buf, int64(buf.Len()))
 }
 
-func (d *transport) GetDeviceInfo(info *mtp.DeviceInfo) error {
+func (d *transport) GetDeviceInfo(info any) error {
 	var req mtp.Container
 	req.Code = mtp.OC_GetDeviceInfo
 	return d.GetData(&req, info)
@@ -613,7 +631,7 @@ func (d *transport) GetStorageIDs(info *mtp.Uint32Array) error {
 	return d.GetData(&req, info)
 }
 
-func (d *transport) GetStorageInfo(id uint32, info *mtp.StorageInfo) error {
+func (d *transport) GetStorageInfo(id uint32, info any) error {
 	var req mtp.Container
 	req.Code = mtp.OC_GetStorageInfo
 	req.Param = []uint32{id}
@@ -655,7 +673,7 @@ func (d *transport) DeleteObject(handle uint32) error {
 	return d.RunTransaction(&req, &rep, nil, nil, 0)
 }
 
-func (d *transport) SendObjectInfo(wantStorageID, wantParent uint32, info *mtp.ObjectInfo) (storageID, parent, handle uint32, err error) {
+func (d *transport) SendObjectInfo(wantStorageID, wantParent uint32, info any) (storageID, parent, handle uint32, err error) {
 	var req, rep mtp.Container
 	req.Code = mtp.OC_SendObjectInfo
 	req.Param = []uint32{wantStorageID, wantParent}

@@ -54,10 +54,11 @@ func (e *NotReadyError) Unwrap() error { return ErrNotReady }
 
 // Valeurs par defaut des reglages de Device.
 const (
-	DefaultChunkSize = 8 << 20
-	DefaultCacheTTL  = 4 * time.Second
-	DefaultMaxPad    = 256 << 20
-	DefaultInfoBatch = 32
+	DefaultChunkSize      = 8 << 20
+	DefaultCacheTTL       = 4 * time.Second
+	DefaultMaxPad         = 256 << 20
+	DefaultInfoBatch      = 32
+	DefaultIncrementalMin = 256
 )
 
 // Device est un appareil MTP vu par la couche WebDAV. Toutes les
@@ -73,6 +74,13 @@ type Device struct {
 	CacheTTL  time.Duration
 	MaxPad    int64 // upload coupe : on complete avec des zeros jusqu'a cette taille, au-dela on resynchronise
 	InfoBatch int   // nombre de GetObjectInfo par prise du verrou pendant un listing
+	// IncrementalMin : un dossier en cache d'au moins ce nombre d'objets est
+	// rafraichi par difference de handles (un seul GetObjectHandles puis
+	// GetObjectInfo des seuls nouveaux handles) au lieu d'etre relu en
+	// entier. Indispensable pour DCIM/Camera (des dizaines de milliers de
+	// photos = des minutes de GetObjectInfo). Contrepartie : un fichier
+	// modifie SUR le telephone en gardant son handle n'est pas relu.
+	IncrementalMin int
 
 	// OnGone est appele (dans sa propre goroutine) quand la connexion a ete
 	// fermee suite a une erreur USB.
@@ -93,7 +101,8 @@ type Device struct {
 	cacheMu  sync.Mutex
 	cache    map[dirKey]*dirEntry
 	inflight map[dirKey]*flight
-	gen      uint64
+	kgen     map[dirKey]uint64 // generation par dossier (invalidate)
+	epoch    uint64            // generation globale (invalidateAll)
 }
 
 type dirKey struct {
@@ -102,12 +111,15 @@ type dirKey struct {
 }
 
 type dirEntry struct {
-	objs []Object
-	at   time.Time
+	objs  []Object
+	at    time.Time
+	stale bool // modifie par nous : a rafraichir (par difference si gros)
 }
 
+type cacheGen struct{ k, epoch uint64 }
+
 type flight struct {
-	gen  uint64
+	gen  cacheGen
 	done chan struct{}
 	objs []Object
 	err  error
@@ -116,14 +128,16 @@ type flight struct {
 // NewDevice cree un appareil dans l'etat "connecting".
 func NewDevice(id string) *Device {
 	return &Device{
-		id:        id,
-		ChunkSize: DefaultChunkSize,
-		CacheTTL:  DefaultCacheTTL,
-		MaxPad:    DefaultMaxPad,
-		InfoBatch: DefaultInfoBatch,
-		state:     StateConnecting,
-		cache:     map[dirKey]*dirEntry{},
-		inflight:  map[dirKey]*flight{},
+		id:             id,
+		ChunkSize:      DefaultChunkSize,
+		CacheTTL:       DefaultCacheTTL,
+		MaxPad:         DefaultMaxPad,
+		InfoBatch:      DefaultInfoBatch,
+		IncrementalMin: DefaultIncrementalMin,
+		state:          StateConnecting,
+		cache:          map[dirKey]*dirEntry{},
+		inflight:       map[dirKey]*flight{},
+		kgen:           map[dirKey]uint64{},
 	}
 }
 
@@ -351,62 +365,119 @@ func (d *Device) checkReady() error {
 
 // --- cache des listings ---
 
+// invalidate marque des dossiers comme modifies : la prochaine lecture
+// relit leurs handles (et seulement les nouveaux objets si le dossier est
+// gros). Les lectures en cours sur ces dossiers ne seront pas mises en
+// cache.
 func (d *Device) invalidate(keys ...dirKey) {
 	d.cacheMu.Lock()
-	d.gen++
 	for _, k := range keys {
-		delete(d.cache, k)
+		d.kgen[k]++
+		if e := d.cache[k]; e != nil {
+			e.stale = true
+		}
 	}
 	d.cacheMu.Unlock()
 }
 
+// forget retire un objet du cache d'un dossier (ses metadonnees ont
+// change, ex. renommage : il sera relu).
+func (d *Device) forget(k dirKey, h uint32) {
+	d.cacheMu.Lock()
+	d.kgen[k]++
+	if e := d.cache[k]; e != nil {
+		objs := make([]Object, 0, len(e.objs))
+		for _, o := range e.objs {
+			if o.Handle != h {
+				objs = append(objs, o)
+			}
+		}
+		e.objs, e.stale = objs, true
+	}
+	d.cacheMu.Unlock()
+}
+
+// invalidateAll vide tout le cache (nouvelle session : les handles ont pu
+// etre renumerotes).
 func (d *Device) invalidateAll() {
 	d.cacheMu.Lock()
-	d.gen++
+	d.epoch++
 	clear(d.cache)
 	d.cacheMu.Unlock()
 }
 
+func (d *Device) genLocked(k dirKey) cacheGen { return cacheGen{d.kgen[k], d.epoch} }
+
 // list renvoie les enfants d'un dossier, depuis le cache si possible. Les
 // requetes simultanees sur le meme dossier partagent la meme lecture.
 func (d *Device) list(ctx context.Context, k dirKey) ([]Object, error) {
-	d.cacheMu.Lock()
-	if e := d.cache[k]; e != nil && time.Since(e.at) < d.CacheTTL {
-		d.cacheMu.Unlock()
-		return e.objs, nil
-	}
-	if f := d.inflight[k]; f != nil && f.gen == d.gen {
-		d.cacheMu.Unlock()
-		select {
-		case <-f.done:
-			return f.objs, f.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
+	return d.listEmit(ctx, k, nil)
+}
+
+// listEmit est list avec, si emit != nil, transmission des objets au fur
+// et a mesure de leur lecture (PROPFIND en flux : des octets partent vers
+// le client meme si le dossier met des minutes a etre lu). Une erreur
+// d'emit interrompt la lecture.
+func (d *Device) listEmit(ctx context.Context, k dirKey, emit func([]Object) error) ([]Object, error) {
+	for {
+		d.cacheMu.Lock()
+		e := d.cache[k]
+		if e != nil && !e.stale && time.Since(e.at) < d.CacheTTL {
+			objs := e.objs
+			d.cacheMu.Unlock()
+			if emit != nil {
+				if err := emit(objs); err != nil {
+					return nil, err
+				}
+			}
+			return objs, nil
 		}
-	}
-	f := &flight{gen: d.gen, done: make(chan struct{})}
-	d.inflight[k] = f
-	d.cacheMu.Unlock()
+		var prev []Object
+		if e != nil {
+			prev = e.objs
+		}
+		cur := d.inflight[k]
+		if emit == nil && cur != nil && cur.gen == d.genLocked(k) {
+			// une lecture identique est en cours : on l'attend. (En mode
+			// flux on ne l'attend pas : il faut que des octets partent.)
+			d.cacheMu.Unlock()
+			select {
+			case <-cur.done:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if cur.err != nil && (errors.Is(cur.err, context.Canceled) || errors.Is(cur.err, context.DeadlineExceeded)) {
+				continue // le client de cette lecture est parti, pas nous
+			}
+			return cur.objs, cur.err
+		}
+		f := &flight{gen: d.genLocked(k), done: make(chan struct{})}
+		if cur == nil || cur.gen != f.gen || emit == nil {
+			d.inflight[k] = f
+		}
+		d.cacheMu.Unlock()
 
-	objs, err := d.fetch(ctx, k)
+		objs, err := d.fetch(ctx, k, prev, emit)
 
-	d.cacheMu.Lock()
-	if d.inflight[k] == f {
-		delete(d.inflight, k)
+		d.cacheMu.Lock()
+		if d.inflight[k] == f {
+			delete(d.inflight, k)
+		}
+		if err == nil && f.gen == d.genLocked(k) {
+			d.cache[k] = &dirEntry{objs: objs, at: time.Now()}
+		}
+		d.cacheMu.Unlock()
+		f.objs, f.err = objs, err
+		close(f.done)
+		return objs, err
 	}
-	if err == nil && f.gen == d.gen {
-		d.cache[k] = &dirEntry{objs: objs, at: time.Now()}
-	}
-	d.cacheMu.Unlock()
-	f.objs, f.err = objs, err
-	close(f.done)
-	return objs, err
 }
 
 // fetch lit un dossier sur l'appareil : GetObjectHandles puis un
-// GetObjectInfo par enfant, par lots, en rendant le verrou entre deux lots
-// pour qu'un telechargement en cours continue d'avancer.
-func (d *Device) fetch(ctx context.Context, k dirKey) ([]Object, error) {
+// GetObjectInfo par enfant (sauf ceux deja connus si le dossier est gros,
+// voir IncrementalMin), par lots, en rendant le verrou entre deux lots pour
+// qu'un telechargement en cours continue d'avancer.
+func (d *Device) fetch(ctx context.Context, k dirKey, prev []Object, emit func([]Object) error) ([]Object, error) {
 	var handles []uint32
 	err := d.do(func(c Conn) error {
 		var err error
@@ -417,14 +488,35 @@ func (d *Device) fetch(ctx context.Context, k dirKey) ([]Object, error) {
 		return nil, err
 	}
 	objs := make([]Object, 0, len(handles))
+	todo := handles
+	if d.IncrementalMin > 0 && len(prev) >= d.IncrementalMin {
+		known := make(map[uint32]Object, len(prev))
+		for _, o := range prev {
+			known[o.Handle] = o
+		}
+		todo = nil
+		for _, h := range handles {
+			if o, ok := known[h]; ok {
+				objs = append(objs, o)
+			} else {
+				todo = append(todo, h)
+			}
+		}
+		if emit != nil && len(objs) > 0 {
+			if err := emit(objs); err != nil {
+				return nil, err
+			}
+		}
+	}
 	batch := max(d.InfoBatch, 1)
-	for i := 0; i < len(handles); i += batch {
+	for i := 0; i < len(todo); i += batch {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		end := min(i+batch, len(handles))
+		end := min(i+batch, len(todo))
+		start := len(objs)
 		err := d.do(func(c Conn) error {
-			for _, h := range handles[i:end] {
+			for _, h := range todo[i:end] {
 				o, err := c.Info(h)
 				if errors.Is(err, ErrNotFound) {
 					continue // objet disparu entre-temps
@@ -441,6 +533,11 @@ func (d *Device) fetch(ctx context.Context, k dirKey) ([]Object, error) {
 		})
 		if err != nil {
 			return nil, err
+		}
+		if emit != nil && len(objs) > start {
+			if err := emit(objs[start:]); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return objs, nil
