@@ -37,7 +37,19 @@ type TbItem =
   | { kind: "space" }
   | { kind: "button"; id: string; symbol: string; label: string }
   | { kind: "menu"; id: string; symbol: string; title: string; tip: string; entries: MenuEntry[]; hidden: boolean }
-  | { kind: "morph"; id: string; symbol: string; label: string; text: string; value: number; expanded: boolean; retry: boolean };
+  | {
+      kind: "morph";
+      id: string;
+      symbol: string;
+      label: string;
+      text: string;
+      value: number;
+      expanded: boolean;
+      retry: boolean;
+      // Capsule accrochee a gauche de la pilule (telephone branche) : elle
+      // glisse avec elle quand la pilule s'etire.
+      side: { id: string; symbol: string; title: string; tip: string; entries: MenuEntry[]; hidden: boolean };
+    };
 type ToolbarSpec = { items: TbItem[] };
 
 type Handlers = {
@@ -78,21 +90,17 @@ function buildToolbar(o: Opts): ToolbarSpec {
         value: s.pct ?? 0,
         expanded: o.showProgress,
         retry: s.state === "retry",
-      },
-      // Telephone branche pas encore ouvert : bouton allonge avec son nom, colle
-      // a DROITE du bouton Transferts. (Place avant lui, il etait rejete loin a
-      // gauche : le bouton Transferts occupe un hote transparent de 400 pt, la
-      // place dont sa pilule de progression a besoin pour s'etirer.)
-      // Toujours declare (la barre native est figee a sa creation) ; masque
-      // quand il n'y a rien a proposer.
-      {
-        kind: "menu",
-        id: "phone",
-        symbol: "smartphone",
-        title: o.phone?.title ?? "",
-        tip: o.phone?.tip ?? "",
-        entries: o.phone?.entries ?? [],
-        hidden: !o.phone,
+        // Telephone branche pas encore ouvert : capsule a son nom, collee a
+        // GAUCHE du bouton Transferts et qui se decale quand il s'etire en
+        // pilule. Menu : Ouvrir a gauche / a droite. Masquee sans telephone.
+        side: {
+          id: "phone",
+          symbol: "smartphone",
+          title: o.phone?.title ?? "",
+          tip: o.phone?.tip ?? "",
+          entries: o.phone?.entries ?? [],
+          hidden: !o.phone,
+        },
       },
       { kind: "space" },
       button("journal", "list.bullet.rectangle", t("app.conn.journal")),

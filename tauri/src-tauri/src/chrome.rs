@@ -48,6 +48,10 @@ pub enum TbItem {
         value: f64,
         expanded: bool,
         retry: bool,
+        /// Capsule accrochee a GAUCHE de la pilule (telephone branche) : elle
+        /// glisse avec elle quand la pilule s'etire.
+        #[serde(default)]
+        side: Option<SidePill>,
     },
 }
 
@@ -62,6 +66,20 @@ impl TbItem {
             TbItem::Flex | TbItem::Space => None,
         }
     }
+}
+
+/// Capsule secondaire du bouton Transferts : symbole + titre + chevron, et un
+/// menu natif au clic (entrees remontees comme celles d'un `Menu`, sous `id`).
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub struct SidePill {
+    pub id: String,
+    pub symbol: String,
+    pub title: String,
+    pub tip: String,
+    pub entries: Vec<MenuEntry>,
+    pub hidden: bool,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]

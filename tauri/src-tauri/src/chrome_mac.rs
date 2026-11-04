@@ -37,7 +37,7 @@ use objc2_foundation::{
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::chrome::{MenuEntry, TbItem, ToolbarSpec};
+use crate::chrome::{MenuEntry, SidePill, TbItem, ToolbarSpec};
 
 // Prefixe de nos identifiants d'elements de barre (« cp.server »…).
 const PREFIX: &str = "cp.";
@@ -57,6 +57,13 @@ struct ToolbarEvent {
 struct MorphViews {
     id: String,
     host: Retained<NSView>,
+    // Largeur de l'hote : celle de la pilule deployee + la capsule laterale.
+    host_width: Retained<NSLayoutConstraint>,
+    // Capsule laterale (telephone) : verre, titre, et sa description courante.
+    side: Retained<NSView>,
+    side_title: Retained<NSTextField>,
+    side_icon: Retained<NSImageView>,
+    side_spec: Option<SidePill>,
     width: Retained<NSLayoutConstraint>,
     text: Retained<NSTextField>,
     bar: Retained<NSProgressIndicator>,
@@ -169,6 +176,28 @@ define_class!(
             if let Some((id, entry)) = key.split_once(SEP) {
                 self.emit(id, "menu", Some(entry.to_string()));
             }
+        }
+
+        // Clic sur la capsule laterale : son menu natif, juste dessous.
+        #[unsafe(method(onSide:))]
+        fn on_side(&self, _sender: Option<&AnyObject>) {
+            let st = STATE.with(|s| {
+                s.borrow()
+                    .morph
+                    .as_ref()
+                    .and_then(|m| m.side_spec.clone().map(|sp| (sp, m.side.clone())))
+            });
+            let Some((sp, view)) = st else { return };
+            if sp.hidden || sp.entries.is_empty() {
+                return;
+            }
+            let menu = self.build_menu(&sp.id, &sp.entries);
+            // Vue non retournee : y = 0 est le BAS de la capsule.
+            let _ = menu.popUpMenuPositioningItem_atLocation_inView(
+                None,
+                NSPoint::new(0.0, -6.0),
+                Some(&view),
+            );
         }
 
         #[unsafe(method(onMorph:))]
@@ -291,7 +320,7 @@ impl Controller {
                 m.setShowsIndicator(true);
                 m.setMenu(&self.build_menu(id, entries));
             }
-            TbItem::Morph { id, symbol: sym, label: lbl, text, value, expanded, retry } => {
+            TbItem::Morph { id, symbol: sym, label: lbl, text, value, expanded, retry, side } => {
                 const H: f64 = 36.0;
                 const MAX: f64 = 400.0;
                 if fresh {
@@ -346,8 +375,49 @@ impl Controller {
                     clip.addSubview(&extra);
                     host.addSubview(&glass);
                     let width = glass.widthAnchor().constraintEqualToConstant(H);
+                    // Capsule laterale (telephone branche), collee a GAUCHE de la
+                    // pilule : son bord droit suit le bord gauche de la pilule,
+                    // elle glisse donc avec elle pendant l'etirement anime.
+                    let side_glass =
+                        glass_view(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(H, H)), H / 2.0, mtm);
+                    side_glass.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    if responds(&side_glass, sel!(setEffectIsInteractive:)) {
+                        let _: () = unsafe { msg_send![&*side_glass, setEffectIsInteractive: true] };
+                    }
+                    let side_content = NSView::new(mtm);
+                    side_content.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    match has_glass().then(|| side_glass.downcast_ref::<NSGlassEffectView>()).flatten() {
+                        Some(g) => g.setContentView(Some(&side_content)),
+                        None => side_glass.addSubview(&side_content),
+                    }
+                    let side_icon = NSImageView::new(mtm);
+                    side_icon.setContentTintColor(Some(&NSColor::labelColor()));
+                    let side_title = label("", mtm);
+                    side_title.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, unsafe {
+                        objc2_app_kit::NSFontWeightMedium
+                    })));
+                    side_title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+                    side_title.widthAnchor().constraintLessThanOrEqualToConstant(200.0).setActive(true);
+                    let chevron = match symbol("chevron.down", "") {
+                        Some(img) => NSImageView::imageViewWithImage(&img, mtm),
+                        None => NSImageView::new(mtm),
+                    };
+                    chevron.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+                    chevron.setSymbolConfiguration(Some(
+                        &objc2_app_kit::NSImageSymbolConfiguration::configurationWithPointSize_weight(
+                            10.0,
+                            unsafe { objc2_app_kit::NSFontWeightSemibold },
+                        ),
+                    ));
+                    let side_stack = hstack(&[&side_icon, &side_title, &chevron], mtm);
+                    side_stack.setSpacing(6.0);
+                    side_stack.setTranslatesAutoresizingMaskIntoConstraints(false);
+                    side_content.addSubview(&side_stack);
+                    side_glass.setHidden(true);
+                    host.addSubview(&side_glass);
+                    let host_width = host.widthAnchor().constraintEqualToConstant(MAX);
                     let c = [
-                        host.widthAnchor().constraintEqualToConstant(MAX),
+                        host_width.clone(),
                         host.heightAnchor().constraintEqualToConstant(H),
                         glass.trailingAnchor().constraintEqualToAnchor(&host.trailingAnchor()),
                         glass.centerYAnchor().constraintEqualToAnchor(&host.centerYAnchor()),
@@ -361,6 +431,16 @@ impl Controller {
                         icon.centerYAnchor().constraintEqualToAnchor(&clip.centerYAnchor()),
                         extra.leadingAnchor().constraintEqualToAnchor_constant(&clip.leadingAnchor(), H - 2.0),
                         extra.centerYAnchor().constraintEqualToAnchor(&clip.centerYAnchor()),
+                        side_glass.trailingAnchor().constraintEqualToAnchor_constant(&glass.leadingAnchor(), -8.0),
+                        side_glass.centerYAnchor().constraintEqualToAnchor(&host.centerYAnchor()),
+                        side_glass.heightAnchor().constraintEqualToConstant(H),
+                        side_content.leadingAnchor().constraintEqualToAnchor(&side_glass.leadingAnchor()),
+                        side_content.trailingAnchor().constraintEqualToAnchor(&side_glass.trailingAnchor()),
+                        side_content.topAnchor().constraintEqualToAnchor(&side_glass.topAnchor()),
+                        side_content.bottomAnchor().constraintEqualToAnchor(&side_glass.bottomAnchor()),
+                        side_stack.leadingAnchor().constraintEqualToAnchor_constant(&side_content.leadingAnchor(), 14.0),
+                        side_content.trailingAnchor().constraintEqualToAnchor_constant(&side_stack.trailingAnchor(), 12.0),
+                        side_stack.centerYAnchor().constraintEqualToAnchor(&side_content.centerYAnchor()),
                     ];
                     NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&c));
                     let click = unsafe {
@@ -371,12 +451,25 @@ impl Controller {
                         )
                     };
                     glass.addGestureRecognizer(&click);
+                    let side_click = unsafe {
+                        NSClickGestureRecognizer::initWithTarget_action(
+                            NSClickGestureRecognizer::alloc(mtm),
+                            Some(self.as_target()),
+                            Some(sel!(onSide:)),
+                        )
+                    };
+                    side_glass.addGestureRecognizer(&side_click);
                     item.setView(Some(&host));
                     item.setBordered(false);
                     STATE.with(|s| {
                         s.borrow_mut().morph = Some(MorphViews {
                             id: id.clone(),
                             host,
+                            host_width,
+                            side: side_glass,
+                            side_title,
+                            side_icon,
+                            side_spec: None,
                             width,
                             text: text_label,
                             bar,
@@ -388,6 +481,29 @@ impl Controller {
                 }
                 item.setLabel(&NSString::from_str(lbl));
                 item.setToolTip(Some(&NSString::from_str(lbl)));
+                // Capsule laterale : contenu, visibilite, et largeur de l'hote
+                // (l'hote garde la place de la pilule deployee + la capsule ; on
+                // ne l'agrandit qu'a l'apparition / au changement de titre).
+                let side_views = STATE.with(|s| {
+                    let mut b = s.borrow_mut();
+                    b.morph.as_mut().map(|m| {
+                        m.side_spec = side.clone();
+                        (m.side.clone(), m.side_title.clone(), m.side_icon.clone(), m.host_width.clone())
+                    })
+                });
+                if let Some((side_view, side_title, side_icon, host_width)) = side_views {
+                    let show = side.as_ref().is_some_and(|sp| !sp.hidden);
+                    if let Some(sp) = side.as_ref().filter(|_| show) {
+                        side_title.setStringValue(&NSString::from_str(&sp.title));
+                        side_icon.setImage(symbol(&sp.symbol, &sp.title).as_deref());
+                        side_view.setToolTip(Some(&NSString::from_str(&sp.tip)));
+                    }
+                    side_view.setHidden(!show);
+                    let extra_w = if show { (side_view.fittingSize().width + 8.0).ceil() } else { 0.0 };
+                    if (host_width.constant() - (MAX + extra_w)).abs() > 0.5 {
+                        host_width.setConstant(MAX + extra_w);
+                    }
+                }
                 // Mise a jour : texte, jauge, et etirement / retractation animes.
                 let st = STATE.with(|s| {
                     let mut b = s.borrow_mut();
