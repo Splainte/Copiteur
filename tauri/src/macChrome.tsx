@@ -66,18 +66,6 @@ function buildToolbar(o: Opts): ToolbarSpec {
     items: [
       { kind: "title", id: "title", text: "Copiteur", sub: o.appVersion },
       { kind: "flex" },
-      // Telephone branche pas encore ouvert : bouton allonge avec son nom.
-      // Toujours declare (la barre native est figee a sa creation) ; masque
-      // quand il n'y a rien a proposer.
-      {
-        kind: "menu",
-        id: "phone",
-        symbol: "smartphone",
-        title: o.phone?.title ?? "",
-        tip: o.phone?.tip ?? "",
-        entries: o.phone?.entries ?? [],
-        hidden: !o.phone,
-      },
       // Bouton Transferts : rond, il s'etire en pilule de progression (vers la
       // gauche) quand la zone est cachee et qu'une copie tourne. Meme texte que
       // sous Windows : « 42 % · 94 Mo/s · reste 16 Go · 2 min ».
@@ -90,6 +78,21 @@ function buildToolbar(o: Opts): ToolbarSpec {
         value: s.pct ?? 0,
         expanded: o.showProgress,
         retry: s.state === "retry",
+      },
+      // Telephone branche pas encore ouvert : bouton allonge avec son nom, colle
+      // a DROITE du bouton Transferts. (Place avant lui, il etait rejete loin a
+      // gauche : le bouton Transferts occupe un hote transparent de 400 pt, la
+      // place dont sa pilule de progression a besoin pour s'etirer.)
+      // Toujours declare (la barre native est figee a sa creation) ; masque
+      // quand il n'y a rien a proposer.
+      {
+        kind: "menu",
+        id: "phone",
+        symbol: "smartphone",
+        title: o.phone?.title ?? "",
+        tip: o.phone?.tip ?? "",
+        entries: o.phone?.entries ?? [],
+        hidden: !o.phone,
       },
       { kind: "space" },
       button("journal", "list.bullet.rectangle", t("app.conn.journal")),
