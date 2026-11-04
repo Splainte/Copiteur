@@ -250,6 +250,14 @@ func (m *Manager) claimFreeing(e *entry, t *transport) error {
 	if err == nil || !errors.Is(err, usb.ERROR_ACCESS) {
 		return err
 	}
+	released := false
+	defer func() {
+		// Le service a pu etre coupe au milieu d'un echange : on remet
+		// l'interface au propre avant notre propre session.
+		if released && err == nil {
+			t.recoverPTP()
+		}
+	}()
 	m.mu.Lock()
 	allowed := e.releases < maxReleases
 	if allowed {
@@ -259,6 +267,7 @@ func (m *Manager) claimFreeing(e *entry, t *transport) error {
 	if !allowed || !releaseImageCapture() {
 		return err
 	}
+	released = true
 	log.Printf("USB %s: interface held, released macOS Image Capture (ptpcamerad)", e.key)
 	// Pas d'attente avant le premier essai : le service est relance en
 	// quelques millisecondes et reprendrait l'interface.
@@ -395,6 +404,14 @@ func (m *Manager) open(e *entry) {
 	}
 
 	err := openSession(t)
+	if err != nil && !isBusyErr(err) && t.h != nil {
+		// Sans reponse : on tente la remise au propre PTP (sans reset USB,
+		// qui ferait re-annoncer le telephone et le rendrait a « Transfert
+		// d'images ») avant le reset de dernier recours.
+		log.Printf("USB %s: OpenSession failed (%v), PTP recovery", e.key, err)
+		t.recoverPTP()
+		err = openSession(t)
+	}
 	if err != nil && isBusyErr(err) {
 		t.Close()
 		fail(core.StateBusy, busyHint+": OpenSession: "+err.Error())
