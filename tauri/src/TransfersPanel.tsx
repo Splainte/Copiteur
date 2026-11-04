@@ -200,12 +200,14 @@ function Row({
         // taille du fichier, si.
         <span className="xfer-size">{x.size ? humanSize(x.size) : ""}</span>
       )}
-      {streams && (
+      {/* Toujours presente dans la file (vide sans debit) : largeur fixe, les
+          colonnes restent alignees d'une ligne a l'autre. */}
+      {bar && (
         <span
-          className={"xfer-streams" + (streams.fallback ? " is-retry" : "")}
-          title={streamsTitle(x, streams.n, streams.fallback, settings)}
+          className={"xfer-streams" + (streams?.fallback ? " is-retry" : "")}
+          title={streams ? streamsTitle(x, streams.n, streams.fallback, settings) : undefined}
         >
-          {tn("panels.xfer.streams", streams.n)}
+          {streams ? tn("panels.xfer.streams", streams.n) : ""}
         </span>
       )}
       <span

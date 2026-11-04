@@ -2533,7 +2533,10 @@ export default function App() {
             ? paneMsg(t("app.phone.locked", { name }), retry)
             : ph.state === "busy"
               ? paneMsg(t("app.phone.busy", { name }), retry)
-              : paneMsg(t("app.phone.error", { name, err: ph.error || "?" }), retry);
+              : paneMsg(
+                  ph.error ? t("app.phone.error", { name, err: ph.error }) : t("app.phone.errorUnknown", { name }),
+                  retry,
+                );
       return { loc, enabled: false, epoch: 0, placeholder, busy: ph?.state === "connecting", icon: "phone" };
     }
     return {
@@ -2765,7 +2768,7 @@ export default function App() {
           <span className="phone-banner-icon">
             <UiIcon name="phone" />
           </span>
-          <span className="phone-banner-text">
+          <span className="phone-banner-text" title={bannerPhone.name}>
             <strong>{bannerPhone.name}</strong>{" "}
             {bannerPhone.state === "ready"
               ? t("app.phone.bannerReady", {

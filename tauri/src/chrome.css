@@ -1342,7 +1342,7 @@
   align-items: center;
   gap: 6px;
   height: 28px;
-  max-width: 220px;
+  max-width: min(220px, 22vw);
   min-width: 0;
   padding: 0 7px 0 9px;
   border: 0;
@@ -1427,7 +1427,7 @@
   padding-top: 4px;
 }
 .src-note {
-  padding: 3px 10px 5px 45px;
+  padding: 3px 10px 5px 52px;
   font-size: 12px;
   color: var(--cp-text-muted);
 }
@@ -1554,4 +1554,57 @@
   white-space: nowrap;
   color: var(--cp-text-muted);
   font-size: 11.5px;
+}
+
+/* Fenetre etroite : la barre d'adresse garde une largeur utile, c'est le nom
+   de la source qui passe en ellipse. Le fil d'Ariane ne deborde jamais sur la
+   loupe. */
+.explorer-head .addr-wrap {
+  min-width: 80px;
+}
+.explorer-head .src-picker {
+  min-width: 112px;
+}
+.explorer-head .crumbs {
+  overflow: hidden;
+}
+/* Consignes et erreurs dans un panneau : plus lisibles que le simple « dossier
+   vide » (meme couleur secondaire que le reste de l'interface). */
+.app[data-os="macos"] .pane-msg-text {
+  color: var(--m-text-2);
+}
+.app[data-os="windows"] .pane-msg-text {
+  color: var(--w-text-2, var(--cp-text-muted));
+}
+/* Bandeau : un nom de telephone tres long ne mange pas l'etat qui le suit. */
+.phone-banner-text strong {
+  display: inline-block;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+/* Colonne « flux » de largeur fixe, presente sur toutes les lignes de la file :
+   le trajet reste aligne d'une ligne a l'autre. */
+.xfer-row .xfer-streams {
+  flex: 0 0 52px;
+}
+/* Fenetre etroite (moins de ~1000 px, donc des panneaux d'environ 450 px) :
+   le bouton « Suivant » s'efface pour laisser sa place au selecteur et a la
+   barre d'adresse (requete sur la FENETRE et non sur le panneau : une requete
+   de conteneur ferait du panneau le repere des menus en position fixe). */
+@media (max-width: 1000px) {
+  .explorer-head .nav-fwd {
+    display: none;
+  }
+  .explorer-head .src-picker {
+    min-width: 104px;
+  }
+}
+/* Les boutons de l'en-tete gardent leur taille : seuls le nom de la source et
+   le fil d'Ariane cedent de la place. */
+.explorer-head > .nav-btn,
+.explorer-head > .view-btns,
+.explorer-head > .nav-btns {
+  flex-shrink: 0;
 }

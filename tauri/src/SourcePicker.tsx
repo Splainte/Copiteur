@@ -17,6 +17,21 @@ import { t, useLang } from "./i18n";
 
 type IconName = "computer" | "server" | "phone" | "plus";
 
+const MENU_KEYS = new Set([
+  "ArrowDown",
+  "ArrowUp",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+  "Escape",
+  "Enter",
+  " ",
+  "Backspace",
+  "Delete",
+  "F2",
+]);
+
 export type SourceMenuItem =
   | { type: "header"; text: string }
   | { type: "note"; text: string }
@@ -71,19 +86,33 @@ export function SourcePicker({
     if (!el) return;
     const pad = 8;
     const r = el.getBoundingClientRect();
-    const maxHeight = window.innerHeight - anchor.y - pad;
-    // Trop haut pour tenir sous le bouton : on le remonte (sans passer sous le
-    // haut de la fenetre) et il defile s'il le faut.
-    const top = r.height > maxHeight ? Math.max(pad, window.innerHeight - r.height - pad) : anchor.y;
+    const btn = btnRef.current?.getBoundingClientRect();
+    const below = window.innerHeight - anchor.y - pad;
+    const above = (btn ? btn.top : anchor.y) - 4 - pad;
     const left = Math.max(pad, Math.min(anchor.x, window.innerWidth - r.width - pad));
-    setPos({ left, top, maxHeight: window.innerHeight - top - pad });
-    // Focus sur l'entree cochee (ou la premiere) : le clavier marche aussitot.
+    // Sous le bouton s'il tient, ou s'il reste assez de place pour defiler ;
+    // sinon AU-DESSUS (jamais par-dessus son propre bouton).
+    if (r.height <= below || below >= 200 || below >= above) {
+      setPos({ left, top: anchor.y, maxHeight: below });
+    } else {
+      const h = Math.min(r.height, above);
+      setPos({ left, top: (btn ? btn.top : anchor.y) - 4 - h, maxHeight: above });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anchor]);
+
+  // Focus sur l'entree cochee (ou la premiere) une fois le menu VISIBLE (un
+  // element encore cache ne peut pas prendre le focus) : le clavier marche
+  // aussitot.
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!pos || !el) return;
+    if (el.contains(document.activeElement)) return;
     const first =
       el.querySelector<HTMLButtonElement>(".src-item.is-checked:not(:disabled)") ??
       el.querySelector<HTMLButtonElement>(".src-item:not(:disabled)");
     first?.focus({ preventScroll: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anchor]);
+  }, [pos]);
 
   // Fermeture : clic ailleurs (y compris l'autre panneau), fenetre qui perd le
   // focus, redimensionnement, defilement hors du menu.
@@ -115,7 +144,10 @@ export function SourcePicker({
   // au panneau, dont les raccourcis (Entree = ouvrir, Retour arriere =
   // remonter, fleches = selection) agiraient sinon sur les fichiers.
   const onMenuKey = (e: ReactKeyboardEvent) => {
-    e.stopPropagation();
+    if (e.key === "Tab") {
+      close();
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       close(true);
@@ -140,7 +172,16 @@ export function SourcePicker({
   };
 
   return (
-    <span className="src-picker" onKeyDown={(e) => e.stopPropagation()}>
+    <span
+      className="src-picker"
+      onKeyDown={(e) => {
+        // Seules les touches du menu s'arretent ici (sinon Entree, Retour
+        // arriere ou les fleches agiraient sur les fichiers du panneau) ; les
+        // raccourcis Cmd/Ctrl (copier, coller…) continuent leur chemin.
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        if (MENU_KEYS.has(e.key)) e.stopPropagation();
+      }}
+    >
       <button
         ref={btnRef}
         type="button"

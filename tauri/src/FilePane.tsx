@@ -1492,7 +1492,7 @@ export function FilePane({
             <UiIcon name="back" />
           </button>
           <button
-            className="nav-btn"
+            className="nav-btn nav-fwd"
             disabled={!enabled || hist.idx >= hist.stack.length - 1}
             onClick={goForward}
             title={t("pane.head.forward")}
