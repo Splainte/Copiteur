@@ -152,6 +152,8 @@ export default {
   "app.phone.bannerOther": "plugged in over USB",
   "app.phone.openLeft": "Open on the left",
   "app.phone.openRight": "Open on the right",
+  "app.phone.toolbarTip": "Phone plugged in: open it in a pane",
+  "app.phone.several": "{n} phones",
 
   // Copy safeguards (same source on both sides).
   "app.notice.sameFolder": "Source and destination are the same folder: nothing to copy.",

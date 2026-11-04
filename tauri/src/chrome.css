@@ -1497,54 +1497,6 @@
   min-width: 120px;
 }
 
-/* Bandeau « telephone branche » sous la barre du haut. */
-.phone-banner {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 12px 8px;
-  padding: 5px 6px 5px 12px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--cp-accent) 32%, transparent);
-  background: color-mix(in srgb, var(--cp-accent) 12%, transparent);
-  font-size: 12.5px;
-  animation: flyout-in 0.2s cubic-bezier(0, 0, 0, 1);
-}
-.app[data-os="windows"] .phone-banner {
-  border-radius: 6px;
-}
-.phone-banner-icon {
-  display: grid;
-  place-items: center;
-  color: var(--cp-accent);
-  flex: 0 0 auto;
-}
-.phone-banner-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.phone-banner-btn {
-  flex: 0 0 auto;
-}
-.app .phone-banner-btn {
-  height: 26px;
-  padding: 0 10px;
-}
-.phone-banner .banner-close {
-  margin-left: 2px;
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  font-size: 11px;
-}
-.phone-banner .banner-close:hover {
-  background: color-mix(in srgb, var(--cp-text) 12%, transparent);
-}
-
 /* Trajet d'un transfert (« Pixel 9 Pro → NAS Neufsept · RUSHS »). */
 .xfer-route {
   flex: 0 0 26%;
@@ -1575,14 +1527,6 @@
 }
 .app[data-os="windows"] .pane-msg-text {
   color: var(--w-text-2, var(--cp-text-muted));
-}
-/* Bandeau : un nom de telephone tres long ne mange pas l'etat qui le suit. */
-.phone-banner-text strong {
-  display: inline-block;
-  max-width: 45%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
 }
 /* Colonne « flux » de largeur fixe, presente sur toutes les lignes de la file :
    le trajet reste aligne d'une ligne a l'autre. */

@@ -40,7 +40,7 @@ saved servers, *Add a server…*. Two servers can be open at once, one on each s
 actions (edit, rename, forget, disconnect) live in the same menu.
 
 **Android phone (macOS)** — plugged in over USB in “File transfer” mode, it shows up in the menu
-and a banner offers to open it on the left or the right. Copying from the phone to a NAS goes
+and a button in the top bar offers to open it on the left or the right. Copying from the phone to a NAS goes
 straight from the cable to the network, with no temporary copy on the Mac. One file at a time
 on the phone side (an MTP limit). macOS hands the phone to Image Capture as soon as it is plugged
 in: Copiteur then goes through that service (Apple's ImageCaptureCore API) instead of fighting

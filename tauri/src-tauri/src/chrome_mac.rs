@@ -276,7 +276,12 @@ impl Controller {
                     item.setStyle(NSToolbarItemStyle::Plain);
                 }
             }
-            TbItem::Menu { id, symbol: sym, title, tip, entries } => {
+            TbItem::Menu { id, symbol: sym, title, tip, entries, hidden } => {
+                // Apparait / disparait selon l'etat (telephone branche ou non).
+                // `hidden` n'existe qu'a partir de macOS 15.
+                if responds(item, sel!(setHidden:)) {
+                    item.setHidden(*hidden);
+                }
                 let Some(m) = item.downcast_ref::<NSMenuToolbarItem>() else { return };
                 let t = NSString::from_str(title);
                 m.setTitle(&t);

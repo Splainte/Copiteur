@@ -41,7 +41,7 @@ ouverts en même temps, un de chaque côté. Les actions sur un serveur (modifie
 oublier, se déconnecter) sont dans ce même menu.
 
 **Téléphone Android (macOS)** — branché en USB, en mode « Transfert de fichiers », il apparaît
-dans le menu et un bandeau propose de l'ouvrir à gauche ou à droite. Copier depuis le téléphone
+dans le menu, et un bouton de la barre du haut propose de l'ouvrir à gauche ou à droite. Copier depuis le téléphone
 vers un NAS passe directement du câble au réseau, sans copie temporaire sur le Mac. Un seul
 fichier à la fois côté téléphone (limite du protocole MTP). macOS réserve le téléphone à
 « Transfert d'images » dès le branchement : Copiteur passe alors par ce service (API

@@ -28,13 +28,16 @@ pub enum TbItem {
     Space,
     /// Bouton rond a symbole SF (journal, parametres).
     Button { id: String, symbol: String, label: String },
-    /// Menu deroulant natif (serveurs).
+    /// Menu deroulant natif (bouton allonge : telephone branche).
     Menu {
         id: String,
         symbol: String,
         title: String,
         tip: String,
         entries: Vec<MenuEntry>,
+        /// Masque (macOS 15 et plus ; ailleurs l'element reste visible).
+        #[serde(default)]
+        hidden: bool,
     },
     /// Bouton rond qui s'etire en pilule de progression (vers la gauche).
     Morph {

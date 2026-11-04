@@ -21,7 +21,7 @@ import type { XferSummary } from "./TransfersPanel";
 const isMac = navigator.userAgent.includes("Macintosh");
 
 // ---- Description de la barre (miroir des structures serde de chrome.rs) -------
-type MenuEntry = {
+export type MenuEntry = {
   id?: string;
   title?: string;
   subtitle?: string;
@@ -36,11 +36,13 @@ type TbItem =
   | { kind: "flex" }
   | { kind: "space" }
   | { kind: "button"; id: string; symbol: string; label: string }
-  | { kind: "menu"; id: string; symbol: string; title: string; tip: string; entries: MenuEntry[] }
+  | { kind: "menu"; id: string; symbol: string; title: string; tip: string; entries: MenuEntry[]; hidden: boolean }
   | { kind: "morph"; id: string; symbol: string; label: string; text: string; value: number; expanded: boolean; retry: boolean };
 type ToolbarSpec = { items: TbItem[] };
 
 type Handlers = {
+  // Choix dans le menu du bouton telephone (« left:<id> » / « right:<id> »).
+  phone: (entry: string) => void;
   toggleTransfers: () => void;
   journal: () => void;
   settings: () => void;
@@ -48,6 +50,9 @@ type Handlers = {
 
 type Opts = {
   appVersion: string;
+  // Bouton allonge « telephone branche » : menu Ouvrir a gauche / a droite.
+  // Absent (masque) quand aucun telephone n'attend d'etre ouvert.
+  phone: { title: string; tip: string; entries: MenuEntry[] } | null;
   // Zone des transferts cachee pendant une copie : le bouton s'etire.
   showProgress: boolean;
   summary: XferSummary;
@@ -61,6 +66,18 @@ function buildToolbar(o: Opts): ToolbarSpec {
     items: [
       { kind: "title", id: "title", text: "Copiteur", sub: o.appVersion },
       { kind: "flex" },
+      // Telephone branche pas encore ouvert : bouton allonge avec son nom.
+      // Toujours declare (la barre native est figee a sa creation) ; masque
+      // quand il n'y a rien a proposer.
+      {
+        kind: "menu",
+        id: "phone",
+        symbol: "smartphone",
+        title: o.phone?.title ?? "",
+        tip: o.phone?.tip ?? "",
+        entries: o.phone?.entries ?? [],
+        hidden: !o.phone,
+      },
       // Bouton Transferts : rond, il s'etire en pilule de progression (vers la
       // gauche) quand la zone est cachee et qu'une copie tourne. Meme texte que
       // sous Windows : « 42 % · 94 Mo/s · reste 16 Go · 2 min ».
@@ -132,6 +149,7 @@ export function useMacChrome(o: Opts): number {
 }
 
 function dispatch(h: Handlers, p: { id: string; kind: string; entry?: string }) {
+  if (p.kind === "menu" && p.id === "phone" && p.entry) return h.phone(p.entry);
   switch (p.id) {
     case "transfers":
       return h.toggleTransfers();

@@ -162,6 +162,8 @@ export default {
   "app.phone.bannerOther": "branché en USB",
   "app.phone.openLeft": "Ouvrir à gauche",
   "app.phone.openRight": "Ouvrir à droite",
+  "app.phone.toolbarTip": "Téléphone branché : l'ouvrir dans un panneau",
+  "app.phone.several": "{n} téléphones",
 
   // Garde-fous de copie (meme source des deux cotes).
   "app.notice.sameFolder": "La source et la destination sont le même dossier : rien à copier.",

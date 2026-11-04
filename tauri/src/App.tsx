@@ -48,7 +48,7 @@ import { t, tn, tx, useLang } from "./i18n";
 import { FirstRunLanguage } from "./i18n/LanguagePicker";
 import { ConnectSheet, MorphButton, WinTitleBar } from "./WindowChrome";
 import { SourcePicker, type SourceMenuItem } from "./SourcePicker";
-import { useMacChrome } from "./macChrome";
+import { useMacChrome, type MenuEntry as MacMenuEntry } from "./macChrome";
 import "./chrome.css";
 
 const appWindow = getCurrentWindow();
@@ -235,9 +235,8 @@ export default function App() {
   // Telephones Android branches (macOS : copiteur-mtp ; vide ailleurs).
   const [phones, setPhones] = useState<Phone[]>([]);
   const [phonesSupported, setPhonesSupported] = useState(false);
-  // Bandeau « telephone branche » : ids deja annonces depuis leur branchement
-  // (un telephone debranche puis rebranche est annonce de nouveau).
-  const [phoneBanner, setPhoneBanner] = useState<string | null>(null);
+  // Telephones deja annonces au journal depuis leur branchement (un telephone
+  // debranche puis rebranche est annonce de nouveau).
   const announcedPhones = useRef<Set<string>>(new Set());
   // Panneau vise par la feuille de connexion (« Ajouter un serveur… » ou
   // « Modifier ce serveur… » depuis son selecteur) et serveur qu'elle connecte.
@@ -1113,7 +1112,8 @@ export default function App() {
   // telephone debranche (« Pixel 9 Pro — débranché »).
   const phoneNames = useRef<Map<string, string>>(new Map());
   for (const ph of phones) phoneNames.current.set(ph.id, ph.name);
-  // Branchement / debranchement : journal + bandeau « Ouvrir à gauche / droite ».
+  // Branchement / debranchement : journal. (L'ouverture se propose par le
+  // bouton « telephone » de la barre du haut, cf. plus bas.)
   useEffect(() => {
     const ids = new Set(phones.map((p) => p.id));
     for (const id of [...announcedPhones.current]) {
@@ -1125,22 +1125,12 @@ export default function App() {
       if (announcedPhones.current.has(ph.id)) continue;
       announcedPhones.current.add(ph.id);
       logEvent("info", "operation", t("app.log.phonePlugged", { name: ph.name }));
-      const shown = PANES.some((k) => {
-        const v = srcs[k];
-        return v.kind === "phone" && v.id === ph.id;
-      });
-      if (!shown) setPhoneBanner(ph.id);
     }
-    setPhoneBanner((b) => (b && !ids.has(b) ? null : b));
-    // `srcs` n'est lu qu'au branchement (le bandeau ne s'annonce pas pour un
-    // telephone deja affiche) : inutile de relancer l'effet a chaque changement.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phones]);
   const openPhone = (id: string, pane: PaneId) => {
     const ph = phonesRef.current.find((p) => p.id === id);
     setPaneSrc(pane, { kind: "phone", id, name: ph?.name ?? phoneNames.current.get(id) ?? "" });
     setActive(pane);
-    setPhoneBanner((b) => (b === id ? null : b));
   };
   const retryPhone = (id: string) => {
     invoke("phone_retry", { id }).catch(() => {});
@@ -2675,16 +2665,50 @@ export default function App() {
       />
     );
   };
-  // Bandeau « telephone branche » (cache si le telephone est deja affiche).
-  const bannerPhone = phoneBanner ? phones.find((p) => p.id === phoneBanner) : undefined;
-  const bannerShown =
-    !!bannerPhone && !PANES.some((k) => srcs[k].kind === "phone" && (srcs[k] as { id: string }).id === bannerPhone.id);
+  // Bouton « telephone » de la barre du haut (macOS) : les telephones branches
+  // qui ne sont encore ouverts dans aucun panneau, avec Ouvrir a gauche / a
+  // droite. Remplace l'ancien bandeau, qui mangeait de la hauteur.
+  const waitingPhones = phones.filter(
+    (ph) => !PANES.some((k) => srcs[k].kind === "phone" && (srcs[k] as { id: string }).id === ph.id),
+  );
+  const phoneState = (ph: Phone): string =>
+    ph.state === "ready"
+      ? t("app.phone.bannerReady", {
+          used: humanSize(ph.storages.reduce((n, st) => n + Math.max(0, st.total - st.free), 0)),
+        })
+      : ph.state === "locked"
+        ? t("app.phone.bannerLocked")
+        : ph.state === "busy"
+          ? t("app.phone.bannerBusy")
+          : t("app.phone.bannerOther");
+  const phoneToolbar: { title: string; tip: string; entries: MacMenuEntry[] } | null = waitingPhones.length
+    ? {
+        title:
+          waitingPhones.length === 1
+            ? waitingPhones[0].name
+            : t("app.phone.several", { n: String(waitingPhones.length) }),
+        tip: t("app.phone.toolbarTip"),
+        entries: waitingPhones.flatMap((ph, i) => [
+          ...(i > 0 ? [{ separator: true }] : []),
+          { header: true, title: `${ph.name} · ${phoneState(ph)}` },
+          { id: `left:${ph.id}`, title: t("app.phone.openLeft"), symbol: "rectangle.lefthalf.inset.filled" },
+          { id: `right:${ph.id}`, title: t("app.phone.openRight"), symbol: "rectangle.righthalf.inset.filled" },
+        ]),
+      }
+    : null;
   // macOS : barre d'outils NATIVE (cf. chrome_mac.rs) ; rend sa hauteur.
   const tbH = useMacChrome({
     appVersion,
+    phone: phoneToolbar,
     showProgress,
     summary,
     handlers: {
+      phone: (entry) => {
+        const i = entry.indexOf(":");
+        if (i < 0) return;
+        const side = entry.slice(0, i);
+        if (side === "left" || side === "right") openPhone(entry.slice(i + 1), side);
+      },
       toggleTransfers: toggleXfer,
       journal: () => setShowJournal(true),
       settings: () => setShowSettings(true),
@@ -2761,38 +2785,6 @@ export default function App() {
       )}
 
       {notice && <div className="conn-error">{notice}</div>}
-
-      {/* Telephone qui vient d'etre branche : on propose de l'ouvrir. */}
-      {bannerShown && bannerPhone && (
-        <div className="phone-banner" role="status">
-          <span className="phone-banner-icon">
-            <UiIcon name="phone" />
-          </span>
-          <span className="phone-banner-text" title={bannerPhone.name}>
-            <strong>{bannerPhone.name}</strong>{" "}
-            {bannerPhone.state === "ready"
-              ? t("app.phone.bannerReady", {
-                  used: humanSize(
-                    bannerPhone.storages.reduce((n, st) => n + Math.max(0, st.total - st.free), 0),
-                  ),
-                })
-              : bannerPhone.state === "locked"
-                ? t("app.phone.bannerLocked")
-                : bannerPhone.state === "busy"
-                  ? t("app.phone.bannerBusy")
-                  : t("app.phone.bannerOther")}
-          </span>
-          <button className="btn-ghost phone-banner-btn" onClick={() => openPhone(bannerPhone.id, "left")}>
-            {t("app.phone.openLeft")}
-          </button>
-          <button className="btn-ghost phone-banner-btn" onClick={() => openPhone(bannerPhone.id, "right")}>
-            {t("app.phone.openRight")}
-          </button>
-          <button className="banner-close" aria-label={t("common.close")} onClick={() => setPhoneBanner(null)}>
-            ✕
-          </button>
-        </div>
-      )}
 
       <div className="shell">
         <main className="explorers">
