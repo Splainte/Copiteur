@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -30,7 +31,20 @@ import (
 	"copiteur-mtp/internal/usbmtp"
 )
 
-func main() {
+// macOS : ImageCaptureCore (transport des telephones tenus par le service
+// « Transfert d'images ») livre ses rappels sur le thread PRINCIPAL, qui doit
+// faire tourner la boucle d'evenements (usbmtp.RunMainLoop). On y verrouille
+// donc la goroutine principale des l'initialisation ; le serveur HTTP et le
+// gestionnaire USB tournent dans d'autres goroutines. Ailleurs : sans effet.
+func init() {
+	if runtime.GOOS == "darwin" {
+		runtime.LockOSThread()
+	}
+}
+
+func main() { usbmtp.RunMainLoop(run) }
+
+func run() {
 	log.SetFlags(log.Ltime)
 	log.SetPrefix("copiteur-mtp: ")
 	log.SetOutput(os.Stderr)

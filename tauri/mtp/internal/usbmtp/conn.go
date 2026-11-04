@@ -92,6 +92,13 @@ func (c *usbConn) mapErr(err error) error {
 	if errors.As(err, &ue) || errors.As(err, &se) || errors.Is(err, errClosed) || c.t.h == nil {
 		return fmt.Errorf("%w: %v", core.ErrGone, err)
 	}
+	return mapRC(err)
+}
+
+// mapRC traduit un code retour MTP (mtp.RCError) en erreur core ; les autres
+// erreurs sont renvoyees telles quelles. Commun aux transports USB et Image
+// Capture.
+func mapRC(err error) error {
 	var rc mtp.RCError
 	if errors.As(err, &rc) {
 		switch rc {
@@ -124,7 +131,7 @@ const fatChars = `:?"|*<>\`
 // refuse un nom. Si le nom contient un caractere suspect, on renvoie
 // ErrBadName (400, rclone ne reessaie pas) plutot qu'une erreur generique
 // (500, rclone reessaie en boucle).
-func (c *usbConn) nameErr(mapped, raw error, name string) error {
+func nameErr(mapped, raw error, name string) error {
 	var rc mtp.RCError
 	if errors.As(raw, &rc) && rc == mtp.RC_GeneralError && strings.ContainsAny(name, fatChars) {
 		return fmt.Errorf("%w: %q refused by the device (characters %s are not allowed on this storage)", core.ErrBadName, name, fatChars)
@@ -192,6 +199,23 @@ func (c *usbConn) Info(h uint32) (core.Object, error) {
 		}
 		// decodage incomplet apres le nom (dates, mots-cles) : on garde
 	}
+	o := objectFromInfo(h, &oi)
+	if !o.IsDir {
+		if oi.CompressedSize == 0xFFFFFFFF {
+			// > 4 Gio : la vraie taille est dans la propriete ObjectSize
+			var v mtp.Uint64Value
+			if err := c.t.GetObjectPropValue(h, mtp.OPC_ObjectSize, &v); err != nil {
+				return core.Object{}, c.mapErr(err)
+			}
+			o.Size = int64(v.Value)
+		}
+	}
+	return o, nil
+}
+
+// objectFromInfo convertit un ObjectInfo (taille 32 bits : l'appelant
+// relit ObjectSize si CompressedSize vaut 0xFFFFFFFF).
+func objectFromInfo(h uint32, oi *rawObjectInfo) core.Object {
 	o := core.Object{
 		Handle:    h,
 		StorageID: oi.StorageID,
@@ -204,16 +228,8 @@ func (c *usbConn) Info(h uint32) (core.Object, error) {
 	}
 	if !o.IsDir {
 		o.Size = int64(oi.CompressedSize)
-		if oi.CompressedSize == 0xFFFFFFFF {
-			// > 4 Gio : la vraie taille est dans la propriete ObjectSize
-			var v mtp.Uint64Value
-			if err := c.t.GetObjectPropValue(h, mtp.OPC_ObjectSize, &v); err != nil {
-				return core.Object{}, c.mapErr(err)
-			}
-			o.Size = int64(v.Value)
-		}
 	}
-	return o, nil
+	return o
 }
 
 // PartialRead implemente core.Conn.
@@ -253,7 +269,7 @@ func (c *usbConn) CreateFolder(storageID, parent uint32, name string) (uint32, e
 		ModificationDate: time.Now(),
 	}
 	_, _, h, err := c.t.SendObjectInfo(storageID, parent, &info)
-	return h, c.nameErr(c.mapErr(err), err, name)
+	return h, nameErr(c.mapErr(err), err, name)
 }
 
 // Send implemente core.Conn.
@@ -277,7 +293,7 @@ func (c *usbConn) Send(storageID, parent uint32, name string, size int64, mtime 
 	}
 	_, _, h, err := c.t.SendObjectInfo(storageID, parent, &info)
 	if err != nil {
-		return 0, c.nameErr(c.mapErr(err), err, name)
+		return 0, nameErr(c.mapErr(err), err, name)
 	}
 	defer c.long()()
 	err = c.t.SendObject(r, size)
@@ -321,7 +337,7 @@ func (c *usbConn) Rename(h uint32, name string) error {
 			return nil
 		}
 	}
-	return c.nameErr(c.mapErr(err), err, name)
+	return nameErr(c.mapErr(err), err, name)
 }
 
 func rootAsZero(parent uint32) uint32 {

@@ -44,8 +44,9 @@ oublier, se déconnecter) sont dans ce même menu.
 dans le menu et un bandeau propose de l'ouvrir à gauche ou à droite. Copier depuis le téléphone
 vers un NAS passe directement du câble au réseau, sans copie temporaire sur le Mac. Un seul
 fichier à la fois côté téléphone (limite du protocole MTP). macOS réserve le téléphone à
-« Transfert d'images » dès le branchement : Copiteur arrête ce service (relancé tout seul par
-macOS) au moment d'ouvrir le téléphone. Fermer OpenMTP ou Android File Transfer s'ils tournent. Sous Windows,
+« Transfert d'images » dès le branchement : Copiteur passe alors par ce service (API
+ImageCaptureCore d'Apple) au lieu de le combattre. Fermer OpenMTP ou Android File Transfer
+s'ils tournent. Sous Windows,
 l'Explorateur gère déjà les téléphones : cette source n'y existe pas.
 
 **Transferts** — glisser-déposer entre les deux panneaux et Ctrl/Cmd+C · V, dans les deux sens.

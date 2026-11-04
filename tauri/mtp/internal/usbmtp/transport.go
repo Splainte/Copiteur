@@ -35,7 +35,6 @@ import (
 	"log"
 	"math/rand/v2"
 	"strings"
-	"time"
 
 	"github.com/ganeshrvel/go-mtpfs/mtp"
 	"github.com/ganeshrvel/usb"
@@ -188,48 +187,6 @@ func (d *transport) interfaceLooksMTP() (ok, known bool, err error) {
 	}
 	// "CDC"/"ACM" : anciens Samsung (comme go-mtpfs)
 	return strings.Contains(iface, "MTP") || strings.Contains(iface, "CDC") || strings.Contains(iface, "ACM"), true, nil
-}
-
-// recoverPTP remet l'interface dans un etat propre quand un autre client
-// (ptpcamerad, arrete par releaseImageCapture) a ete interrompu en pleine
-// transaction : sans ca, le telephone attend encore la suite de l'ancien
-// echange et notre OpenSession reste sans reponse (constate sur un Pixel 9 Pro
-// XL : LIBUSB_ERROR_TIMEOUT). Procedure de la classe « Still Image » (PTP sur
-// USB, que MTP reprend) : demande de reinitialisation (0x66), deblocage des
-// points d'acces, donnees en attente jetees, puis statut lu jusqu'a « OK »
-// (0x67). Chaque etape est facultative : une erreur n'arrete pas la suite.
-func (d *transport) recoverPTP() {
-	if d.h == nil {
-		return
-	}
-	iface := uint16(d.c.ifaceDescr.InterfaceNumber)
-	rerr := d.h.ControlTransfer(0x21, 0x66, 0, iface, nil, 1000)
-	_ = d.h.ClearHalt(d.c.sendEP)
-	_ = d.h.ClearHalt(d.c.fetchEP)
-	buf := make([]byte, 16384)
-	drained := 0
-	for i := 0; i < 256; i++ {
-		n, err := d.h.BulkTransfer(d.c.fetchEP, buf, 100)
-		drained += n
-		if err != nil || n == 0 {
-			break
-		}
-	}
-	code := uint16(0)
-	st := make([]byte, 32)
-	for i := 0; i < 20; i++ {
-		for j := range st {
-			st[j] = 0
-		}
-		if err := d.h.ControlTransfer(0xA1, 0x67, 0, iface, st, 1000); err == nil {
-			code = binary.LittleEndian.Uint16(st[2:4])
-			if code == 0x2001 {
-				break
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	log.Printf("USB: PTP recovery: reset=%v drained=%d status=0x%04x", rerr, drained, code)
 }
 
 // ensureConfig : comme selectDevice() de go-mtpfs.

@@ -280,7 +280,7 @@ func (d *Device) putLocked(ctx context.Context, key dirKey, name string, existin
 		}
 		return false, true, incomplete
 	}
-	if errors.Is(err, ErrDesync) || pr.short {
+	if errors.Is(err, ErrDesync) {
 		log.Printf("upload of %q interrupted (%v), resyncing the MTP session", name, err)
 		if rerr := d.resyncLocked(); rerr != nil {
 			return false, false, err
@@ -293,9 +293,14 @@ func (d *Device) putLocked(ctx context.Context, key dirKey, name string, existin
 		return false, true, err
 	}
 	// erreur "propre" (refus de SendObjectInfo, stockage plein pendant
-	// l'ecriture...) : la session est saine, le handle valide.
+	// l'ecriture, ou envoi interrompu que la connexion a deja nettoye sans
+	// casser la session, cas d'Image Capture) : la session est saine, le
+	// handle valide.
 	if h != 0 {
 		_ = d.doLocked(func(c Conn) error { return c.Delete(h) })
+	}
+	if pr.short {
+		err = fmt.Errorf("%w: %v", ErrIncomplete, pr.cause)
 	}
 	return false, false, err
 }

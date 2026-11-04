@@ -20,3 +20,6 @@ func (*Manager) Devices() []*core.Device { return nil }
 func (*Manager) Get(string) *core.Device { return nil }
 func (*Manager) Retry(string) bool       { return false }
 func (*Manager) Close()                  {}
+
+// RunMainLoop : sans objet sans cgo, execute simplement fn.
+func RunMainLoop(fn func()) { fn() }

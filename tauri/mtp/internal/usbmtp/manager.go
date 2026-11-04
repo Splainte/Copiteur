@@ -36,7 +36,7 @@ type entry struct {
 	key  string
 	c    *candidate // c.dev : reference tenue par l'entree
 	dev  *core.Device
-	conn *usbConn
+	conn core.Conn // *usbConn ou *iccConn
 
 	ignored bool // pas un appareil MTP
 	adb     bool // telephone sans interface MTP (mode "recharge"), vu par son interface ADB
@@ -44,13 +44,8 @@ type entry struct {
 	// (premiere ouverture ratee) ; remplace des que le n° est connu.
 	fallbackID bool
 	working    bool // une goroutine d'ouverture/rafraichissement tourne
-	// releases : arrets de « Transfert d'images » (macOS) deja tentes pour ce
-	// branchement. Plafonne (cf. maxReleases) : si un AUTRE programme tient
-	// le telephone (OpenMTP…), on ne relance pas ce service en boucle — et
-	// launchd finirait par le brider. Remis a zero par « Reessayer ».
-	releases int
-	removed  bool
-	nextTry  time.Time
+	removed    bool
+	nextTry    time.Time
 }
 
 // Manager surveille le bus USB et gere les sessions MTP.
@@ -61,6 +56,9 @@ type Manager struct {
 	entries map[string]*entry
 	stop    chan struct{}
 	done    chan struct{}
+	// iccOwner : entree qui utilise l'UNIQUE session Image Capture permise
+	// par la passerelle (sharedBrowser.active) ; nil si libre.
+	iccOwner *entry
 }
 
 // NewManager initialise libusb et lance la surveillance.
@@ -240,58 +238,6 @@ func (m *Manager) assignID(e *entry, serial string) string {
 	return id
 }
 
-// Arrets automatiques de « Transfert d'images » par branchement.
-const maxReleases = 3
-
-// claimFreeing reclame l'interface ; si macOS la garde pour « Transfert
-// d'images », libere-la (cf. releaseImageCapture) et reclame aussitot.
-func (m *Manager) claimFreeing(e *entry, t *transport) error {
-	err := t.claim()
-	if err == nil || !errors.Is(err, usb.ERROR_ACCESS) {
-		return err
-	}
-	m.mu.Lock()
-	allowed := e.releases < maxReleases
-	if allowed {
-		e.releases++
-	}
-	m.mu.Unlock()
-	if !allowed {
-		return err
-	}
-	// Sequence VERIFIEE sur un Pixel 9 Pro XL : fermer notre handle, arreter
-	// le service, puis rouvrir l'appareil A NEUF et reclamer aussitot. Rouvrir
-	// compte : un appareil ouvert pendant que le service le tenait n'est
-	// obtenu qu'en acces partage, et la session MTP restait alors sans
-	// reponse (LIBUSB_ERROR_TIMEOUT). Rouvert apres l'arret, macOS nous le
-	// donne en exclusivite. Pas d'attente : launchd relance le service en
-	// quelques millisecondes.
-	t.Close()
-	if !releaseImageCapture() {
-		if oerr := t.openHandle(); oerr != nil {
-			return oerr
-		}
-		return t.claim()
-	}
-	log.Printf("USB %s: interface held, released macOS Image Capture (ptpcamerad)", e.key)
-	for i := 0; i < 50; i++ {
-		if err = t.openHandle(); err != nil {
-			return err
-		}
-		if err = t.claim(); err == nil || !errors.Is(err, usb.ERROR_ACCESS) {
-			return err
-		}
-		t.Close()
-		time.Sleep(2 * time.Millisecond)
-	}
-	// Dernier essai sans arret supplementaire (le handle doit rester ouvert
-	// pour l'appelant, qui le referme en cas d'echec).
-	if oerr := t.openHandle(); oerr != nil {
-		return oerr
-	}
-	return t.claim()
-}
-
 func isBusyErr(err error) bool {
 	var ue usb.Error
 	if errors.As(err, &ue) {
@@ -388,8 +334,14 @@ func (m *Manager) open(e *entry) {
 	if err := t.ensureConfig(); err != nil {
 		log.Printf("USB %s: set configuration: %v", e.key, err)
 	}
-	if err := m.claimFreeing(e, t); err != nil {
+	if err := t.claim(); err != nil {
 		t.Close()
+		if iccSupported && errors.Is(err, usb.ERROR_ACCESS) {
+			// macOS : interface tenue en exclusivite (normalement par le
+			// service « Transfert d'images ») -> passage par ImageCaptureCore
+			m.openICC(e, usbSerial, product, manufacturer, devFor, fail)
+			return
+		}
 		if isBusyErr(err) {
 			fail(core.StateBusy, busyHint+": "+err.Error())
 		} else {
@@ -416,14 +368,6 @@ func (m *Manager) open(e *entry) {
 	}
 
 	err := openSession(t)
-	if err != nil && !isBusyErr(err) && t.h != nil {
-		// Sans reponse : on tente la remise au propre PTP (sans reset USB,
-		// qui ferait re-annoncer le telephone et le rendrait a « Transfert
-		// d'images ») avant le reset de dernier recours.
-		log.Printf("USB %s: OpenSession failed (%v), PTP recovery", e.key, err)
-		t.recoverPTP()
-		err = openSession(t)
-	}
 	if err != nil && isBusyErr(err) {
 		t.Close()
 		fail(core.StateBusy, busyHint+": OpenSession: "+err.Error())
@@ -438,7 +382,7 @@ func (m *Manager) open(e *entry) {
 		t.Close()
 		time.Sleep(time.Second)
 		if err = t.openHandle(); err == nil {
-			if err = m.claimFreeing(e, t); err == nil {
+			if err = t.claim(); err == nil {
 				err = openSession(t)
 			}
 		}
@@ -462,6 +406,16 @@ func (m *Manager) open(e *entry) {
 		}
 		log.Printf("USB %s: GetDeviceInfo: %v (continuing)", e.key, err)
 	}
+	conn := newConn(t, &info)
+	detail := fmt.Sprintf("partial64=%v move=%v copy=%v",
+		conn.ops[mtp.OC_ANDROID_GET_PARTIAL_OBJECT64], conn.ops[mtp.OC_MoveObject], conn.ops[mtp.OC_CopyObject])
+	m.finishOpen(e, conn, &info, usbSerial, product, manufacturer, "usb", detail, devFor, fail)
+}
+
+// finishOpen : identite, stockages et branchement d'une session ouverte
+// (commun aux transports USB et Image Capture).
+func (m *Manager) finishOpen(e *entry, conn core.Conn, info *rawDeviceInfo, usbSerial, product, manufacturer, transport, detail string,
+	devFor func(string) *core.Device, fail func(core.State, string)) {
 	serial := usbSerial
 	if serial == "" {
 		serial = strings.TrimSpace(info.SerialNumber)
@@ -490,7 +444,6 @@ func (m *Manager) open(e *entry) {
 		dev.SetState(core.StateConnecting, "")
 	}
 
-	conn := newConn(t, &info)
 	storages, err := conn.Storages()
 	if err != nil {
 		conn.Close()
@@ -506,9 +459,82 @@ func (m *Manager) open(e *entry) {
 	e.conn = conn
 	m.mu.Unlock()
 	dev.Attach(conn, storages)
-	log.Printf("device %s (%s %s): %s, %d storage(s), partial64=%v move=%v copy=%v",
-		dev.ID(), man, name, dev.State(), len(storages),
-		conn.ops[mtp.OC_ANDROID_GET_PARTIAL_OBJECT64], conn.ops[mtp.OC_MoveObject], conn.ops[mtp.OC_CopyObject])
+	log.Printf("device %s (%s %s): transport=%s, %s, %d storage(s), %s",
+		dev.ID(), man, name, transport, dev.State(), len(storages), detail)
+}
+
+// iccOneAtATime : la passerelle n'accepte qu'une session Image Capture par
+// processus.
+const iccOneAtATime = "another phone is already open through macOS Image Capture (only one at a time): disconnect it, or free this phone's USB connection, to use this one"
+
+// openICC ouvre le telephone par ImageCaptureCore (macOS) quand son
+// interface USB est tenue en exclusivite par le service « Transfert
+// d'images » (ptpcamerad) : nos commandes passent par la session de ce
+// service. Bloquant (decouverte ~6 s, au plus 120 s) : l'appareil reste
+// "connecting" pendant ce temps.
+func (m *Manager) openICC(e *entry, usbSerial, product, manufacturer string,
+	devFor func(string) *core.Device, fail func(core.State, string)) {
+	targets, err := iccDevices()
+	if err != nil {
+		fail(core.StateError, "Image Capture: listing devices: "+err.Error())
+		return
+	}
+	tg, err := matchICCTarget(targets, usbSerial, e.c.devDescr.IdVendor, e.c.devDescr.IdProduct)
+	if err != nil {
+		fail(core.StateBusy, busyHint+": "+err.Error())
+		return
+	}
+	if !tg.AppleOwned {
+		// tenue par un autre programme (OpenMTP, Android File Transfer...)
+		fail(core.StateBusy, busyHint+": USB interface held exclusively (not by macOS Image Capture)")
+		return
+	}
+	m.mu.Lock()
+	if m.iccOwner != nil && m.iccOwner != e {
+		m.mu.Unlock()
+		fail(core.StateBusy, iccOneAtATime)
+		return
+	}
+	m.iccOwner = e
+	m.mu.Unlock()
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			m.mu.Lock()
+			if m.iccOwner == e {
+				m.iccOwner = nil
+			}
+			m.mu.Unlock()
+		})
+	}
+
+	serial := usbSerial
+	if serial == "" {
+		serial = tg.Serial
+	}
+	dev := devFor(serial)
+	dev.SetState(core.StateConnecting, "opening through macOS Image Capture (can take a few seconds)")
+	log.Printf("device %s: USB interface held by macOS Image Capture (ptpcamerad), opening through ImageCaptureCore", dev.ID())
+	w, err := iccOpen(*tg)
+	if err != nil {
+		release()
+		fail(core.StateError, "Image Capture: "+err.Error())
+		return
+	}
+	conn, info, err := newICCConn(w, release) // ferme (et libere) si echec
+	if err != nil {
+		fail(core.StateError, "Image Capture: "+err.Error())
+		return
+	}
+	if product == "" {
+		product = tg.Name
+	}
+	if manufacturer == "" {
+		manufacturer = tg.Manufacturer
+	}
+	detail := fmt.Sprintf("partial64=%v edit=%v move=%v copy=%v",
+		conn.ops[mtp.OC_ANDROID_GET_PARTIAL_OBJECT64], conn.canEdit(), conn.ops[mtp.OC_MoveObject], conn.ops[mtp.OC_CopyObject])
+	m.finishOpen(e, conn, info, serial, product, manufacturer, "imagecapture", detail, devFor, fail)
 }
 
 // adbCandidate reconnait un telephone Android sans interface MTP mais avec
@@ -639,7 +665,6 @@ func (m *Manager) Retry(id string) bool {
 	if e.working || e.adb {
 		return true // une ouverture est deja en cours / rien a rouvrir
 	}
-	e.releases = 0 // demande explicite : on peut de nouveau liberer
 	m.startLocked(e, func(e *entry) {
 		e.dev.Close(core.StateConnecting, "", 30*time.Second)
 		m.mu.Lock()

@@ -185,12 +185,13 @@ func (s *rawStorageInfo) Decode(r io.Reader) (err error) {
 
 // rawDeviceInfo : DeviceInfo recu (champs utiles seulement).
 type rawDeviceInfo struct {
-	MTPExtension        string
-	OperationsSupported []uint16
-	Manufacturer        string
-	Model               string
-	DeviceVersion       string
-	SerialNumber        string
+	MTPVendorExtensionID uint32
+	MTPExtension         string
+	OperationsSupported  []uint16
+	Manufacturer         string
+	Model                string
+	DeviceVersion        string
+	SerialNumber         string
 }
 
 func (d *rawDeviceInfo) Decode(r io.Reader) (err error) {
@@ -202,6 +203,7 @@ func (d *rawDeviceInfo) Decode(r io.Reader) (err error) {
 	if err = binary.Read(r, binary.LittleEndian, &head); err != nil {
 		return err
 	}
+	d.MTPVendorExtensionID = head.MTPVendorExtensionID
 	if d.MTPExtension, err = decodeStr16(r); err != nil {
 		return err
 	}

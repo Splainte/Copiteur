@@ -48,11 +48,23 @@ de https://github.com/hanwen/go-mtpfs). Le fichier
 `ops.go`, `android.go` et `select.go` (modifications décrites en tête du
 fichier).
 
+### Passerelle ImageCaptureCore (macOS) — licence BSD
+
+https://github.com/jameshilliard/go-mtpfs (autre fork de
+https://github.com/hanwen/go-mtpfs), branche `ptp-transport`, commit
+`19ba0d9` (« Add ImageCaptureCore MTP transport on macOS »). Les fichiers
+`tauri/mtp/internal/usbmtp/imagecapture_bridge_darwin.m` et
+`imagecapture_bridge.h` en sont des copies non modifiées (seul un en-tête
+d'attribution est ajouté) ; `tauri/mtp/internal/usbmtp/icc.go` et
+`icc_darwin.go` reprennent la logique de ses fichiers `mtp.go`, `ops.go`,
+`android.go` et `select.go` (passage des commandes MTP par le service photo de
+macOS, envois et lectures par blocs).
+
 ### usb (liaison Go de libusb) — licence BSD
 
 https://github.com/ganeshrvel/usb (fork de https://github.com/hanwen/usb).
 
-Les deux composants ci-dessus sont distribués sous la licence suivante :
+Les trois composants ci-dessus sont distribués sous la licence suivante :
 
 ```
 New BSD License
