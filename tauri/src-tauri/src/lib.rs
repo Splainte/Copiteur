@@ -9,6 +9,8 @@ mod engine;
 mod hostkeys;
 mod i18n;
 mod journal;
+mod beta;
+mod mtp;
 mod rclone;
 mod vault;
 
@@ -42,12 +44,14 @@ fn force_quit(app: tauri::AppHandle, state: tauri::State<Busy>) {
 #[tauri::command]
 fn prepare_update(app: tauri::AppHandle) {
     app.state::<rclone::Rclone>().shutdown();
+    app.state::<mtp::Mtp>().shutdown();
 }
 
 // L'installation a echoue apres `prepare_update` : rclone peut redemarrer.
 #[tauri::command]
 fn cancel_update(app: tauri::AppHandle) {
     app.state::<rclone::Rclone>().resume();
+    app.state::<mtp::Mtp>().resume();
 }
 
 // L'entree « Tout selectionner » du menu macOS. On la garde sous la main pour
@@ -227,6 +231,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(rclone::Rclone::default())
+        .manage(mtp::Mtp::default())
         .manage(edits::Edits::default())
         .manage(hostkeys::HostKeys::default())
         .manage(Busy::default())
@@ -239,6 +244,10 @@ pub fn run() {
 
             // Lance le daemon rclone RC (sidecar) des le demarrage.
             rclone::start(app.handle());
+            // Moteur des telephones Android (macOS) : lance au premier besoin.
+            mtp::start(app.handle());
+            // Beta : reprend les serveurs memorises de la version normale.
+            beta::import_from_stable(app.handle());
 
             // Vide les copies temporaires d'ouverture laissees par une session
             // precedente (fermeture brutale / crash).
@@ -317,6 +326,9 @@ pub fn run() {
             edits::edit_list,
             edits::edit_poll_now,
             rclone::rc_call,
+            mtp::phones_supported,
+            mtp::phones_list,
+            mtp::phone_retry,
             hostkeys::host_key_check,
             hostkeys::host_key_trust,
             set_busy,
@@ -363,6 +375,7 @@ pub fn run() {
             // Tue le daemon rclone a la fermeture pour ne pas laisser de process orphelin.
             tauri::RunEvent::Exit => {
                 app.state::<rclone::Rclone>().shutdown();
+                app.state::<mtp::Mtp>().shutdown();
                 // Efface les copies temporaires d'ouverture (best-effort).
                 engine::clean_opens(app);
             }

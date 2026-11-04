@@ -10,7 +10,7 @@ import {
   humanSize,
   isFinal,
   xferStreams,
-  REMOTE,
+  isUploadXfer,
   type Xfer,
   type EditItem,
   type Settings,
@@ -135,7 +135,7 @@ function statusText(x: Xfer, now: number): string {
 // Bulle d'aide de la colonne « flux » : l'explication longue tient dans le
 // `title` natif (aucune place a l'ecran, visible au survol seulement).
 function streamsTitle(x: Xfer, n: number, fallback: boolean, s: Settings): string {
-  const dir = t(x.dstFs.startsWith(REMOTE) ? "panels.xfer.upload" : "panels.xfer.download");
+  const dir = t(isUploadXfer(x) ? "panels.xfer.upload" : "panels.xfer.download");
   if (fallback) return tn("panels.xfer.tipFallback", n, { dir });
   if (n === 1) return t("panels.xfer.tipSingle", { dir, cutoff: s.cutoff });
   return t("panels.xfer.tipSplit", { dir, n });
@@ -187,6 +187,14 @@ function Row({
         {x.rel && <span className="xfer-rel">{x.rel}/</span>}
         {x.name}
       </span>
+      {/* Trajet : « Pixel 9 Pro → NAS Neufsept · RUSHS ». Les deux panneaux
+          pouvant afficher n'importe quelle source, le sens seul ne suffit plus
+          a dire d'ou vient et ou va un fichier. */}
+      {x.srcLabel && x.dstLabel && (
+        <span className="xfer-route" title={`${x.srcLabel} → ${x.dstLabel}`}>
+          {x.srcLabel} → {x.dstLabel}
+        </span>
+      )}
       {!bar && (
         // Onglet « Terminés » : une barre pleine a 100 % n'apprend rien — la
         // taille du fichier, si.

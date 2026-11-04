@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -6,10 +7,10 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import {
   rc,
-  REMOTE,
   humanSize,
   listArgs,
   fileAddr,
+  joinDir,
   resolveRemoteStart,
   humanConnError,
   planItem,
@@ -19,9 +20,17 @@ import {
   isFinal,
   hasBadChars,
   sanitizeName,
-  type Side,
+  fsKind,
+  fsRemote,
+  isUploadXfer,
+  touchesPhone,
+  PANES,
+  otherPane,
+  type Loc,
+  type PaneId,
   type PaneBus,
   type Payload,
+  type Phone,
   type Server,
   type Settings,
   type Xfer,
@@ -37,21 +46,25 @@ import { getVersion } from "@tauri-apps/api/app";
 import { UiIcon } from "./icons";
 import { t, tn, tx, useLang } from "./i18n";
 import { FirstRunLanguage } from "./i18n/LanguagePicker";
-import { ConnectSheet, MorphButton, ServerButton, WinTitleBar, serverMenuEntries } from "./WindowChrome";
+import { ConnectSheet, MorphButton, WinTitleBar } from "./WindowChrome";
+import { SourcePicker, type SourceMenuItem } from "./SourcePicker";
 import { useMacChrome } from "./macChrome";
 import "./chrome.css";
 
 const appWindow = getCurrentWindow();
 const isMac = navigator.userAgent.includes("Macintosh");
 const isWin = navigator.userAgent.includes("Windows");
+const isLinux = !isMac && !isWin;
 const osName = isMac ? "macos" : isWin ? "windows" : "linux";
 
 // Erreurs "reseau" : coupure du tunnel, 4G qui decroche, NAS qui redemarre…
 // Elles declenchent la reprise AUTOMATIQUE. Tout le reste (droits refuses,
 // disque plein, fichier introuvable) est un echec definitif : le reessayer en
 // boucle ne servirait a rien.
+// « Service Unavailable » (503) : le telephone vient d'etre debranche, ou il est
+// momentanement occupe (cf. copiteur-mtp) — la reprise repart quand il revient.
 const NETWORK_ERROR =
-  /(connection|connexion|timeout|timed out|deadline|EOF|broken pipe|reset|unreachable|refused|no route|network|handshake|dial |lookup |i\/o error|closed)/i;
+  /(connection|connexion|timeout|timed out|deadline|EOF|broken pipe|reset|unreachable|refused|no route|network|handshake|dial |lookup |i\/o error|closed|service unavailable|\b503\b)/i;
 
 // Erreurs TRANSITOIRES cote rclone qui reussissent a la reprise. « can't move
 // object - incompatible remotes » survient par intermittence sur un copyfile
@@ -99,9 +112,86 @@ type HostKeyStatus = {
 };
 type HostKeyAsk = HostKeyStatus & { host: string; port: string };
 
+// Ce que montre un panneau (avant resolution en adresses rclone, cf. `Loc`) :
+// rien encore, l'ordinateur, un serveur memorise (par son nom) ou un telephone
+// (par son identifiant USB).
+type PaneSrc =
+  | { kind: "none" }
+  | { kind: "local" }
+  | { kind: "server"; label: string }
+  | { kind: "phone"; id: string; name: string };
+
+// Une connexion a un serveur memorise. Chaque serveur a SON remote rclone
+// (« srv1: », « srv2: »…) : deux serveurs peuvent ainsi etre ouverts en meme
+// temps (un dans chaque panneau, copie serveur <-> serveur), et une copie en
+// file garde son serveur meme si le panneau change de source.
+type Conn = {
+  label: string;
+  remote: string;
+  state: "connecting" | "ok" | "error";
+  err: string;
+  // Dossier d'ouverture resolu a la connexion (cf. resolveRemoteStart).
+  startAt: string;
+  // Incremente a chaque connexion reussie : remonte les panneaux qui affichent
+  // ce serveur (relistage depuis le dossier d'ouverture).
+  epoch: number;
+  // Identifiants utilises (pour reecrire la config sans redemander).
+  server: Server;
+};
+
+// Identite stable d'une source (cles d'acces rapide, remontage des panneaux).
+function srcKey(s: PaneSrc): string {
+  return s.kind === "server" ? `server:${s.label}` : s.kind === "phone" ? `phone:${s.id}` : s.kind;
+}
+// Cle localStorage des acces rapides d'une source. Celles des serveurs gardent
+// leur ancien nom (« copiteur.pins.remote::<serveur> ») : rien n'est perdu a la
+// mise a jour.
+function pinStoreKey(key: string): string {
+  if (key.startsWith("server:")) return `copiteur.pins.remote::${key.slice(7)}`;
+  if (key.startsWith("phone:")) return `copiteur.pins.phone::${key.slice(6)}`;
+  return "copiteur.pins.local";
+}
+function readPins(key: string): { label: string; path: string }[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(pinStoreKey(key)) || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+// Panneaux ouverts au demarrage (sources memorisees). Un serveur n'est pas
+// reconnecte tout seul : le panneau propose juste de le rouvrir.
+function loadPaneSrcs(): Record<PaneId, PaneSrc> {
+  const def: Record<PaneId, PaneSrc> = { left: { kind: "local" }, right: { kind: "none" } };
+  try {
+    const raw = JSON.parse(localStorage.getItem("copiteur.panes") || "null");
+    if (!raw) return def;
+    const ok = (v: unknown): v is PaneSrc => {
+      const o = v as PaneSrc | null;
+      return (
+        !!o &&
+        (o.kind === "none" ||
+          o.kind === "local" ||
+          (o.kind === "server" && typeof o.label === "string") ||
+          (o.kind === "phone" && typeof o.id === "string" && typeof o.name === "string"))
+      );
+    };
+    return { left: ok(raw.left) ? raw.left : def.left, right: ok(raw.right) ? raw.right : def.right };
+  } catch {
+    return def;
+  }
+}
+
 export default function App() {
   // Re-rend toute l'app dans la nouvelle langue quand elle change.
   const lang = useLang();
+  // Nom du disque local dans les panneaux et sur les lignes de transfert.
+  const localLabel = isMac ? t("chrome.pane.yourMac") : t("common.yourPc");
+  const localLabelRef = useRef(localLabel);
+  localLabelRef.current = localLabel;
+  // Panneaux exploitables (source choisie et prete), lus par le copier-coller
+  // et la mise en file, qui sont memoises.
+  const paneEnabled = useRef<Record<PaneId, boolean>>({ left: true, right: false });
   // Feuille de connexion (nouveau serveur, ou modification du serveur courant)
   // et renommage d'un serveur memorise.
   const [connectSheet, setConnectSheet] = useState<"new" | "edit" | null>(null);
@@ -113,20 +203,50 @@ export default function App() {
   // L'utilisateur a cache la zone lui-meme : un nouveau lot ne la fait plus
   // reapparaitre (le bouton Transferts s'etire en pilule de progression).
   const userHidXfer = useRef(false);
-  const [active, setActive] = useState<Side | null>("local");
-  const [connected, setConnected] = useState(false);
-  // Incremente a chaque connexion reussie. Sert de « jeton » au panneau distant :
-  // meme si `connected` reste vrai (on passe d'un serveur a un autre), le
-  // changement de jeton force le relistage depuis la racine du NOUVEAU serveur.
-  const [connKey, setConnKey] = useState(0);
-  // Dossier d'ouverture du panneau serveur, resolu a la connexion (dossier de
-  // depart memorise -> racine de partages detectee -> "/"). Cf resolveRemoteStart.
-  const [remoteStart, setRemoteStart] = useState("/");
+  const [active, setActive] = useState<PaneId | null>("left");
+  // Source de chaque panneau (memorisee d'une session a l'autre).
+  const [srcs, setSrcs] = useState<Record<PaneId, PaneSrc>>(loadPaneSrcs);
+  useEffect(() => {
+    localStorage.setItem("copiteur.panes", JSON.stringify(srcs));
+  }, [srcs]);
+  // Connexions aux serveurs, par nom de serveur memorise.
+  const [conns, setConns] = useState<Record<string, Conn>>({});
+  const connsRef = useRef(conns);
+  connsRef.current = conns;
+  // Remote rclone attribue a chaque serveur pour la session (« srv1 »…). Stable :
+  // une reconnexion reprend le meme, donc les transferts en file aussi.
+  const remoteIds = useRef<Map<string, string>>(new Map());
+  const remoteFor = (label: string): string => {
+    let r = remoteIds.current.get(label);
+    if (!r) {
+      r = `srv${remoteIds.current.size + 1}`;
+      remoteIds.current.set(label, r);
+    }
+    return r;
+  };
+  // Telephones Android branches (macOS : copiteur-mtp ; vide ailleurs).
+  const [phones, setPhones] = useState<Phone[]>([]);
+  const [phonesSupported, setPhonesSupported] = useState(false);
+  // Bandeau « telephone branche » : ids deja annonces depuis leur branchement
+  // (un telephone debranche puis rebranche est annonce de nouveau).
+  const [phoneBanner, setPhoneBanner] = useState<string | null>(null);
+  const announcedPhones = useRef<Set<string>>(new Set());
+  // Panneau vise par la feuille de connexion (« Ajouter un serveur… » ou
+  // « Modifier ce serveur… » depuis son selecteur) et serveur qu'elle connecte.
+  const [sheetPane, setSheetPane] = useState<PaneId>("right");
+  const [sheetLabel, setSheetLabel] = useState<string | null>(null);
   const [version, setVersion] = useState("");
   // Compteur de « vies » du daemon rclone : incremente a chaque relance, il sert
   // a repousser la config globale de transfert, perdue avec l'ancien process.
   const [daemonEpoch, setDaemonEpoch] = useState(0);
-  const [connErr, setConnErr] = useState("");
+  // Message ponctuel en haut de la fenetre (ex. deconnexion refusee pendant une
+  // copie). S'efface tout seul.
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(""), 6000);
+    return () => clearTimeout(id);
+  }, [notice]);
   const [xfers, setXfers] = useState<Xfer[]>([]);
   const [tab, setTab] = useState<Tab>("queue");
   // Fichiers distants ouverts pour edition (surveilles localement).
@@ -170,20 +290,22 @@ export default function App() {
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
-  // Accès rapide (dossiers épinglés). Le local est global (dossiers systeme) ;
-  // le distant est CLOISONNE PAR SERVEUR — les chemins n'ont aucun sens d'un
-  // serveur a l'autre. `pins.remote` reflete le serveur COURANT ; il est
-  // charge/sauve sous une cle propre a chaque serveur (cf. `remoteKey`).
+  // Accès rapide (dossiers épinglés), CLOISONNE PAR SOURCE : l'ordinateur, chaque
+  // serveur, chaque telephone — les chemins n'ont aucun sens de l'un a l'autre.
+  // Charge a la demande depuis localStorage (cf. pinStoreKey), sauve a chaque
+  // changement.
   type Pin = { label: string; path: string };
-  const [pins, setPins] = useState<{ local: Pin[]; remote: Pin[] }>(() => ({
-    local: JSON.parse(localStorage.getItem("copiteur.pins.local") || "[]"),
-    remote: [],
-  }));
-  // Cle du serveur distant courant (= son label `user@host`), ou null tant
-  // qu'aucun serveur n'est connecte. Sert de suffixe a la cle localStorage des
-  // pins distants.
-  const [remoteKey, setRemoteKey] = useState<string | null>(null);
-  const remotePinsKey = (label: string) => `copiteur.pins.remote::${label}`;
+  const [pins, setPins] = useState<Record<string, Pin[]>>(() => ({ local: readPins("local") }));
+  const pinsFor = (key: string): Pin[] => pins[key] ?? readPins(key);
+  const updatePins = useCallback((key: string, fn: (cur: Pin[]) => Pin[]) => {
+    setPins((p) => {
+      const cur = p[key] ?? readPins(key);
+      const next = fn(cur);
+      if (next === cur) return p;
+      localStorage.setItem(pinStoreKey(key), JSON.stringify(next));
+      return { ...p, [key]: next };
+    });
+  }, []);
 
   // Conflit de copie (fichier deja present a destination).
   const [conflict, setConflict] = useState<{ name: string } | null>(null);
@@ -210,9 +332,10 @@ export default function App() {
     if (Number.isFinite(minId))
       batchAnchorRef.current = Math.min(batchAnchorRef.current, minId - 1);
   };
-  const panes = useRef<Record<Side, PaneBus>>({
-    local: { side: "local", dir: "/", selected: [], refresh: () => {}, clearSelection: () => {}, selectAll: () => {} },
-    remote: { side: "remote", dir: "/", selected: [], refresh: () => {}, clearSelection: () => {}, selectAll: () => {} },
+  const noop = () => {};
+  const panes = useRef<Record<PaneId, PaneBus>>({
+    left: { pane: "left", loc: { kind: "local", remote: "", key: "local", label: "" }, dir: "/", selected: [], refresh: noop, clearSelection: noop, selectAll: noop },
+    right: { pane: "right", loc: { kind: "local", remote: "", key: "local", label: "" }, dir: "/", selected: [], refresh: noop, clearSelection: noop, selectAll: noop },
   });
   const clipboard = useRef<Payload | null>(null);
   const busyRef = useRef(false);
@@ -221,10 +344,9 @@ export default function App() {
   // active a la fois. Sans ca, cliquer dans le volet distant en gardant une
   // selection dans le volet local laissait les deux selections vivantes.
   // Le garde `active !== side` evite de vider l'autre a chaque clic interne.
-  const focusPane = (side: Side) => {
-    if (active !== side)
-      panes.current[side === "local" ? "remote" : "local"].clearSelection();
-    setActive(side);
+  const focusPane = (pane: PaneId) => {
+    if (active !== pane) panes.current[otherPane(pane)].clearSelection();
+    setActive(pane);
   };
   busyRef.current = xfers.some((x) => !isFinal(x));
   // Idem pour les dossiers en cours d'eclatement (pas encore des transferts).
@@ -283,30 +405,24 @@ export default function App() {
   editsRef.current = edits;
   const activeRef = useRef(active);
   activeRef.current = active;
-  // Ce serveur s'est revele incapable de calculer des empreintes : on a bascule
-  // la connexion en `disable_hashcheck`. Un seul basculement par connexion.
-  const noHashRef = useRef(false);
-  // Plafond de flux en TELECHARGEMENT pour la connexion courante (null = le
-  // reglage). Abaisse quand un telechargement multi-flux casse (lien qui ne
-  // suit pas : VPN, Tailscale, 4G, NAS au processeur modeste), pour que les
-  // fichiers suivants partent directement avec moins de flux au lieu
-  // d'echouer chacun a leur tour. Remis a zero a chaque connexion.
-  const downCapRef = useRef<number | null>(null);
-  // Passe a vrai quand la connexion sans empreinte est REELLEMENT en place
-  // (config reecrite + cache vide). C'est le signal qui autorise la relance.
-  const [noHashReady, setNoHashReady] = useState(false);
-  // Derniers identifiants utilises : necessaires pour REecrire la config du
-  // remote sans redemander le mot de passe.
-  const lastConnRef = useRef<Server | null>(null);
-  // Jeton de tentative de connexion. Chaque clic sur « Se connecter » l'incremente
-  // et INVALIDE la tentative precedente : si un serveur ne repond pas (dial SFTP
-  // qui pend), recliquer relance immediatement et seule la DERNIERE tentative a le
-  // droit d'ecrire l'etat (connecte / erreur). Sans ca, l'ancienne sonde en vol
-  // finissait par ecraser le resultat de la nouvelle.
-  const connSeq = useRef(0);
-  // Vrai pendant qu'une tentative de connexion est en cours (retour visuel + on
-  // laisse le bouton cliquable pour pouvoir superseder une tentative bloquee).
-  const [connecting, setConnecting] = useState(false);
+  // Serveurs (par remote, « srv2 ») qui se sont reveles incapables de calculer
+  // des empreintes : leur connexion a ete basculee en `disable_hashcheck`. Un
+  // seul basculement par connexion.
+  const noHashRef = useRef<Set<string>>(new Set());
+  // Plafond de flux en TELECHARGEMENT par serveur source (absent = le reglage).
+  // Abaisse quand un telechargement multi-flux casse (lien qui ne suit pas : VPN,
+  // Tailscale, 4G, NAS au processeur modeste), pour que les fichiers suivants
+  // partent directement avec moins de flux au lieu d'echouer chacun a leur
+  // tour. Remis a zero a chaque connexion de ce serveur.
+  const downCapRef = useRef<Record<string, number>>({});
+  // Serveurs dont la connexion sans empreinte est REELLEMENT en place (config
+  // reecrite + cache vide). C'est le signal qui autorise la relance.
+  const [noHashReady, setNoHashReady] = useState<string[]>([]);
+  // Jeton de tentative de connexion PAR SERVEUR. Chaque tentative l'incremente et
+  // INVALIDE la precedente : si un serveur ne repond pas (dial SFTP qui pend),
+  // relancer repart immediatement et seule la DERNIERE tentative a le droit
+  // d'ecrire l'etat (connecte / erreur).
+  const connSeq = useRef<Record<string, number>>({});
 
   // Couleur d'accent systeme : le backend la lit (macOS ET Windows — le mot-cle
   // CSS `AccentColor` ne reflete pas le vrai accent dans WebView2). Relue au
@@ -492,6 +608,10 @@ export default function App() {
     const unlisten = listen("copiteur://rclone-relance", () => {
       logEvent("warn", "app", t("app.log.rcloneRestarted"));
       setDaemonEpoch((n) => n + 1);
+      // Sa config (les remotes des serveurs) vivait en memoire et a disparu
+      // avec lui : on repose celle de chaque serveur connecte. (Les telephones,
+      // eux, sont reposes par le backend, cf. mtp.rs.)
+      reconfigureRef.current();
     });
     return () => {
       unlisten.then((off) => off());
@@ -520,96 +640,144 @@ export default function App() {
         const prev = quickRoots.current;
         quickRoots.current = quick;
         if (!localStorage.getItem("copiteur.pins.seeded")) {
-          setPins((p) => ({ ...p, local: quick }));
+          updatePins("local", () => quick);
           localStorage.setItem("copiteur.pins.seeded", "1");
           return;
         }
         if (!prev) return;
-        setPins((p) => ({
-          ...p,
-          local: p.local.map((pin) => {
+        updatePins("local", (cur) => {
+          let changed = false;
+          const next = cur.map((pin) => {
             const old = prev.find((r) => r.path === pin.path);
             const now = quick.find((r) => r.path === pin.path);
-            return old && now && pin.label === old.label
-              ? { ...pin, label: now.label }
-              : pin;
-          }),
-        }));
+            if (old && now && pin.label === old.label && now.label !== pin.label) {
+              changed = true;
+              return { ...pin, label: now.label };
+            }
+            return pin;
+          });
+          return changed ? next : cur;
+        });
       })
       .catch(() => {});
-  }, [lang]);
-  useEffect(() => {
-    localStorage.setItem("copiteur.pins.local", JSON.stringify(pins.local));
-  }, [pins.local]);
-  // Sauve les pins distants sous la cle DU SERVEUR COURANT. Tant qu'aucun
-  // serveur n'est connecte, on n'ecrit rien (pas de cle « orpheline »).
-  useEffect(() => {
-    if (!remoteKey) return;
-    localStorage.setItem(remotePinsKey(remoteKey), JSON.stringify(pins.remote));
-  }, [pins.remote, remoteKey]);
+  }, [lang, updatePins]);
 
-  const pinFolder = useCallback((side: Side, path: string, label: string) => {
-    setPins((p) =>
-      p[side].some((x) => x.path === path)
-        ? p
-        : { ...p, [side]: [...p[side], { label, path }] },
-    );
-  }, []);
-  const unpinFolder = useCallback((side: Side, path: string) => {
-    setPins((p) => ({ ...p, [side]: p[side].filter((x) => x.path !== path) }));
-  }, []);
+  // `key` = identite de la source (cf. srcKey) : chaque source a ses epingles.
+  const pinFolder = useCallback(
+    (key: string, path: string, label: string) =>
+      updatePins(key, (cur) =>
+        cur.some((x) => x.path === path) ? cur : [...cur, { label, path }],
+      ),
+    [updatePins],
+  );
+  const unpinFolder = useCallback(
+    (key: string, path: string) =>
+      updatePins(key, (cur) =>
+        cur.some((x) => x.path === path) ? cur.filter((x) => x.path !== path) : cur,
+      ),
+    [updatePins],
+  );
   // Reordonne l'acces rapide : insere `from` avant/apres `to` (index recalcule
   // APRES retrait pour rester coherent quand from est avant to).
   const reorderPins = useCallback(
-    (side: Side, from: string, to: string, after: boolean) => {
-      setPins((p) => {
-        const arr = [...p[side]];
+    (key: string, from: string, to: string, after: boolean) =>
+      updatePins(key, (cur) => {
+        const arr = [...cur];
         const fi = arr.findIndex((x) => x.path === from);
-        if (fi < 0) return p;
+        if (fi < 0) return cur;
         const [moved] = arr.splice(fi, 1);
         const ti = arr.findIndex((x) => x.path === to);
-        if (ti < 0) return p;
+        if (ti < 0) return cur;
         arr.splice(ti + (after ? 1 : 0), 0, moved);
-        return { ...p, [side]: arr };
-      });
-    },
-    [],
+        return arr;
+      }),
+    [updatePins],
   );
 
-  // Se connecte avec les champs courants (ou ceux d'un serveur memorise) et
-  // memorise la connexion pour ne pas la retaper la prochaine fois.
-  const connect = async (s?: Server) => {
-    const h = s ? s.host : host;
-    const u = s ? s.user : user;
-    const p = s ? s.pass : pass;
-    const pt = s ? s.port : port;
-    // Libelle du serveur memorise. Serveur RECONNECTE : on garde SON nom (sinon
-    // on recreerait un doublon sous « user@host » et on perdrait le nom donne).
-    // Connexion tapee a la main : le nom facultatif s'il est rempli, sinon le
-    // « user@host » historique.
-    const label = s ? s.label : name.trim() || `${u}@${h}`;
-    // Ce clic PREND LA MAIN : toute tentative precedente encore en vol devient
-    // caduque et n'ecrira plus rien.
-    const seq = ++connSeq.current;
-    const current = () => seq === connSeq.current;
-    setConnErr("");
-    setConnecting(true);
-    // Nouveau serveur : on refait confiance a ses empreintes. Si elles sont
-    // cassees, le premier echec le revelera et on rebasculera tout seul.
-    noHashRef.current = false;
-    setNoHashReady(false);
-    downCapRef.current = null;
-    lastConnRef.current = { label, host: h, user: u, pass: p, port: pt };
+  // ---- Sources des panneaux -------------------------------------------------
+  // Met une source dans un panneau (sans rien toucher si c'est deja elle).
+  const setPaneSrc = useCallback((pane: PaneId, src: PaneSrc) => {
+    setSrcs((cur) => (srcKey(cur[pane]) === srcKey(src) ? cur : { ...cur, [pane]: src }));
+  }, []);
+
+  // Repose dans rclone le remote de chaque serveur connecte (apres une relance
+  // du daemon, dont la config vit en memoire). Sans la sonde ni la cle d'hote :
+  // ces serveurs ont deja ete verifies a la connexion.
+  const reconfigureRef = useRef<() => void>(() => {});
+  reconfigureRef.current = () => {
+    for (const c of Object.values(connsRef.current)) {
+      if (c.state !== "ok") continue;
+      const name = c.remote.replace(/:$/, "");
+      rc("config/create", {
+        name,
+        type: "sftp",
+        parameters: {
+          host: c.server.host,
+          user: c.server.user,
+          pass: c.server.pass,
+          port: c.server.port || "22",
+          concurrency: String(settingsRef.current.sftpConcurrency),
+          ...(noHashRef.current.has(name) ? { disable_hashcheck: "true" } : {}),
+        },
+        opt: { obscure: true },
+      }).catch(() => {});
+    }
+  };
+
+  // ---- Connexion aux serveurs ----------------------------------------------
+  // Connecte un serveur (memorise, ou saisi dans la feuille) et l'affiche dans
+  // `pane`. Deja connecte : on l'affiche simplement (les deux panneaux peuvent
+  // montrer le meme serveur). `force` refait la connexion (identifiants
+  // modifies, nouvelle tentative apres un echec).
+  const connectServer = async (s: Server, pane: PaneId, force = false) => {
+    const label = s.label;
+    setPaneSrc(pane, { kind: "server", label });
+    setActive(pane);
+    const existing = connsRef.current[label];
+    if (!force && existing && (existing.state === "ok" || existing.state === "connecting")) return;
+    const remote = remoteFor(label);
+    const fsName = remote + ":";
+    // Cette tentative PREND LA MAIN sur ce serveur : toute tentative precedente
+    // encore en vol devient caduque et n'ecrira plus rien.
+    const seq = (connSeq.current[label] ?? 0) + 1;
+    connSeq.current[label] = seq;
+    const current = () => connSeq.current[label] === seq;
+    const h = s.host;
+    const u = s.user;
+    const p = s.pass;
+    const pt = s.port || "22";
+    // Nouvelle connexion : on refait confiance a ses empreintes et a son debit.
+    // Si elles sont cassees, le premier echec le revelera et on rebasculera.
+    noHashRef.current.delete(remote);
+    setNoHashReady((r) => r.filter((x) => x !== remote));
+    delete downCapRef.current[remote];
+    const memStart = s.startDir ?? servers.find((x) => x.label === label)?.startDir ?? "";
+    setConns((c) => ({
+      ...c,
+      [label]: {
+        label,
+        remote: fsName,
+        state: "connecting",
+        err: "",
+        startAt: c[label]?.startAt ?? "/",
+        epoch: c[label]?.epoch ?? 0,
+        server: { label, host: h, user: u, pass: p, port: pt, startDir: memStart },
+      },
+    }));
+    const fail = (msg: string) => {
+      if (!current()) return;
+      setConns((c) => (c[label] ? { ...c, [label]: { ...c[label], state: "error", err: msg } } : c));
+    };
     try {
       // Identite du serveur AVANT tout envoi du mot de passe : sa cle doit etre
       // celle deja acceptee, sinon l'utilisateur tranche (cf. hostkeys.rs).
       const hk = await invoke<HostKeyStatus>("host_key_check", { host: h, port: pt });
       if (!current()) return;
       if (hk.status !== "known") {
-        const ok = await askHostKey({ ...hk, host: h, port: pt || "22" });
+        const ok = await askHostKey({ ...hk, host: h, port: pt });
         if (!current()) return;
         if (!ok) {
-          setConnErr(t("app.conn.hostKeyRefused"));
+          fail(t("app.conn.hostKeyRefused"));
           logEvent(
             "warn",
             "connexion",
@@ -633,34 +801,31 @@ export default function App() {
         );
       }
       await rc("config/create", {
-        name: "serveur",
+        name: remote,
         type: "sftp",
         parameters: {
           host: h,
           user: u,
           pass: p,
-          port: pt || "22",
-          concurrency: String(settings.sftpConcurrency),
+          port: pt,
+          concurrency: String(settingsRef.current.sftpConcurrency),
         },
         opt: { obscure: true },
       });
       if (!current()) return;
-      // Change de serveur : rclone garde en cache la connexion (Fs) sous le nom
-      // « serveur: ». Sans purge, un nouveau serveur reutiliserait l'ancienne
-      // connexion. On vide le cache pour se deconnecter vraiment de l'ancien.
+      // rclone garde en cache la connexion (Fs) sous ce nom : apres une
+      // modification des identifiants, sans purge, il reutiliserait l'ancienne.
+      // (Les copies en cours gardent leur propre connexion : rien n'est coupe.)
       await rc("fs/cache/clear").catch(() => {});
       if (!current()) return;
-      // SONDE BORNEE avant de basculer l'UI en « connecte ». Sans ca, un serveur
+      // SONDE BORNEE avant de declarer la connexion etablie. Sans ca, un serveur
       // injoignable laissait le panneau tourner en boucle : le dial SFTP peut
       // pendre jusqu'a ConnectTimeout (30s en config globale) x 6 relistages du
-      // panneau ~= 3 min, sans qu'on puisse relancer. Ici on teste la connexion
-      // AVANT, avec un `_config` court (ConnectTimeout borne le dial — verifie) et
-      // sans relance (LowLevelRetries=1). Un `_config` par appel est sans danger
-      // sur `operations/list` (pas de fichier « .partial » a renommer, contrairement
-      // a copyfile). On double d'un garde-fou JS au cas ou rclone ignorerait la
-      // borne.
+      // panneau ~= 3 min. Ici on teste AVANT, avec un `_config` court
+      // (ConnectTimeout borne le dial) et sans relance (LowLevelRetries=1),
+      // double d'un garde-fou JS au cas ou rclone ignorerait la borne.
       const probe = rc("operations/list", {
-        fs: REMOTE,
+        fs: fsName,
         remote: "",
         opt: { noModTime: true },
         _config: { ConnectTimeout: "12s", Timeout: "12s", LowLevelRetries: 1 },
@@ -670,10 +835,7 @@ export default function App() {
       probe.catch(() => {});
       let timer: ReturnType<typeof setTimeout>;
       const timeout = new Promise<never>((_, rej) => {
-        timer = setTimeout(
-          () => rej(new Error(t("app.conn.timeout"))),
-          14000,
-        );
+        timer = setTimeout(() => rej(new Error(t("app.conn.timeout"))), 14000);
       });
       try {
         await Promise.race([probe, timeout]);
@@ -683,143 +845,268 @@ export default function App() {
       if (!current()) return;
       // Dossier d'ouverture : dossier de depart memorise (si lisible) -> racine
       // de partages detectee -> "/". Resolu MAINTENANT (connexion live) et pose
-      // AVANT setConnected pour que le panneau s'ouvre directement au bon endroit.
-      const memStart =
-        s?.startDir ?? servers.find((x) => x.label === label)?.startDir ?? "";
-      const startAt = await resolveRemoteStart(memStart);
+      // AVANT de declarer la connexion etablie, pour que le panneau s'ouvre
+      // directement au bon endroit.
+      const startAt = await resolveRemoteStart(fsName, memStart);
       if (!current()) return;
-      setRemoteStart(startAt);
-      setConnected(true);
-      setConnKey((k) => k + 1);
-      setActive("remote");
-      logEvent("info", "connexion", t("app.log.connected", { target: `${u}@${h}:${pt || "22"}` }));
+      setConns((c) =>
+        c[label]
+          ? { ...c, [label]: { ...c[label], state: "ok", err: "", startAt, epoch: c[label].epoch + 1 } }
+          : c,
+      );
+      logEvent("info", "connexion", t("app.log.connected", { target: `${u}@${h}:${pt}` }));
       // Enregistre / met a jour le serveur (label = nom donne, ou user@host).
-      // Charge l'acces rapide PROPRE a ce serveur (cloisonne par label). Sans
-      // ca, on afficherait les dossiers epingles d'un autre serveur, qui n'y
-      // existent pas -> « directory not found » au clic.
-      setRemoteKey(label);
-      setPins((p) => ({
-        ...p,
-        remote: JSON.parse(localStorage.getItem(remotePinsKey(label)) || "[]"),
-      }));
       const saved = await invoke<Server[]>("save_server", {
-        server: {
-          label,
-          host: h,
-          user: u,
-          pass: p,
-          port: pt || "22",
-          startDir: memStart,
-        },
+        server: { label, host: h, user: u, pass: p, port: pt, startDir: memStart },
       });
-      if (!current()) return;
       setServers(saved);
     } catch (e) {
       // Une tentative plus recente a pris la main : on se tait, c'est elle qui
       // decide desormais (ne pas ecraser son resultat avec notre echec).
       if (!current()) return;
-      setConnErr(humanConnError(String(e)));
-      setConnected(false);
+      fail(humanConnError(String(e)));
       logEvent("error", "connexion", t("app.log.connFailed", { target: `${u}@${h}`, err: String(e) }));
-    } finally {
-      if (current()) setConnecting(false);
     }
   };
 
-  const pickServer = (s: Server) => {
-    setHost(s.host);
-    setUser(s.user);
-    setPass(s.pass);
-    setPort(s.port);
-    // Reflete le nom du serveur dans le champ « Nom » s'il est PERSONNALISE (pas
-    // le « user@host » par defaut) : ainsi, recliquer « Se connecter » apres
-    // avoir choisi ce serveur conserve son nom au lieu de recreer un doublon.
-    setName(s.label === `${s.user}@${s.host}` ? "" : s.label);
-    connect(s);
+  // Ouvre un serveur memorise dans un panneau (selecteur de source). Une
+  // connexion en echec est retentee.
+  const pickServer = (s: Server, pane: PaneId) => {
+    const c = connsRef.current[s.label];
+    connectServer(s, pane, !!c && c.state === "error");
   };
   const deleteServer = (label: string) => {
     invoke<Server[]>("delete_server", { label }).then(setServers).catch(() => {});
   };
-  // Definit (ou efface, avec "") le dossier de depart du serveur COURANT. Persiste
-  // sur le serveur memorise ; prend effet a la prochaine connexion.
-  const setStartDir = (path: string) => {
-    if (!remoteKey) return;
-    const cur = servers.find((x) => x.label === remoteKey);
+  // Definit (ou efface, avec "") le dossier de depart d'un serveur. Persiste sur
+  // le serveur memorise ; prend effet a la prochaine connexion.
+  const setStartDir = (label: string, path: string) => {
+    const cur = servers.find((x) => x.label === label);
     if (!cur) return;
     invoke<Server[]>("save_server", { server: { ...cur, startDir: path } })
       .then(setServers)
       .catch(() => {});
+    setConns((c) =>
+      c[label] ? { ...c, [label]: { ...c[label], server: { ...c[label].server, startDir: path } } } : c,
+    );
   };
-  // Renomme un serveur memorise. On migre au passage la cle localStorage de ses
-  // dossiers epingles distants (cloisonnes par label) et, si on est justement
-  // connecte a lui, on met a jour la cle courante pour ne pas perdre ses pins.
+  // Une copie (en file ou en cours) passe-t-elle par ce remote ?
+  const remoteBusy = (remote: string) =>
+    xfersRef.current.some(
+      (x) => !isFinal(x) && (fsRemote(x.srcFs) === remote || fsRemote(x.dstFs) === remote),
+    );
+  // Renomme un serveur memorise. On migre au passage ses dossiers epingles
+  // (cloisonnes par nom), sa connexion et les panneaux qui l'affichent.
   const renameServer = (oldLabel: string, newLabel: string) => {
     invoke<Server[]>("rename_server", { oldLabel, newLabel })
       .then((saved) => {
         setServers(saved);
         // La migration n'a lieu que si le backend a bien applique le renommage
         // (nom non vide et non deja pris) — sinon `saved` garde l'ancien label.
-        if (saved.some((s) => s.label === newLabel)) {
-          const old = localStorage.getItem(remotePinsKey(oldLabel));
-          if (old !== null) {
-            localStorage.setItem(remotePinsKey(newLabel), old);
-            localStorage.removeItem(remotePinsKey(oldLabel));
-          }
-          setRemoteKey((k) => (k === oldLabel ? newLabel : k));
-          setName((n) => (n === oldLabel ? newLabel : n));
+        if (!saved.some((s) => s.label === newLabel)) return;
+        const old = localStorage.getItem(pinStoreKey(`server:${oldLabel}`));
+        if (old !== null) {
+          localStorage.setItem(pinStoreKey(`server:${newLabel}`), old);
+          localStorage.removeItem(pinStoreKey(`server:${oldLabel}`));
         }
+        setPins((p) => {
+          const n = { ...p };
+          delete n[`server:${oldLabel}`];
+          delete n[`server:${newLabel}`];
+          return n;
+        });
+        const rid = remoteIds.current.get(oldLabel);
+        if (rid) {
+          remoteIds.current.delete(oldLabel);
+          remoteIds.current.set(newLabel, rid);
+        }
+        connSeq.current[newLabel] = connSeq.current[oldLabel] ?? 0;
+        setConns((c) => {
+          if (!c[oldLabel]) return c;
+          const n = { ...c };
+          n[newLabel] = {
+            ...c[oldLabel],
+            label: newLabel,
+            server: { ...c[oldLabel].server, label: newLabel },
+          };
+          delete n[oldLabel];
+          return n;
+        });
+        setSrcs((cur) => {
+          let changed = false;
+          const n = { ...cur };
+          for (const k of PANES) {
+            const v = cur[k];
+            if (v.kind === "server" && v.label === oldLabel) {
+              n[k] = { kind: "server", label: newLabel };
+              changed = true;
+            }
+          }
+          return changed ? n : cur;
+        });
+        setName((n) => (n === oldLabel ? newLabel : n));
       })
       .catch(() => {});
   };
 
-  // Se deconnecter (menu serveur). Refuse tant que des transferts tournent :
-  // ils ont besoin de la connexion.
-  const disconnect = () => {
-    if (busyRef.current) {
-      setConnErr(t("chrome.conn.busy"));
-      return;
+  // Se deconnecter d'un serveur (menu de son panneau). Refuse tant qu'une copie
+  // passe par lui. Les panneaux qui l'affichaient reviennent a « aucune source ».
+  const disconnectServer = (label: string): boolean => {
+    const c = connsRef.current[label];
+    if (c && (remoteBusy(c.remote) || preparingRef.current > 0)) {
+      setNotice(t("chrome.conn.busy"));
+      return false;
     }
-    connSeq.current++;
-    setConnecting(false);
-    setConnected(false);
-    setRemoteKey(null);
-    setPins((p) => ({ ...p, remote: [] }));
-    setConnErr("");
-    rc("fs/cache/clear").catch(() => {});
+    connSeq.current[label] = (connSeq.current[label] ?? 0) + 1;
+    setConns((cur) => {
+      if (!cur[label]) return cur;
+      const n = { ...cur };
+      delete n[label];
+      return n;
+    });
+    setSrcs((cur) => {
+      let changed = false;
+      const n = { ...cur };
+      for (const k of PANES) {
+        const v = cur[k];
+        if (v.kind === "server" && v.label === label) {
+          n[k] = { kind: "none" };
+          changed = true;
+        }
+      }
+      return changed ? n : cur;
+    });
+    if (c) {
+      rc("fs/cache/clear").catch(() => {});
+      logEvent("info", "connexion", t("app.log.disconnected", { name: label }));
+    }
+    return true;
   };
-  // Ouvre la feuille « Nouvelle connexion » sur des champs vides.
-  const newConnection = () => {
+  // Oublier un serveur : il est d'abord deconnecte (refuse pendant une copie).
+  const forgetServer = (label: string) => {
+    if (!disconnectServer(label)) return;
+    deleteServer(label);
+  };
+
+  // Feuille « Nouvelle connexion » sur des champs vides, pour un panneau.
+  const newConnection = (pane: PaneId) => {
     setName("");
     setHost("");
     setUser("");
     setPass("");
     setPort("");
-    setConnErr("");
+    setSheetPane(pane);
+    setSheetLabel(null);
     setConnectSheet("new");
   };
-  // Rouvre la feuille sur le serveur courant (mot de passe change, autre port…).
-  // Garder le meme nom met a jour le serveur memorise au lieu d'en creer un autre.
-  const editConnection = () => {
-    const s = servers.find((x) => x.label === remoteKey);
+  // Rouvre la feuille sur un serveur (mot de passe change, autre port…). Garder
+  // le meme nom met a jour le serveur memorise au lieu d'en creer un autre.
+  const editConnection = (label: string, pane: PaneId) => {
+    const s = servers.find((x) => x.label === label);
     if (!s) return;
     setHost(s.host);
     setUser(s.user);
     setPass(s.pass);
     setPort(s.port);
     setName(s.label);
-    setConnErr("");
+    setSheetPane(pane);
+    setSheetLabel(null);
     setConnectSheet("edit");
   };
+  // « Se connecter » dans la feuille : nom facultatif (sinon « user@host »).
+  const connectFromSheet = () => {
+    const label = name.trim() || `${user.trim()}@${host.trim()}`;
+    setSheetLabel(label);
+    connectServer(
+      {
+        label,
+        host: host.trim(),
+        user: user.trim(),
+        pass,
+        port: port.trim() || "22",
+        startDir: servers.find((x) => x.label === label)?.startDir ?? "",
+      },
+      sheetPane,
+      true,
+    );
+  };
+  const sheetConn = sheetLabel ? conns[sheetLabel] : undefined;
   // La feuille de connexion se referme d'elle-meme une fois connecte.
-  const sheetAttempt = useRef(false);
   useEffect(() => {
-    if (!connectSheet) {
-      sheetAttempt.current = false;
-      return;
+    if (connectSheet && sheetConn?.state === "ok") {
+      setConnectSheet(null);
+      setSheetLabel(null);
     }
-    if (connecting) sheetAttempt.current = true;
-    else if (sheetAttempt.current && connected && !connErr) setConnectSheet(null);
-  }, [connectSheet, connecting, connected, connErr]);
+  }, [connectSheet, sheetConn?.state]);
+
+  // ---- Telephones Android (macOS) -------------------------------------------
+  // Le backend sait-il parler aux telephones ? (macOS : oui ; Windows : non —
+  // l'Explorateur les gere deja, et le moteur MTP n'y est pas embarque.)
+  useEffect(() => {
+    invoke<boolean>("phones_supported")
+      .then(setPhonesSupported)
+      .catch(() => setPhonesSupported(false));
+  }, []);
+  const phonesRef = useRef(phones);
+  phonesRef.current = phones;
+  // Liste des telephones branches, relue toutes les 2 s (requete locale, sans
+  // toucher a l'USB : le moteur surveille les branchements de son cote).
+  useEffect(() => {
+    if (!phonesSupported) return;
+    let alive = true;
+    let last = "";
+    const poll = () =>
+      invoke<Phone[]>("phones_list")
+        .then((list) => {
+          const json = JSON.stringify(list);
+          if (!alive || json === last) return;
+          last = json;
+          setPhones(list);
+        })
+        .catch(() => {});
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [phonesSupported]);
+  // Nom des telephones vus pendant la session : un panneau garde le nom d'un
+  // telephone debranche (« Pixel 9 Pro — débranché »).
+  const phoneNames = useRef<Map<string, string>>(new Map());
+  for (const ph of phones) phoneNames.current.set(ph.id, ph.name);
+  // Branchement / debranchement : journal + bandeau « Ouvrir à gauche / droite ».
+  useEffect(() => {
+    const ids = new Set(phones.map((p) => p.id));
+    for (const id of [...announcedPhones.current]) {
+      if (ids.has(id)) continue;
+      announcedPhones.current.delete(id);
+      logEvent("info", "operation", t("app.log.phoneUnplugged", { name: phoneNames.current.get(id) ?? id }));
+    }
+    for (const ph of phones) {
+      if (announcedPhones.current.has(ph.id)) continue;
+      announcedPhones.current.add(ph.id);
+      logEvent("info", "operation", t("app.log.phonePlugged", { name: ph.name }));
+      const shown = PANES.some((k) => {
+        const v = srcs[k];
+        return v.kind === "phone" && v.id === ph.id;
+      });
+      if (!shown) setPhoneBanner(ph.id);
+    }
+    setPhoneBanner((b) => (b && !ids.has(b) ? null : b));
+    // `srcs` n'est lu qu'au branchement (le bandeau ne s'annonce pas pour un
+    // telephone deja affiche) : inutile de relancer l'effet a chaque changement.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phones]);
+  const openPhone = (id: string, pane: PaneId) => {
+    const ph = phonesRef.current.find((p) => p.id === id);
+    setPaneSrc(pane, { kind: "phone", id, name: ph?.name ?? phoneNames.current.get(id) ?? "" });
+    setActive(pane);
+    setPhoneBanner((b) => (b === id ? null : b));
+  };
+  const retryPhone = (id: string) => {
+    invoke("phone_retry", { id }).catch(() => {});
+  };
 
   // Demande a l'utilisateur quoi faire pour un fichier deja present.
   const askConflict = (name: string) =>
@@ -844,18 +1131,50 @@ export default function App() {
   // d'en face. Sinon on copie dans le dossier couramment affiche.
   const startTransfers = useCallback(async (
     src: Payload,
-    destSide: Side,
+    destPane: PaneId,
     intoDir?: string,
   ) => {
-    if (src.side === destSide) return;
-    const destDir = intoDir ?? panes.current[destSide].dir;
+    const dest = panes.current[destPane];
+    // Panneau sans source exploitable (rien de choisi, telephone debranche…).
+    if (!paneEnabled.current[destPane]) return;
+    const destLoc = dest.loc;
+    const destDir = intoDir ?? dest.dir;
+
+    // MEME source des deux cotes (le meme serveur, le disque local dans les deux
+    // panneaux…) : copier un dossier sur lui-meme ou dans son propre
+    // sous-dossier ecraserait (ecriture directe) ou boucle sans fin. On refuse.
+    const sameSource = src.loc.kind === destLoc.kind && src.loc.remote === destLoc.remote;
+    // Disque local de macOS et Windows : insensible a la casse.
+    const fold = destLoc.kind === "local" && !isLinux;
+    const norm = (d: string) => {
+      const x = d.replace(/\/+$/, "") || "/";
+      return fold ? x.toLowerCase() : x;
+    };
+    let items = src.items;
+    if (sameSource) {
+      if (norm(src.dir) === norm(destDir)) {
+        setNotice(t("app.notice.sameFolder"));
+        return;
+      }
+      const inside = (it: (typeof items)[number]) => {
+        if (!it.IsDir) return false;
+        const own = norm(joinDir(src.dir, it.Name));
+        const d = norm(destDir);
+        return d === own || d.startsWith(own + "/");
+      };
+      if (items.some(inside)) {
+        setNotice(t("app.notice.intoItself"));
+        items = items.filter((it) => !inside(it));
+        if (!items.length) return;
+      }
+    }
 
     // Ce qui existe deja a destination (pour proposer Remplacer / Ignorer).
     let existing = new Set<string>();
     try {
       const r = await rc<{ list: { Name: string }[] }>(
         "operations/list",
-        listArgs(destSide, destDir),
+        listArgs(destLoc.remote, destDir),
       );
       existing = new Set((r.list ?? []).map((e) => e.Name));
     } catch {
@@ -865,7 +1184,7 @@ export default function App() {
     // Choix memorise pour CETTE copie uniquement (case a cocher).
     let batch: "replace" | "ignore" | null = null;
     const keep = [];
-    for (const item of src.items) {
+    for (const item of items) {
       if (existing.has(item.Name)) {
         let action = batch;
         if (!action) {
@@ -883,19 +1202,22 @@ export default function App() {
       "info",
       "transfert",
       tn("app.log.queued", keep.length, {
-        dest: t(destSide === "local" ? "common.yourPc" : "common.server"),
+        dest: destLoc.label,
         dir: destDir,
       }),
     );
+    // Trajet affiche sur chaque ligne : « Pixel 9 Pro → NAS · RUSHS ».
+    const destFolder = destDir.replace(/\/+$/, "").split("/").pop() || "";
+    const dstLabel = destFolder ? `${destLoc.label} · ${destFolder}` : destLoc.label;
     setTab("queue");
     setPreparing((n) => n + keep.length);
     for (const item of keep) {
       try {
         const { plans, mkdirs } = await planItem(
-          src.side,
+          src.loc.remote,
           src.dir,
           item,
-          destSide,
+          destLoc.remote,
           destDir,
         );
         // Dossiers vides : aucune copie de fichier ne les creerait.
@@ -914,6 +1236,8 @@ export default function App() {
               srcRemote: p.src.remote,
               dstFs: p.dst.fs,
               dstRemote: p.dst.remote,
+              srcLabel: src.loc.label,
+              dstLabel,
               size: p.size,
               bytes: 0,
               speed: 0,
@@ -939,6 +1263,8 @@ export default function App() {
             srcRemote: "",
             dstFs: "",
             dstRemote: "",
+            srcLabel: src.loc.label,
+            dstLabel,
             size: 0,
             bytes: 0,
             speed: 0,
@@ -965,11 +1291,11 @@ export default function App() {
   // ne fait que consulter, rien ne se passe. Ca supprime le piege « j'ouvre, je
   // modifie, j'enregistre, et mon travail est perdu sans un mot ».
   const openRemote = useCallback(
-    async (fileDir: string, name: string, size: number, modTime: string) => {
+    async (loc: Loc, fileDir: string, name: string, size: number, modTime: string) => {
       try {
         // Sous-dossier frais (chemin local a slashs avant, termine par "/").
         const folder = await invoke<string>("open_cache_dir");
-        const src = fileAddr("remote", fileDir, name);
+        const src = fileAddr(loc.remote, fileDir, name);
         const id = ++jobSeq.current;
         setTab("queue");
         setXfers((prev) => [
@@ -984,6 +1310,8 @@ export default function App() {
             srcRemote: src.remote,
             dstFs: folder,
             dstRemote: name,
+            srcLabel: loc.label,
+            dstLabel: localLabelRef.current,
             size,
             bytes: 0,
             speed: 0,
@@ -1024,6 +1352,7 @@ export default function App() {
         name,
         dstFs: x.srcFs, // le renvoi est le sens inverse du telechargement
         dstRemote: x.srcRemote,
+        dstLabel: x.srcLabel,
         baseRemoteMod: x.editBaseMod ?? "",
         baseRemoteSize: x.size,
       },
@@ -1054,6 +1383,8 @@ export default function App() {
         srcRemote: e.name,
         dstFs: e.dstFs,
         dstRemote: e.dstRemote,
+        srcLabel: localLabelRef.current,
+        dstLabel: e.dstLabel,
         size: 0,
         bytes: 0,
         speed: 0,
@@ -1144,14 +1475,16 @@ export default function App() {
   // bascule, alors qu'ils etaient deja en vol, resteraient en echec pour
   // toujours. C'est exactement ce qu'on observait : 6 fichiers echoues, 3
   // relances seulement.
-  const disableHashCheck = useCallback(async () => {
-    if (noHashRef.current) return;
-    noHashRef.current = true;
-    const s = lastConnRef.current;
+  // `remote` : le serveur en cause (« srv2: »).
+  const disableHashCheck = useCallback(async (remote: string) => {
+    const name = remote.replace(/:$/, "");
+    if (noHashRef.current.has(name)) return;
+    const s = Object.values(connsRef.current).find((c) => c.remote === remote)?.server;
     if (!s) return;
+    noHashRef.current.add(name);
     try {
       await rc("config/create", {
-        name: "serveur",
+        name,
         type: "sftp",
         parameters: {
           host: s.host,
@@ -1172,19 +1505,29 @@ export default function App() {
       );
       // Signale que la NOUVELLE config est reellement en place : relancer avant
       // ce moment referait echouer les transferts a l'identique.
-      setNoHashReady(true);
+      setNoHashReady((r) => (r.includes(name) ? r : [...r, name]));
     } catch {
-      noHashRef.current = false; // la bascule a rate : on repassera au prochain echec
+      noHashRef.current.delete(name); // la bascule a rate : on repassera au prochain echec
     }
   }, []);
+  // Serveurs (« srv2 ») par lesquels passe un transfert : c'est sur eux que
+  // porte la verification d'empreinte.
+  const serverNamesOf = (x: { srcFs: string; dstFs: string }) =>
+    [x.srcFs, x.dstFs]
+      .filter((f) => fsKind(f) === "server")
+      .map((f) => fsRemote(f).replace(/:$/, ""));
 
   // Relance tout echec « empreinte » une fois la connexion reconfiguree. Vaut
   // aussi pour ceux tombes juste apres la bascule. `hashRetried` evite la
   // boucle : on ne redonne qu'UNE chance a chaque transfert.
   useEffect(() => {
-    if (!noHashReady) return;
+    if (!noHashReady.length) return;
     const stuck = xfers.filter(
-      (x) => x.status === "error" && x.hashFault && !x.hashRetried,
+      (x) =>
+        x.status === "error" &&
+        x.hashFault &&
+        !x.hashRetried &&
+        serverNamesOf(x).some((n) => noHashReady.includes(n)),
     );
     if (!stuck.length) return;
     const ids = new Set(stuck.map((x) => x.id));
@@ -1212,7 +1555,12 @@ export default function App() {
     // Empreinte inexploitable cote serveur : ce n'est pas une corruption, c'est
     // une verification impossible. On corrige la connexion au lieu de blamer le
     // fichier. (Le marquage `hashFault` sert a relancer les bons transferts.)
-    if (isBrokenHashSupport(err)) void disableHashCheck();
+    if (isBrokenHashSupport(err)) {
+      const x = xfersRef.current.find((p) => p.id === id);
+      if (x)
+        for (const f of [x.srcFs, x.dstFs])
+          if (fsKind(f) === "server") void disableHashCheck(fsRemote(f));
+    }
     setXfers((prev) =>
       prev.map((p) => {
         if (p.id !== id || p.status === "cancelled") return p;
@@ -1233,10 +1581,13 @@ export default function App() {
         // on finit sur une seule connexion (= comportement d'avant le patch). Une
         // coupure EN COURS (bytes > 0) n'est pas concernee : on garde les flux.
         const curUp = p.upStreams ?? settingsRef.current.uploadStreams;
+        // (Rien a rabaisser quand un telephone est en jeu : un seul flux.)
+        const phone = touchesPhone(p);
         const streamFallback =
           !nameFault &&
           !hashFault &&
-          p.dstFs.startsWith(REMOTE) &&
+          !phone &&
+          isUploadXfer(p) &&
           p.bytes === 0 &&
           curUp > 1;
         const nextUp = streamFallback ? Math.max(1, Math.floor(curUp / 2)) : p.upStreams;
@@ -1251,12 +1602,17 @@ export default function App() {
         const downFallback =
           !nameFault &&
           !hashFault &&
-          !p.dstFs.startsWith(REMOTE) &&
+          !phone &&
+          !isUploadXfer(p) &&
+          fsKind(p.srcFs) === "server" &&
           MULTI_THREAD_ERROR.test(err) &&
           curDown > 1;
         const nextDown = downFallback ? Math.max(1, Math.floor(curDown / 2)) : p.downStreams;
-        if (downFallback && nextDown !== undefined)
-          downCapRef.current = Math.min(downCapRef.current ?? nextDown, nextDown);
+        // Plafond retenu pour la suite des telechargements DE CE serveur.
+        if (downFallback && nextDown !== undefined) {
+          const r = fsRemote(p.srcFs);
+          downCapRef.current[r] = Math.min(downCapRef.current[r] ?? nextDown, nextDown);
+        }
         // Coupure reseau OU alea transitoire de rclone OU fallback de flux => on
         // reprend tout seul (0 = tentatives illimitees). Pas la peine pour une
         // empreinte cassee : `disableHashCheck` vient de relancer proprement.
@@ -1378,13 +1734,19 @@ export default function App() {
         // Flux effectif de l'envoi : le reglage, sauf si un echec precedent l'a
         // deja rabaisse (fallback, cf. failXfer). A 1, rclone ne multi-thread
         // pas -> exactement l'ancien comportement mono-connexion.
-        const isUpload = x.dstFs.startsWith(REMOTE);
+        const isUpload = isUploadXfer(x);
         const upStreams = x.upStreams ?? settingsRef.current.uploadStreams;
         // Telechargement : le reglage, rabaisse par un echec precedent de ce
-        // fichier ou de la connexion (cf. failXfer). Au reglage plein, pas de
+        // fichier ou du serveur source (cf. failXfer). Au reglage plein, pas de
         // `_config` : le bloc global suffit.
         const wanted = settingsRef.current.streams;
-        const downStreams = Math.min(x.downStreams ?? wanted, downCapRef.current ?? wanted);
+        const cap = downCapRef.current[fsRemote(x.srcFs)];
+        const downStreams = Math.min(x.downStreams ?? wanted, cap ?? wanted);
+        // Telephone (MTP) : un seul flux, jamais de decoupe. Et rclone ne peut
+        // pas y comparer les dates (le telephone ne les conserve pas) : a taille
+        // egale il croirait le fichier identique et sauterait la copie, meme
+        // apres un « Remplacer ». `IgnoreTimes` force la copie demandee.
+        const phone = touchesPhone(x);
         const { jobid } = await rc<{ jobid: number }>("operations/copyfile", {
           srcFs: x.srcFs,
           srcRemote: x.srcRemote,
@@ -1392,11 +1754,13 @@ export default function App() {
           dstRemote: x.dstRemote,
           _async: true,
           _group: x.group,
-          ...(isUpload
-            ? { _config: { MultiThreadStreams: upStreams } }
-            : downStreams < wanted
-              ? { _config: { MultiThreadStreams: downStreams } }
-              : {}),
+          ...(phone
+            ? { _config: { MultiThreadStreams: 0, IgnoreTimes: true } }
+            : isUpload
+              ? { _config: { MultiThreadStreams: upStreams } }
+              : downStreams < wanted
+                ? { _config: { MultiThreadStreams: downStreams } }
+                : {}),
         });
         // Annule pendant le demarrage : le job existe deja cote rclone, il faut
         // l'arreter — sinon la copie continuerait dans le dos de l'utilisateur.
@@ -1413,7 +1777,8 @@ export default function App() {
                   status: "running" as const,
                   bytes: 0,
                   // Flux reellement demandes (affiches a cote du debit).
-                  downStreams: isUpload || downStreams >= wanted ? p.downStreams : downStreams,
+                  downStreams:
+                    phone || isUpload || downStreams >= wanted ? p.downStreams : downStreams,
                   error: "",
                   // Le compte a rebours « figé » part du lancement : sans ca,
                   // un transfert qui n'a pas encore recu son premier octet
@@ -1441,13 +1806,24 @@ export default function App() {
     ).length;
     const free = settings.parallel - busy;
     if (free <= 0) return;
-    const next = xfers
-      .filter(
-        (x) =>
-          x.status === "queued" ||
-          (x.status === "retry" && x.nextTry <= now),
-      )
-      .slice(0, free);
+    // Un telephone ne sait copier qu'UN fichier a la fois (MTP) : tant qu'un
+    // transfert l'occupe, les suivants qui le touchent attendent leur tour —
+    // sans bloquer ceux qui ne passent pas par lui.
+    const phonesBusy = new Set<string>();
+    const phonesOf = (x: Xfer) =>
+      [x.srcFs, x.dstFs].filter((f) => fsKind(f) === "phone").map(fsRemote);
+    for (const x of xfers)
+      if (x.status === "running" || x.status === "starting")
+        for (const r of phonesOf(x)) phonesBusy.add(r);
+    const next: Xfer[] = [];
+    for (const x of xfers) {
+      if (next.length >= free) break;
+      if (!(x.status === "queued" || (x.status === "retry" && x.nextTry <= now))) continue;
+      const ph = phonesOf(x);
+      if (ph.some((r) => phonesBusy.has(r))) continue;
+      for (const r of ph) phonesBusy.add(r);
+      next.push(x);
+    }
     if (!next.length) return;
     const ids = new Set(next.map((x) => x.id));
     setXfers((prev) =>
@@ -1648,8 +2024,8 @@ export default function App() {
         }
       }
       if (anyFinished && !cancelled) {
-        panes.current.local.refresh();
-        panes.current.remote.refresh();
+        panes.current.left.refresh();
+        panes.current.right.refresh();
       }
     })();
     return () => {
@@ -1822,16 +2198,19 @@ export default function App() {
   }, []);
 
   // Copier / coller facon FileZilla (Ctrl+C sur le panneau actif, Ctrl+V colle).
-  const doCopy = useCallback((side: Side) => {
-    const p = panes.current[side];
-    if (p.selected.length) {
-      clipboard.current = { side, dir: p.dir, items: p.selected };
+  const doCopy = useCallback((pane: PaneId) => {
+    const p = panes.current[pane];
+    if (p.selected.length && paneEnabled.current[pane]) {
+      clipboard.current = { pane, loc: p.loc, dir: p.dir, items: p.selected };
       setClipboardReady(true);
     }
   }, []);
+  // Coller fonctionne dans les deux panneaux, y compris celui d'ou vient la
+  // copie (copier ailleurs sur le meme serveur, par exemple) : les garde-fous
+  // « meme dossier » sont dans startTransfers.
   const doPaste = useCallback(
-    (side: Side) => {
-      if (clipboard.current) startTransfers(clipboard.current, side);
+    (pane: PaneId) => {
+      if (clipboard.current) startTransfers(clipboard.current, pane);
     },
     [startTransfers],
   );
@@ -1856,8 +2235,8 @@ export default function App() {
   useEffect(() => {
     const deselect = () => {
       setActive(null);
-      panes.current.local.clearSelection();
-      panes.current.remote.clearSelection();
+      panes.current.left.clearSelection();
+      panes.current.right.clearSelection();
       // Le panneau garde sinon le focus clavier : au retour du focus dans la
       // fenetre (fin d'un deplacement par la barre du haut), le navigateur le
       // lui rendait et il se re-selectionnait aussitot.
@@ -1994,7 +2373,6 @@ export default function App() {
     if (activeCount > 0 && prevActive.current === 0 && !userHidXfer.current) setXferOpen(true);
     prevActive.current = activeCount;
   }, [activeCount]);
-  const currentServer = servers.find((x) => x.label === remoteKey);
   // Resume des transferts : en-tete de l'îlot et bouton-pilule de la barre.
   const xferState: XferSummary["state"] =
     queue.length === 0 ? "idle" : reconnecting || allStalled ? "retry" : "run";
@@ -2018,38 +2396,222 @@ export default function App() {
   };
   // Zone cachee pendant une copie : le bouton s'etire en pilule de progression.
   const showProgress = !xferOpen && summary.active > 0;
-  const renameCurrent = () => remoteKey && setRenameSrv({ old: remoteKey, value: remoteKey });
-  const forgetCurrent = () => remoteKey && deleteServer(remoteKey);
-  const serverEntries = serverMenuEntries({
-    servers,
-    remoteKey,
-    connected,
-    onPick: (s) => pickServer(s),
-    onNew: newConnection,
-    onEdit: editConnection,
-    onRename: renameCurrent,
-    onForget: forgetCurrent,
-    onDisconnect: disconnect,
-  });
+  // ---- Panneaux : source resolue, selecteur, message d'attente --------------
+  type PaneView = {
+    loc: Loc;
+    enabled: boolean;
+    // Change a chaque (re)connexion : remonte le panneau (relistage).
+    epoch: number;
+    startAt?: string;
+    placeholder?: ReactNode;
+    busy: boolean;
+    icon: "computer" | "server" | "phone" | null;
+  };
+  // Message affiche a la place de la liste (+ bouton d'action eventuel). Il
+  // arrete l'appui souris : sinon le lasso du panneau capturerait le pointeur
+  // et le bouton ne recevrait jamais son clic.
+  const paneMsg = (text: string, action?: { label: string; run: () => void }, spin = false) => (
+    <div className="pane-msg" onPointerDown={(e) => e.stopPropagation()}>
+      {spin && <span className="ctx-spinner" />}
+      <span className="pane-msg-text">{text}</span>
+      {action && (
+        <button className="btn-ghost pane-msg-btn" onClick={action.run}>
+          {action.label}
+        </button>
+      )}
+    </div>
+  );
+  const viewOf = (pane: PaneId): PaneView => {
+    const s = srcs[pane];
+    if (s.kind === "local")
+      return {
+        loc: { kind: "local", remote: "", key: "local", label: localLabel },
+        enabled: true,
+        epoch: 0,
+        busy: false,
+        icon: "computer",
+      };
+    if (s.kind === "server") {
+      const c = conns[s.label];
+      const loc: Loc = { kind: "server", remote: c?.remote ?? "", key: srcKey(s), label: s.label };
+      if (c?.state === "ok")
+        return { loc, enabled: true, epoch: c.epoch, startAt: c.startAt, busy: false, icon: "server" };
+      const saved = servers.find((x) => x.label === s.label);
+      const placeholder =
+        c?.state === "connecting"
+          ? paneMsg(t("app.src.connecting", { name: s.label }), undefined, true)
+          : !saved
+            ? paneMsg(t("app.src.serverGone", { name: s.label }))
+            : paneMsg(c?.state === "error" ? c.err : t("app.src.notConnected", { name: s.label }), {
+                label: c?.state === "error" ? t("common.retry") : t("app.conn.connect"),
+                run: () => connectServer(saved, pane, true),
+              });
+      return { loc, enabled: false, epoch: c?.epoch ?? 0, placeholder, busy: c?.state === "connecting", icon: "server" };
+    }
+    if (s.kind === "phone") {
+      const ph = phones.find((p) => p.id === s.id);
+      const name = ph?.name || s.name || t("app.phone.generic");
+      const loc: Loc = { kind: "phone", remote: ph?.remote ?? "", key: srcKey(s), label: name };
+      if (ph?.state === "ready" && ph.remote)
+        return { loc, enabled: true, epoch: 0, busy: false, icon: "phone" };
+      const retry = { label: t("common.retry"), run: () => retryPhone(s.id) };
+      const placeholder = !ph
+        ? paneMsg(t("app.phone.unplugged", { name }))
+        : ph.state === "connecting" || (ph.state === "ready" && !ph.remote)
+          ? paneMsg(t("app.phone.connecting", { name }), undefined, true)
+          : ph.state === "locked"
+            ? paneMsg(t("app.phone.locked", { name }), retry)
+            : ph.state === "busy"
+              ? paneMsg(t("app.phone.busy", { name }), retry)
+              : paneMsg(t("app.phone.error", { name, err: ph.error || "?" }), retry);
+      return { loc, enabled: false, epoch: 0, placeholder, busy: ph?.state === "connecting", icon: "phone" };
+    }
+    return {
+      loc: { kind: "local", remote: "", key: "none", label: t("app.src.pick") },
+      enabled: false,
+      epoch: 0,
+      placeholder: paneMsg(t("app.src.pickHint")),
+      busy: false,
+      icon: null,
+    };
+  };
+  const views: Record<PaneId, PaneView> = { left: viewOf("left"), right: viewOf("right") };
+  paneEnabled.current = { left: views.left.enabled, right: views.right.enabled };
+
+  // Etat court d'un telephone, a cote de son nom dans le selecteur.
+  const phoneDetail = (ph: Phone): string =>
+    ph.state === "ready"
+      ? t("app.phone.usb")
+      : ph.state === "locked"
+        ? t("app.phone.stateLocked")
+        : ph.state === "busy"
+          ? t("app.phone.stateBusy")
+          : ph.state === "connecting"
+            ? t("chrome.conn.connecting")
+            : t("app.phone.stateError");
+  // Menu du selecteur de source d'un panneau.
+  const menuFor = (pane: PaneId): SourceMenuItem[] => {
+    const cur = srcs[pane];
+    const items: SourceMenuItem[] = [
+      { type: "header", text: isMac ? t("app.src.thisMac") : t("app.src.thisPc") },
+      { type: "item", id: "local", icon: "computer", text: localLabel, checked: cur.kind === "local" },
+    ];
+    if (phonesSupported) {
+      items.push({ type: "header", text: t("app.src.phones") });
+      if (!phones.length) items.push({ type: "note", text: t("app.src.noPhone") });
+      for (const ph of phones)
+        items.push({
+          type: "item",
+          id: `phone:${ph.id}`,
+          icon: "phone",
+          text: ph.name,
+          detail: phoneDetail(ph),
+          checked: cur.kind === "phone" && cur.id === ph.id,
+        });
+    }
+    items.push({ type: "header", text: t("app.src.servers") });
+    if (!servers.length) items.push({ type: "note", text: t("chrome.conn.none") });
+    for (const sv of servers) {
+      const c = conns[sv.label];
+      items.push({
+        type: "item",
+        id: `server:${sv.label}`,
+        icon: "server",
+        text: sv.label,
+        detail:
+          c?.state === "ok"
+            ? t("app.src.connected")
+            : c?.state === "connecting"
+              ? t("chrome.conn.connecting")
+              : undefined,
+        checked: cur.kind === "server" && cur.label === sv.label,
+      });
+    }
+    items.push({ type: "item", id: "new", icon: "plus", text: t("app.src.addServer") });
+    if (cur.kind === "server" && servers.some((x) => x.label === cur.label)) {
+      items.push(
+        { type: "sep" },
+        { type: "item", id: "edit", text: t("app.src.editServer") },
+        { type: "item", id: "rename", text: t("app.src.renameServer") },
+        { type: "item", id: "forget", text: t("chrome.conn.forget") },
+        { type: "item", id: "disconnect", text: t("chrome.conn.disconnect"), disabled: !conns[cur.label] },
+      );
+    }
+    return items;
+  };
+  const onPick = (pane: PaneId, id: string) => {
+    const cur = srcs[pane];
+    if (id === "local") {
+      setPaneSrc(pane, { kind: "local" });
+      setActive(pane);
+    } else if (id.startsWith("phone:")) openPhone(id.slice(6), pane);
+    else if (id.startsWith("server:")) {
+      const sv = servers.find((x) => x.label === id.slice(7));
+      if (sv) pickServer(sv, pane);
+    } else if (id === "new") newConnection(pane);
+    else if (cur.kind === "server") {
+      if (id === "edit") editConnection(cur.label, pane);
+      else if (id === "rename") setRenameSrv({ old: cur.label, value: cur.label });
+      else if (id === "forget") forgetServer(cur.label);
+      else if (id === "disconnect") disconnectServer(cur.label);
+    }
+  };
+  const renderPane = (pane: PaneId) => {
+    const v = views[pane];
+    const s = srcs[pane];
+    const serverLabel = s.kind === "server" ? s.label : null;
+    return (
+      <FilePane
+        // Changer de source (ou se reconnecter) remonte le panneau : historique,
+        // selection et arbre repartent de zero, sur la nouvelle source.
+        key={`${pane}|${v.loc.key}|${v.epoch}`}
+        pane={pane}
+        loc={v.loc}
+        picker={
+          <SourcePicker
+            icon={v.icon}
+            label={v.loc.label}
+            busy={v.busy}
+            items={menuFor(pane)}
+            onPick={(id) => onPick(pane, id)}
+          />
+        }
+        placeholder={v.placeholder}
+        rootLabel={v.loc.kind === "local" ? (isMac ? "Macintosh HD" : undefined) : v.loc.label}
+        enabled={v.enabled}
+        anyModal={anyModal}
+        active={active === pane}
+        onFocus={() => focusPane(pane)}
+        bus={panes.current[pane]}
+        onDropItems={startTransfers}
+        onCopy={doCopy}
+        onPaste={doPaste}
+        hasClipboard={clipboardReady}
+        busyRef={busyRef}
+        showHidden={settings.showHidden}
+        showNetworkDrives={settings.showNetworkDrives}
+        pins={v.enabled ? pinsFor(v.loc.key) : []}
+        onPin={(path, label) => pinFolder(v.loc.key, path, label)}
+        onUnpin={(path) => unpinFolder(v.loc.key, path)}
+        onReorderPin={(from, to, after) => reorderPins(v.loc.key, from, to, after)}
+        onOpenRemote={v.loc.kind === "local" ? undefined : openRemote}
+        connKey={v.epoch}
+        startAt={v.loc.kind === "local" ? undefined : (v.startAt ?? "/")}
+        startDir={serverLabel ? (servers.find((x) => x.label === serverLabel)?.startDir ?? "") : ""}
+        onSetStartDir={serverLabel ? (path) => setStartDir(serverLabel, path) : undefined}
+      />
+    );
+  };
+  // Bandeau « telephone branche » (cache si le telephone est deja affiche).
+  const bannerPhone = phoneBanner ? phones.find((p) => p.id === phoneBanner) : undefined;
+  const bannerShown =
+    !!bannerPhone && !PANES.some((k) => srcs[k].kind === "phone" && (srcs[k] as { id: string }).id === bannerPhone.id);
   // macOS : barre d'outils NATIVE (cf. chrome_mac.rs) ; rend sa hauteur.
   const tbH = useMacChrome({
     appVersion,
-    servers,
-    remoteKey,
-    connected,
-    connecting,
     showProgress,
     summary,
     handlers: {
-      pick: (label) => {
-        const s = servers.find((x) => x.label === label);
-        if (s) pickServer(s);
-      },
-      newConnection,
-      edit: editConnection,
-      rename: renameCurrent,
-      forget: forgetCurrent,
-      disconnect,
       toggleTransfers: toggleXfer,
       journal: () => setShowJournal(true),
       settings: () => setShowSettings(true),
@@ -2112,12 +2674,6 @@ export default function App() {
                 title={t(xferOpen ? "chrome.xfer.hideAll" : "chrome.xfer.show")}
                 onClick={toggleXfer}
               />
-              <ServerButton
-                label={connected && currentServer ? currentServer.label : t("chrome.conn.pick")}
-                connected={connected}
-                connecting={connecting}
-                entries={serverEntries}
-              />
               <button className="w11-tool" title={t("app.conn.journalTitle")} onClick={() => setShowJournal(true)}>
                 <UiIcon name="journal" />
               </button>
@@ -2131,57 +2687,44 @@ export default function App() {
         />
       )}
 
-      {connErr && !connectSheet && <div className="conn-error">{connErr}</div>}
+      {notice && <div className="conn-error">{notice}</div>}
+
+      {/* Telephone qui vient d'etre branche : on propose de l'ouvrir. */}
+      {bannerShown && bannerPhone && (
+        <div className="phone-banner" role="status">
+          <span className="phone-banner-icon">
+            <UiIcon name="phone" />
+          </span>
+          <span className="phone-banner-text">
+            <strong>{bannerPhone.name}</strong>{" "}
+            {bannerPhone.state === "ready"
+              ? t("app.phone.bannerReady", {
+                  used: humanSize(
+                    bannerPhone.storages.reduce((n, st) => n + Math.max(0, st.total - st.free), 0),
+                  ),
+                })
+              : bannerPhone.state === "locked"
+                ? t("app.phone.bannerLocked")
+                : bannerPhone.state === "busy"
+                  ? t("app.phone.bannerBusy")
+                  : t("app.phone.bannerOther")}
+          </span>
+          <button className="btn-ghost phone-banner-btn" onClick={() => openPhone(bannerPhone.id, "left")}>
+            {t("app.phone.openLeft")}
+          </button>
+          <button className="btn-ghost phone-banner-btn" onClick={() => openPhone(bannerPhone.id, "right")}>
+            {t("app.phone.openRight")}
+          </button>
+          <button className="banner-close" aria-label={t("common.close")} onClick={() => setPhoneBanner(null)}>
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="shell">
         <main className="explorers">
-          <FilePane
-            title={isMac ? t("chrome.pane.yourMac") : t("common.yourPc")}
-            side="local"
-            rootLabel={isMac ? "Macintosh HD" : undefined}
-            enabled={true}
-            anyModal={anyModal}
-            active={active === "local"}
-            onFocus={() => focusPane("local")}
-            bus={panes.current.local}
-            onDropItems={startTransfers}
-            onCopy={doCopy}
-            onPaste={doPaste}
-            hasClipboard={clipboardReady}
-            busyRef={busyRef}
-            showHidden={settings.showHidden}
-            showNetworkDrives={settings.showNetworkDrives}
-            pins={pins.local}
-            onPin={(path, label) => pinFolder("local", path, label)}
-            onUnpin={(path) => unpinFolder("local", path)}
-            onReorderPin={(from, to, after) => reorderPins("local", from, to, after)}
-          />
-          <FilePane
-            title={connected && currentServer ? currentServer.label : t("common.server")}
-            side="remote"
-            rootLabel={currentServer?.label}
-            enabled={connected}
-            anyModal={anyModal}
-            active={active === "remote"}
-            onFocus={() => focusPane("remote")}
-            bus={panes.current.remote}
-            onDropItems={startTransfers}
-            onCopy={doCopy}
-            onPaste={doPaste}
-            hasClipboard={clipboardReady}
-            busyRef={busyRef}
-            showHidden={settings.showHidden}
-            showNetworkDrives={settings.showNetworkDrives}
-            pins={pins.remote}
-            onPin={(path, label) => pinFolder("remote", path, label)}
-            onUnpin={(path) => unpinFolder("remote", path)}
-            onReorderPin={(from, to, after) => reorderPins("remote", from, to, after)}
-            onOpenRemote={openRemote}
-            connKey={connKey}
-            startAt={remoteStart}
-            startDir={currentServer?.startDir ?? ""}
-            onSetStartDir={setStartDir}
-          />
+          {renderPane("left")}
+          {renderPane("right")}
         </main>
         {/* Îlot des transferts sous les panneaux. Toujours monte : il apparait
             et disparait en ANIMANT sa hauteur (cf. chrome.css). */}
@@ -2548,10 +3091,13 @@ export default function App() {
           setUser={setUser}
           setPass={setPass}
           setPort={setPort}
-          connecting={connecting}
-          error={connErr}
-          onConnect={() => connect()}
-          onClose={() => setConnectSheet(null)}
+          connecting={sheetConn?.state === "connecting"}
+          error={sheetConn?.state === "error" ? sheetConn.err : ""}
+          onConnect={connectFromSheet}
+          onClose={() => {
+            setConnectSheet(null);
+            setSheetLabel(null);
+          }}
         />
       )}
       {renameSrv && (

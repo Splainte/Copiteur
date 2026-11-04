@@ -126,4 +126,47 @@ export default {
   "app.log.batchCancel_one": "{n} annulé",
   "app.log.batchCancel_other": "{n} annulés",
   "app.log.moveFailed": "Déplacement vers Applications impossible : {err}",
+
+  // Sources des panneaux (selecteur en tete de chaque panneau).
+  "app.src.pick": "Choisir une source",
+  "app.src.pickHint": "Choisis ce que ce panneau affiche avec le menu en haut à gauche : ton ordinateur, un téléphone ou un serveur.",
+  "app.src.thisMac": "Ce Mac",
+  "app.src.thisPc": "Cet ordinateur",
+  "app.src.phones": "Téléphones",
+  "app.src.noPhone": "Aucun téléphone branché",
+  "app.src.servers": "Serveurs",
+  "app.src.connected": "connecté",
+  "app.src.addServer": "Ajouter un serveur…",
+  "app.src.editServer": "Modifier ce serveur…",
+  "app.src.renameServer": "Renommer ce serveur…",
+  "app.src.menuTitle": "Choisir ce que ce panneau affiche",
+  "app.src.connecting": "Connexion à {name}…",
+  "app.src.notConnected": "{name} n'est pas connecté.",
+  "app.src.serverGone": "Le serveur « {name} » n'est plus enregistré. Choisis une autre source.",
+
+  // Telephones Android (macOS).
+  "app.phone.generic": "Téléphone",
+  "app.phone.usb": "USB",
+  "app.phone.stateLocked": "verrouillé",
+  "app.phone.stateBusy": "occupé",
+  "app.phone.stateError": "erreur",
+  "app.phone.unplugged": "{name} est débranché. Rebranche-le pour continuer.",
+  "app.phone.connecting": "Connexion à {name}…",
+  "app.phone.locked": "Déverrouille {name}, puis choisis « Transfert de fichiers » dans la notification USB du téléphone.",
+  "app.phone.busy": "{name} est déjà utilisé par un autre programme (OpenMTP, Android File Transfer, Transfert d'images…). Ferme-le, puis réessaie.",
+  "app.phone.error": "Impossible de lire {name} : {err}",
+  "app.phone.bannerReady": "branché en USB · {used} utilisés",
+  "app.phone.bannerLocked": "branché : déverrouille-le et choisis « Transfert de fichiers »",
+  "app.phone.bannerBusy": "branché, mais utilisé par un autre programme",
+  "app.phone.bannerOther": "branché en USB",
+  "app.phone.openLeft": "Ouvrir à gauche",
+  "app.phone.openRight": "Ouvrir à droite",
+
+  // Garde-fous de copie (meme source des deux cotes).
+  "app.notice.sameFolder": "La source et la destination sont le même dossier : rien à copier.",
+  "app.notice.intoItself": "Un dossier ne peut pas être copié dans lui-même : il a été écarté.",
+
+  "app.log.disconnected": "Déconnecté de {name}",
+  "app.log.phonePlugged": "Téléphone branché : {name}",
+  "app.log.phoneUnplugged": "Téléphone débranché : {name}",
 };

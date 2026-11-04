@@ -7,6 +7,10 @@ Dual-pane SFTP file transfer client, FileZilla-style, powered by
 server at full speed — including when only **one big file** is left, the case where
 FileZilla hits its ceiling.
 
+Each pane shows the source of your choice: the computer, a saved server or, on macOS, an
+**Android phone plugged in over USB**. Every combination works: computer ↔ server,
+server ↔ server, phone ↔ server, phone ↔ computer.
+
 Windows and macOS (Apple Silicon), in English or French. Tauri v2 + React/TypeScript,
 bundled rclone.
 
@@ -30,6 +34,17 @@ offers to install it. Every update is signed; an update whose signature doesn't 
 rejected.
 
 ## What it does
+
+**Sources** — each pane title is a menu: *Your Mac / Your computer*, plugged-in phones (macOS),
+saved servers, *Add a server…*. Two servers can be open at once, one on each side. Server
+actions (edit, rename, forget, disconnect) live in the same menu.
+
+**Android phone (macOS)** — plugged in over USB in “File transfer” mode, it shows up in the menu
+and a banner offers to open it on the left or the right. Copying from the phone to a NAS goes
+straight from the cable to the network, with no temporary copy on the Mac. One file at a time
+on the phone side (an MTP limit). Quit OpenMTP, Android File Transfer and Image Capture, which
+can keep the phone to themselves. On Windows, File Explorer already handles phones: this
+source does not exist there.
 
 **Transfers** — drag and drop between the two panes and Ctrl/Cmd+C · V, in both directions.
 Dropping onto a folder copies into it. A dropped folder is split into one transfer per file.
@@ -115,6 +130,14 @@ transfer fails. Copiteur recognizes the signature (an md5 is 32 hex digits), swi
 connection to `disable_hashcheck` and retries. The size is still checked. Per server, reset
 on every connection: servers whose checksums work keep them.
 
+**One source = one rclone remote.** Each connected server has its own (`srv1:`, `srv2:`…): two
+servers coexist, and a queued copy keeps its server even if the pane switches source. A phone
+is presented to rclone by `copiteur-mtp` (a Go program, sources in `tauri/mtp/`, MTP engine
+from [go-mtpfs](https://github.com/ganeshrvel/go-mtpfs), the one behind OpenMTP) as a **local
+WebDAV server** (`tel1:`, 127.0.0.1 only, random token): the whole copy machinery (progress,
+cancel, retries, conflicts) applies unchanged. Phone side: one stream, one file at a time, and
+`IgnoreTimes` (phones do not keep dates; rclone would otherwise skip a same-size “Replace”).
+
 **Short timeouts** (`Timeout` 1 min instead of 5) to fail fast on a dead link and let the
 resume do its job, rather than hanging.
 
@@ -150,7 +173,7 @@ repository. `scripts/prepare-bins.mjs` rejects an archive that doesn't match —
 the download server is compromised one day, since this binary ends up in the signed installer.
 
 **Only the rclone commands the app uses get through.** The bridge between the interface and
-rclone accepts only 16 API methods, and rejects any parameter or path that would make rclone
+rclone accepts only the API methods the app uses, and rejects any parameter or path that would make rclone
 launch a program (SFTP `ssh` option, on-the-fly `:sftp,…:` remotes, `core/command`…). Even a
 future display flaw would not lead to code execution. Covered by tests.
 
@@ -165,6 +188,10 @@ system keychain — Credential Manager on Windows, Keychain on macOS. A file fro
 version (plaintext passwords) is converted on first launch. On macOS, since the app is not
 signed with an Apple developer account, Keychain asks for permission again after each update
 ("Always Allow").
+
+**The phone engine only listens to the machine** (127.0.0.1), behind a random token passed
+through the environment; only the backend creates phone remotes, never the interface. It
+stops by itself if Copiteur goes away.
 
 **The rclone config stays in memory** (`--config ""`): the current server's password is never
 written to an `rclone.conf`.

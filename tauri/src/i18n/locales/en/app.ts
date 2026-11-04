@@ -116,4 +116,47 @@ export default {
   "app.log.batchCancel_one": "{n} cancelled",
   "app.log.batchCancel_other": "{n} cancelled",
   "app.log.moveFailed": "Could not move to Applications: {err}",
+
+// Pane sources (picker at the top of each pane).
+  "app.src.pick": "Choose a source",
+  "app.src.pickHint": "Choose what this pane shows with the menu at the top left: your computer, a phone or a server.",
+  "app.src.thisMac": "This Mac",
+  "app.src.thisPc": "This computer",
+  "app.src.phones": "Phones",
+  "app.src.noPhone": "No phone plugged in",
+  "app.src.servers": "Servers",
+  "app.src.connected": "connected",
+  "app.src.addServer": "Add a server…",
+  "app.src.editServer": "Edit this server…",
+  "app.src.renameServer": "Rename this server…",
+  "app.src.menuTitle": "Choose what this pane shows",
+  "app.src.connecting": "Connecting to {name}…",
+  "app.src.notConnected": "{name} is not connected.",
+  "app.src.serverGone": "The server “{name}” is no longer saved. Choose another source.",
+
+  // Android phones (macOS).
+  "app.phone.generic": "Phone",
+  "app.phone.usb": "USB",
+  "app.phone.stateLocked": "locked",
+  "app.phone.stateBusy": "busy",
+  "app.phone.stateError": "error",
+  "app.phone.unplugged": "{name} is unplugged. Plug it back in to continue.",
+  "app.phone.connecting": "Connecting to {name}…",
+  "app.phone.locked": "Unlock {name}, then choose “File transfer” in the phone's USB notification.",
+  "app.phone.busy": "{name} is already used by another program (OpenMTP, Android File Transfer, Image Capture…). Quit it, then try again.",
+  "app.phone.error": "Cannot read {name}: {err}",
+  "app.phone.bannerReady": "plugged in over USB · {used} used",
+  "app.phone.bannerLocked": "plugged in: unlock it and choose “File transfer”",
+  "app.phone.bannerBusy": "plugged in, but used by another program",
+  "app.phone.bannerOther": "plugged in over USB",
+  "app.phone.openLeft": "Open on the left",
+  "app.phone.openRight": "Open on the right",
+
+  // Copy safeguards (same source on both sides).
+  "app.notice.sameFolder": "Source and destination are the same folder: nothing to copy.",
+  "app.notice.intoItself": "A folder cannot be copied into itself: it was skipped.",
+
+  "app.log.disconnected": "Disconnected from {name}",
+  "app.log.phonePlugged": "Phone plugged in: {name}",
+  "app.log.phoneUnplugged": "Phone unplugged: {name}",
 } satisfies Record<keyof typeof fr, string>;
