@@ -95,7 +95,7 @@ pub struct Mtp {
     token: String,
     bin: Mutex<Option<PathBuf>>,
     /// Developpement uniquement : simuler un telephone sur un dossier.
-    fake: Option<String>,
+    fake: Mutex<Option<String>>,
     /// Numero de remote attribue a chaque telephone (id USB -> N de « telN ») :
     /// stable pendant la session, donc un telephone debranche puis rebranche
     /// garde son remote, et les copies en reprise le retrouvent.
@@ -124,7 +124,7 @@ impl Default for Mtp {
             base: Arc::new(Mutex::new(String::new())),
             token: random_token(),
             bin: Mutex::new(None),
-            fake,
+            fake: Mutex::new(fake),
             ids: Mutex::new(HashMap::new()),
             configured: Mutex::new(HashMap::new()),
             last_spawn: Mutex::new(None),
@@ -161,6 +161,9 @@ impl Mtp {
         self.stopping.store(false, Ordering::Relaxed);
     }
     fn kill(&self) {
+        // L'adresse et les remotes de ce programme ne valent plus rien.
+        lock(&self.base).clear();
+        lock(&self.configured).clear();
         // Pris hors du verrou : l'attente ci-dessous ne bloque personne.
         let taken = lock(&self.proc).take();
         if let Some(mut p) = taken {
@@ -176,12 +179,11 @@ impl Mtp {
             let _ = p.child.kill();
             let _ = p.child.wait();
         }
-        lock(&self.base).clear();
     }
 
     /// Le moteur est-il disponible sur cette machine ?
     fn supported(&self) -> bool {
-        self.fake.is_some() || (cfg!(target_os = "macos") && lock(&self.bin).as_ref().is_some_and(|b| b.exists()))
+        lock(&self.fake).is_some() || (cfg!(target_os = "macos") && lock(&self.bin).as_ref().is_some_and(|b| b.exists()))
     }
 
     /// Lance le programme s'il ne tourne pas (ou plus). Les relances sont
@@ -219,7 +221,7 @@ impl Mtp {
         let Some(bin) = lock(&self.bin).clone() else { return };
         let mut cmd = Command::new(&bin);
         cmd.arg("--port").arg("0");
-        if let Some(dir) = &self.fake {
+        if let Some(dir) = lock(&self.fake).as_ref() {
             cmd.arg("--fake").arg(dir);
         }
         // Le jeton passe par l'ENVIRONNEMENT, jamais en argument (lisible par
@@ -439,6 +441,76 @@ mod tests {
         assert!(!safe_id("a/b"));
         assert!(!safe_id("a b"));
         assert!(!safe_id(&"x".repeat(200)));
+    }
+
+    /// Contrat de bout en bout avec le vrai programme (en mode simule) : port
+    /// annonce, jeton exige, telephone liste, contenu lisible par rclone en
+    /// WebDAV, arret propre. Saute si les binaires ne sont pas prepares
+    /// (`node scripts/build-mtp.mjs --fake-only`, `npm run prepare-bins`).
+    #[tokio::test]
+    async fn le_moteur_simule_repond_a_rclone() {
+        let triple = tauri::utils::platform::target_triple().unwrap_or_default();
+        let bins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
+        let mtp_bin = bins.join(format!("copiteur-mtp-{triple}"));
+        let rclone_bin = bins.join(format!("rclone-{triple}"));
+        if !mtp_bin.exists() || !rclone_bin.exists() {
+            eprintln!("binaires absents : test saute");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("copiteur-mtp-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("DCIM")).unwrap();
+        std::fs::write(dir.join("DCIM").join("photo.jpg"), b"bonjour").unwrap();
+
+        let m = Mtp::default();
+        *lock(&m.fake) = Some(dir.to_string_lossy().into_owned());
+        *lock(&m.bin) = Some(mtp_bin);
+        assert!(m.supported());
+        m.ensure_running();
+        let mut base = String::new();
+        for _ in 0..100 {
+            base = lock(&m.base).clone();
+            if !base.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(base.starts_with("http://127.0.0.1:"), "port jamais annonce");
+
+        // Sans jeton : refuse.
+        let r = m.http.get(format!("{base}/api/devices")).send().await.unwrap();
+        assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED);
+        // Avec : le telephone simule est pret.
+        let devs: Vec<Device> = m
+            .http
+            .get(format!("{base}/api/devices"))
+            .bearer_auth(&m.token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let d = devs.iter().find(|d| d.state == "ready").expect("telephone simule pret");
+        assert!(safe_id(&d.id));
+
+        // rclone le lit comme le fera l'app (webdav, vendor other, jeton).
+        let out = std::process::Command::new(&rclone_bin)
+            .args(["lsjson", "-R", "--config", "", "--webdav-vendor", "other"])
+            .arg("--webdav-url")
+            .arg(format!("{base}/dav/{}", d.id))
+            .arg("--webdav-bearer-token")
+            .arg(&m.token)
+            .arg(":webdav:")
+            .output()
+            .unwrap();
+        let txt = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(txt.contains("DCIM/photo.jpg"), "{txt}");
+
+        m.shutdown();
+        assert!(lock(&m.proc).is_none());
+        assert!(lock(&m.base).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -30,6 +30,7 @@
 // RELEASE), puis recopier les empreintes SHA-256 des nouveaux binaires ici.
 
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, existsSync, chmodSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,52 +93,64 @@ const name = `rclone-${p.triple}${p.ext}`;
 const dest = join(BIN_DIR, name);
 if (existsSync(dest)) {
   console.log(`rclone déjà présent : ${dest}`);
-  process.exit(0);
+} else {
+  await downloadRclone();
 }
 
-// 1. Récupère la release par tag pour trouver l'asset par NOM (pas d'ID en dur,
-//    qui changerait si la release était recréée).
-const relRes = await fetch(
-  `https://api.github.com/repos/${REPO}/releases/tags/${TAG}`,
-  { headers: { ...GH_HEADERS, Accept: "application/vnd.github+json" } },
-);
-if (!relRes.ok) {
-  console.error(`Release introuvable (HTTP ${relRes.status}).`);
-  process.exit(1);
-}
-const release = await relRes.json();
-const asset = (release.assets || []).find((a) => a.name === name);
-if (!asset) {
-  console.error(`Asset « ${name} » absent de la release ${TAG}.`);
-  process.exit(1);
+// macOS : sidecar copiteur-mtp (téléphones Android en MTP), compilé depuis
+// tauri/mtp une fois rclone en place. Ne fait rien s'il existe déjà.
+if (process.platform === "darwin") {
+  const r = spawnSync(process.execPath, [join(__dirname, "build-mtp.mjs")], {
+    stdio: "inherit",
+  });
+  if (r.status !== 0) process.exit(r.status ?? 1);
 }
 
-// 2. Télécharge le binaire via l'endpoint API de l'asset (Accept: octet-stream
-//    -> redirige vers le binaire ; fetch suit la redirection).
-console.log(`Téléchargement du rclone patché : ${name}`);
-const res = await fetch(asset.url, {
-  headers: { ...GH_HEADERS, Accept: "application/octet-stream" },
-});
-if (!res.ok) {
-  console.error(`Échec du téléchargement (HTTP ${res.status}).`);
-  process.exit(1);
-}
-const bin = Buffer.from(await res.arrayBuffer());
-
-// Vérification AVANT d'écrire sur le disque : un binaire qui ne correspond pas
-// à l'empreinte attendue n'est jamais installé.
-const got = createHash("sha256").update(bin).digest("hex");
-if (got !== p.sha256) {
-  console.error(
-    "BINAIRE REFUSÉ : l'empreinte SHA-256 ne correspond pas.\n" +
-      `  attendue : ${p.sha256}\n` +
-      `  obtenue  : ${got}\n` +
-      "Le téléchargement est corrompu ou altéré — on n'installe pas ce binaire.",
+async function downloadRclone() {
+  // 1. Récupère la release par tag pour trouver l'asset par NOM (pas d'ID en dur,
+  //    qui changerait si la release était recréée).
+  const relRes = await fetch(
+    `https://api.github.com/repos/${REPO}/releases/tags/${TAG}`,
+    { headers: { ...GH_HEADERS, Accept: "application/vnd.github+json" } },
   );
-  process.exit(1);
-}
-console.log(`Empreinte SHA-256 vérifiée : ${got.slice(0, 16)}…`);
+  if (!relRes.ok) {
+    console.error(`Release introuvable (HTTP ${relRes.status}).`);
+    process.exit(1);
+  }
+  const release = await relRes.json();
+  const asset = (release.assets || []).find((a) => a.name === name);
+  if (!asset) {
+    console.error(`Asset « ${name} » absent de la release ${TAG}.`);
+    process.exit(1);
+  }
 
-writeFileSync(dest, bin);
-if (!isWin) chmodSync(dest, 0o755);
-console.log(`OK -> ${dest}`);
+  // 2. Télécharge le binaire via l'endpoint API de l'asset (Accept: octet-stream
+  //    -> redirige vers le binaire ; fetch suit la redirection).
+  console.log(`Téléchargement du rclone patché : ${name}`);
+  const res = await fetch(asset.url, {
+    headers: { ...GH_HEADERS, Accept: "application/octet-stream" },
+  });
+  if (!res.ok) {
+    console.error(`Échec du téléchargement (HTTP ${res.status}).`);
+    process.exit(1);
+  }
+  const bin = Buffer.from(await res.arrayBuffer());
+
+  // Vérification AVANT d'écrire sur le disque : un binaire qui ne correspond pas
+  // à l'empreinte attendue n'est jamais installé.
+  const got = createHash("sha256").update(bin).digest("hex");
+  if (got !== p.sha256) {
+    console.error(
+      "BINAIRE REFUSÉ : l'empreinte SHA-256 ne correspond pas.\n" +
+        `  attendue : ${p.sha256}\n` +
+        `  obtenue  : ${got}\n` +
+        "Le téléchargement est corrompu ou altéré — on n'installe pas ce binaire.",
+    );
+    process.exit(1);
+  }
+  console.log(`Empreinte SHA-256 vérifiée : ${got.slice(0, 16)}…`);
+
+  writeFileSync(dest, bin);
+  if (!isWin) chmodSync(dest, 0o755);
+  console.log(`OK -> ${dest}`);
+}
