@@ -682,5 +682,5 @@ func (m *Manager) Retry(id string) bool {
 
 // Close implemente server.Manager.
 func (m *Manager) Close() {
-	m.dev.Close(core.StateError, "shutting down", 3*time.Second)
+	m.dev.Close(core.StateError, "shutting down", 200*time.Millisecond)
 }

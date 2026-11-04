@@ -1,10 +1,20 @@
 // Passerelle ImageCaptureCore pour copiteur-mtp (macOS).
 //
-// Copie NON MODIFIEE de mtp/imagecapture_bridge_darwin.m de
+// Derive de mtp/imagecapture_bridge_darwin.m de
 // github.com/jameshilliard/go-mtpfs, branche ptp-transport, commit 19ba0d9
 // ("Add ImageCaptureCore MTP transport on macOS"), fork de
 // github.com/hanwen/go-mtpfs. Licence BSD : Copyright (c) 2012 Google Inc.
 // All rights reserved. Texte complet et attribution : tauri/mtp/NOTICES.md.
+//
+// Modifications Copiteur (reperees par "Copiteur:") :
+//   - telephone debranche PENDANT la decouverte (avant considerDevice) :
+//     la session en attente est invalidee tout de suite (sinon omtp_ic_open
+//     attendait les 120 s) ;
+//   - delai de decouverte separe (20 s) avant le delai d'ouverture (120 s) ;
+//   - n° de serie / noms lus aussi sur les noeuds parents IOKit (le noeud
+//     d'interface ne les porte pas toujours) ;
+//   - omtp_ic_close_wait : fermeture avec delai d'attente choisi (arret
+//     rapide du programme).
 
 #import <Foundation/Foundation.h>
 #import <ImageCaptureCore/ImageCaptureCore.h>
@@ -16,6 +26,9 @@
 // Requests retain native state until completion, including after timeouts.
 static const NSUInteger maxPayload = 16 * 1024 * 1024;
 static const int commandTimeout = 120;
+// Copiteur: le telephone doit etre vu par ICDeviceBrowser dans ce delai
+// (~6 s constates) ; sinon echec rapide au lieu des 120 s.
+static const int discoveryTimeout = 20;
 
 @interface OMTPReply : NSObject
 @property(nonatomic, strong) dispatch_semaphore_t semaphore;
@@ -86,6 +99,12 @@ static OMTPBrowser *sharedBrowser;
 - (void)deviceBrowser:(ICDeviceBrowser *)browser didRemoveDevice:(ICDevice *)device
            moreGoing:(BOOL)moreGoing {
     if (device == self.active.camera)
+        [self.active didRemoveDevice:device];
+    // Copiteur: debranche avant que la session n'ait trouve sa camera.
+    else if (self.active && !self.active.camera &&
+             (uint32_t)device.usbVendorID == self.active.vendor &&
+             (uint32_t)device.usbProductID == self.active.product &&
+             (uint32_t)device.usbLocationID == self.active.location)
         [self.active didRemoveDevice:device];
 }
 @end
@@ -170,6 +189,14 @@ static NSString *property(io_service_t service, CFStringRef name) {
     return [value isKindOfClass:NSString.class] ? value : @"";
 }
 
+// Copiteur: propriete du noeud OU de ses parents (le n° de serie et les noms
+// sont portes par le noeud du peripherique USB, parent de l'interface).
+static NSString *parentProperty(io_service_t service, CFStringRef name) {
+    id value = CFBridgingRelease(IORegistryEntrySearchCFProperty(service, kIOServicePlane, name, NULL,
+        kIORegistryIterateRecursively | kIORegistryIterateParents));
+    return [value isKindOfClass:NSString.class] ? value : @"";
+}
+
 char *omtp_ic_devices(char **error) {
     @autoreleasepool {
         io_iterator_t iterator = 0;
@@ -200,9 +227,9 @@ char *omtp_ic_devices(char **error) {
                 NSMutableDictionary *d = [@{
                     @"vendor": p[@"idVendor"], @"product": p[@"idProduct"],
                     @"location": p[@"locationID"], @"release": p[@"bcdDevice"] ?: @0,
-                    @"manufacturer": property(service, CFSTR("USB Vendor Name")),
-                    @"name": property(service, CFSTR("USB Product Name")),
-                    @"serial": property(service, CFSTR("USB Serial Number")),
+                    @"manufacturer": parentProperty(service, CFSTR("USB Vendor Name")),
+                    @"name": parentProperty(service, CFSTR("USB Product Name")),
+                    @"serial": parentProperty(service, CFSTR("USB Serial Number")),
                     @"appleOwned": @(apple)
                 } mutableCopy];
                 if ([devices[key][@"appleOwned"] boolValue]) d[@"appleOwned"] = @YES;
@@ -230,6 +257,12 @@ void *omtp_ic_open(uint32_t vendor, uint32_t product, uint32_t location, char **
                 session.pending = reply;
                 if (!sharedBrowser) sharedBrowser = [OMTPBrowser new];
                 [sharedBrowser open:session];
+            });
+            // Copiteur: delai de decouverte, distinct du delai d'ouverture.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)discoveryTimeout * NSEC_PER_SEC),
+                           dispatch_get_main_queue(), ^{
+                if (!session.camera && !session.closed)
+                    [session invalidate:@"Phone not found by macOS Image Capture; unlock it, choose File transfer, or reconnect it"];
             });
             // Other clients' catalog work can still delay opening.
             if (dispatch_semaphore_wait(reply.semaphore,
@@ -308,16 +341,21 @@ omtp_ic_reply omtp_ic_command(void *handle, const void *command, size_t commandS
     }
 }
 
-char *omtp_ic_close(void *handle) {
+// Copiteur: delai d'attente parametrable (arret du programme : court).
+char *omtp_ic_close_wait(void *handle, double seconds) {
     @autoreleasepool {
         OMTPSession *session = CFBridgingRelease(handle);
         // Wait for close before allowing the camera to be reused.
         dispatch_async(dispatch_get_main_queue(), ^{ [session invalidate:@"Session closed"]; });
         if (dispatch_semaphore_wait(session.closeReply.semaphore,
-                dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)))
+                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC))))
             return strdup("ImageCaptureCore session close timed out; reconnect the phone");
         return session.closeReply.error ? strdup(session.closeReply.error.UTF8String) : NULL;
     }
+}
+
+char *omtp_ic_close(void *handle) {
+    return omtp_ic_close_wait(handle, 5);
 }
 
 static BOOL mainLoopStopped;

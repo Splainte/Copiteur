@@ -409,13 +409,31 @@ func TestProcessContract(t *testing.T) {
 	if !strings.Contains(p.stderr.String(), "shutting down") {
 		t.Errorf("stderr: %s", p.stderr.String())
 	}
-	// fin de stdin
-	p2 := startServer(t, "--fake", t.TempDir())
+	// fin de stdin, pendant un gros telechargement : le parent (Rust) tue le
+	// moteur ~1,5 s apres avoir ferme stdin, l'arret doit tenir avant
+	dir := t.TempDir()
+	writeRandom(t, filepath.Join(dir, "big.bin"), 64<<20)
+	p2 := startServer(t, "--fake", dir, "--fake-delay-ms", "33")
+	go func() {
+		req, _ := http.NewRequest("GET", p2.url()+"/big.bin", nil)
+		req.Header.Set("Authorization", "Bearer "+itToken)
+		if res, err := http.DefaultClient.Do(req); err == nil {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}
+	}()
+	time.Sleep(500 * time.Millisecond)
+	t0 := time.Now()
 	_ = p2.stdin.Close()
 	select {
 	case <-p2.done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("no exit on stdin EOF")
+	}
+	if d := time.Since(t0); d > 1200*time.Millisecond {
+		t.Errorf("shutdown took %v with a download in progress (parent kills after ~1.5 s)", d)
+	} else {
+		t.Logf("shutdown with a download in progress: %v", d)
 	}
 	// ecoute sur 127.0.0.1 seulement : verifie via l'adresse annoncee
 	p3 := startServer(t, "--fake", t.TempDir())

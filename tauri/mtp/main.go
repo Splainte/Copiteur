@@ -116,7 +116,10 @@ func run() {
 
 	why := <-stop
 	log.Printf("shutting down (%s)", why)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Arret en ~1 s au total (le parent tue le moteur ~1,5 s apres avoir
+	// ferme stdin) : 300 ms pour les requetes en cours, puis fermeture des
+	// sessions (Manager.Close, rapide).
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	_ = srv.Shutdown(ctx)
 	cancel()
 	_ = srv.Close()

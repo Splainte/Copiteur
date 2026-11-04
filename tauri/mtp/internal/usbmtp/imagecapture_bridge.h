@@ -1,7 +1,8 @@
 // Passerelle ImageCaptureCore pour copiteur-mtp (macOS).
 //
-// Copie NON MODIFIEE de mtp/imagecapture_bridge.h de
-// github.com/jameshilliard/go-mtpfs, branche ptp-transport, commit 19ba0d9.
+// Derive de mtp/imagecapture_bridge.h de github.com/jameshilliard/go-mtpfs,
+// branche ptp-transport, commit 19ba0d9. Modification Copiteur : ajout de
+// omtp_ic_close_wait.
 // Licence BSD : Copyright (c) 2012 Google Inc. All rights reserved.
 // Texte complet et attribution : tauri/mtp/NOTICES.md.
 
@@ -26,6 +27,7 @@ void *omtp_ic_open(uint32_t vendor, uint32_t product, uint32_t location, char **
 omtp_ic_reply omtp_ic_command(void *session, const void *command, size_t command_size,
                             const void *out, size_t out_size);
 char *omtp_ic_close(void *session);
+char *omtp_ic_close_wait(void *session, double seconds);
 // Main-thread run loop for standalone callers.
 void omtp_ic_run_loop(void);
 void omtp_ic_stop_loop(void);
@@ -48,6 +50,7 @@ static inline omtp_ic_reply omtp_ic_command(void *session, const void *command, 
     return reply;
 }
 static inline char *omtp_ic_close(void *session) { (void)session; return NULL; }
+static inline char *omtp_ic_close_wait(void *session, double seconds) { (void)session; (void)seconds; return NULL; }
 static inline void omtp_ic_run_loop(void) {}
 static inline void omtp_ic_stop_loop(void) {}
 #endif

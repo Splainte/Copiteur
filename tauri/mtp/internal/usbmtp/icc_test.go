@@ -380,7 +380,7 @@ func TestICCFraming(t *testing.T) {
 func TestICCOpenRefusesNonMTP(t *testing.T) {
 	f := newFakeICC(t, without(allOps, mtp.OC_MTP_GetObjectPropsSupported))
 	released := false
-	if _, _, err := newICCConn(f, func() { released = true }); err == nil || !strings.Contains(err.Error(), "File transfer") {
+	if _, _, err := newICCConn(f, func() { released = true }); !errors.Is(err, errNotMTP) || !strings.Contains(err.Error(), "File transfer") {
 		t.Fatalf("err %v", err)
 	}
 	if !f.closed || !released {
@@ -666,5 +666,17 @@ func TestMatchICCTarget(t *testing.T) {
 	}
 	if _, err := matchICCTarget(targets, "ZZZ", 0x1234, 0x1); err == nil {
 		t.Fatal("no match accepted")
+	}
+}
+
+func TestICCBackoff(t *testing.T) {
+	want := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 2 * time.Minute, 2 * time.Minute}
+	for i, w := range want {
+		if got := iccBackoff(i); got != w {
+			t.Errorf("iccBackoff(%d) = %v, want %v", i, got, w)
+		}
+	}
+	if iccBackoff(1000) != 2*time.Minute {
+		t.Error("no cap")
 	}
 }

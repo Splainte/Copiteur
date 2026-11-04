@@ -36,6 +36,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ganeshrvel/go-mtpfs/mtp"
@@ -63,6 +64,17 @@ const (
 	ocAndroidBeginEdit   = 0x95C4
 	ocAndroidEndEdit     = 0x95C5
 )
+
+// errNotMTP : l'appareil vu par Image Capture n'est pas un telephone en
+// mode MTP (appareil photo PTP...) : a ignorer, pas a reessayer.
+var errNotMTP = errors.New("the device does not advertise MTP: choose \"File transfer\" in the phone's USB notification")
+
+// iccShutdown : arret du programme en cours ; la fermeture des sessions
+// Image Capture attend alors au plus iccShutdownCloseWait (le parent tue le
+// moteur ~1,5 s apres avoir ferme son stdin).
+var iccShutdown atomic.Bool
+
+const iccShutdownCloseWait = 800 * time.Millisecond
 
 // errICCTooLarge : envoi impossible sans les operations d'edition Android.
 var errICCTooLarge = fmt.Errorf("%w: this phone cannot receive files over 8 MiB through macOS Image Capture (no Android partial-write support)", core.ErrTooLarge)
@@ -196,7 +208,7 @@ func newICCConn(w ptpWire, onClose func()) (*iccConn, *rawDeviceInfo, error) {
 	}
 	if !c.ops[mtp.OC_MTP_GetObjectPropsSupported] || (info.MTPVendorExtensionID != 6 && info.MTPExtension == "") {
 		c.Close()
-		return nil, nil, errors.New("the phone does not advertise MTP: choose \"File transfer\" in its USB notification")
+		return nil, nil, errNotMTP
 	}
 	return c, &info, nil
 }
@@ -379,10 +391,17 @@ func (c *iccConn) CreateFolder(storageID, parent uint32, name string) (uint32, e
 // SendObject l'envoie, puis l'edition Android ajoute le reste (ou tronque a
 // 0) et la taille finale est verifiee.
 //
-// Si la source s'arrete en route, la transaction en cours est completee
-// (zeros pour le premier bloc, sinon on s'arrete entre deux blocs), l'edition
-// est refermee proprement et l'objet partiel supprime : la session reste
-// saine, aucune resynchronisation n'est necessaire.
+// Source qui s'arrete en route (client parti). Depuis core.Put, r est un
+// padReader : s'il reste peu a envoyer (<= MaxPad), il fournit des zeros,
+// l'envoi se termine normalement et c'est core qui supprime l'objet. Sinon
+// il renvoie une erreur, et ici :
+//   - pendant le premier bloc : SendObject est quand meme envoye (complete
+//     par des zeros, le telephone l'attend), puis l'objet est supprime ;
+//   - pendant l'edition : chaque bloc est lu EN ENTIER avant d'etre envoye,
+//     donc on s'arrete avant le bloc incomplet ; l'edition est refermee et
+//     l'objet supprime.
+//
+// Dans les deux cas la session reste saine (aucune resynchronisation).
 func (c *iccConn) Send(storageID, parent uint32, name string, size int64, mtime time.Time, r io.Reader) (h uint32, err error) {
 	if size < 0 {
 		return 0, errors.New("mtp: size required")

@@ -46,6 +46,27 @@ type entry struct {
 	working    bool // une goroutine d'ouverture/rafraichissement tourne
 	removed    bool
 	nextTry    time.Time
+
+	// Image Capture (macOS). viaICC : l'interface est tenue par le service
+	// « Transfert d'images » ; les essais suivants vont directement a
+	// openICC (sans rouvrir libusb ni tenter de reclamer l'interface), avec
+	// les chaines USB memorisees. iccFails : echecs consecutifs (attente
+	// exponentielle). waitICC : en attente de la session Image Capture
+	// unique, tenue par un autre telephone.
+	viaICC                                 bool
+	iccSerial, iccProduct, iccManufacturer string
+	iccFails                               int
+	waitICC                                bool
+}
+
+// iccBackoff : 5 s, 10 s, 20 s... au plus 2 min apres des echecs Image
+// Capture consecutifs (chaque essai ouvre/ferme une session du service).
+func iccBackoff(fails int) time.Duration {
+	d := RetryInterval
+	for i := 0; i < fails && d < 2*time.Minute; i++ {
+		d *= 2
+	}
+	return min(d, 2*time.Minute)
 }
 
 // Manager surveille le bus USB et gere les sessions MTP.
@@ -146,6 +167,9 @@ func (m *Manager) scan() {
 		if e.ignored || e.adb || e.working || e.dev == nil && !now.After(e.nextTry) {
 			continue
 		}
+		if e.waitICC && m.iccOwner != nil {
+			continue // session Image Capture unique prise par un autre telephone
+		}
 		switch {
 		case e.dev == nil:
 			m.startLocked(e, m.open)
@@ -178,6 +202,11 @@ func (m *Manager) startLocked(e *entry, fn func(*entry)) {
 func (m *Manager) removeLocked(e *entry) {
 	delete(m.entries, e.key)
 	e.removed = true
+	if m.iccOwner == e {
+		// debranche : le telephone rebranche (nouvelle cle) ne doit pas
+		// attendre la fin de l'ouverture/fermeture de cette session
+		m.iccOwner = nil
+	}
 	if e.dev != nil {
 		log.Printf("device %s unplugged", e.dev.ID())
 	}
@@ -285,6 +314,17 @@ func (m *Manager) open(e *entry) {
 		m.mu.Unlock()
 		m.dropDevice(e)
 	}
+	m.mu.Lock()
+	via := e.viaICC
+	if via {
+		usbSerial, product, manufacturer = e.iccSerial, e.iccProduct, e.iccManufacturer
+	}
+	m.mu.Unlock()
+	if iccSupported && via {
+		// deja vu tenu par « Transfert d'images » : pas de sonde libusb
+		m.openICC(e, usbSerial, product, manufacturer, devFor, fail, ignore)
+		return
+	}
 	t := &transport{c: c, Timeout: timeoutOpen}
 
 	if err := t.openHandle(); err != nil {
@@ -339,7 +379,11 @@ func (m *Manager) open(e *entry) {
 		if iccSupported && errors.Is(err, usb.ERROR_ACCESS) {
 			// macOS : interface tenue en exclusivite (normalement par le
 			// service « Transfert d'images ») -> passage par ImageCaptureCore
-			m.openICC(e, usbSerial, product, manufacturer, devFor, fail)
+			m.mu.Lock()
+			e.viaICC = true
+			e.iccSerial, e.iccProduct, e.iccManufacturer = usbSerial, product, manufacturer
+			m.mu.Unlock()
+			m.openICC(e, usbSerial, product, manufacturer, devFor, fail, ignore)
 			return
 		}
 		if isBusyErr(err) {
@@ -457,6 +501,7 @@ func (m *Manager) finishOpen(e *entry, conn core.Conn, info *rawDeviceInfo, usbS
 		return
 	}
 	e.conn = conn
+	e.iccFails = 0
 	m.mu.Unlock()
 	dev.Attach(conn, storages)
 	log.Printf("device %s (%s %s): transport=%s, %s, %d storage(s), %s",
@@ -473,26 +518,53 @@ const iccOneAtATime = "another phone is already open through macOS Image Capture
 // service. Bloquant (decouverte ~6 s, au plus 120 s) : l'appareil reste
 // "connecting" pendant ce temps.
 func (m *Manager) openICC(e *entry, usbSerial, product, manufacturer string,
-	devFor func(string) *core.Device, fail func(core.State, string)) {
+	devFor func(string) *core.Device, fail func(core.State, string), ignore func()) {
+	// echec Image Capture : nouvel essai de plus en plus espace
+	failICC := func(dev *core.Device, s core.State, msg string) {
+		m.mu.Lock()
+		delay := iccBackoff(e.iccFails)
+		e.iccFails++
+		e.nextTry = time.Now().Add(delay)
+		m.mu.Unlock()
+		dev.SetState(s, msg)
+		log.Printf("device %s: %s: %s (next attempt in %v)", dev.ID(), s, msg, delay)
+	}
+	// plus tenu par le service : retour au chemin libusb au prochain essai
+	notApple := func(msg string) {
+		m.mu.Lock()
+		e.viaICC = false
+		m.mu.Unlock()
+		fail(core.StateBusy, msg)
+	}
+	m.mu.Lock()
+	e.waitICC = false
+	m.mu.Unlock()
+
 	targets, err := iccDevices()
 	if err != nil {
-		fail(core.StateError, "Image Capture: listing devices: "+err.Error())
+		failICC(devFor(usbSerial), core.StateError, "Image Capture: listing devices: "+err.Error())
 		return
 	}
 	tg, err := matchICCTarget(targets, usbSerial, e.c.devDescr.IdVendor, e.c.devDescr.IdProduct)
 	if err != nil {
-		fail(core.StateBusy, busyHint+": "+err.Error())
+		notApple(busyHint + ": " + err.Error())
 		return
 	}
 	if !tg.AppleOwned {
 		// tenue par un autre programme (OpenMTP, Android File Transfer...)
-		fail(core.StateBusy, busyHint+": USB interface held exclusively (not by macOS Image Capture)")
+		notApple(busyHint + ": USB interface held exclusively (not by macOS Image Capture)")
 		return
 	}
 	m.mu.Lock()
 	if m.iccOwner != nil && m.iccOwner != e {
+		// pas de nouvel essai tant que l'autre telephone tient la session
+		// (scan attend que iccOwner soit libere)
+		e.waitICC = true
+		e.nextTry = time.Now()
 		m.mu.Unlock()
-		fail(core.StateBusy, iccOneAtATime)
+		dev := devFor(usbSerial)
+		dev.SetState(core.StateBusy, iccOneAtATime)
+		log.Printf("device %s: busy: %s", dev.ID(), iccOneAtATime)
 		return
 	}
 	m.iccOwner = e
@@ -518,12 +590,20 @@ func (m *Manager) openICC(e *entry, usbSerial, product, manufacturer string,
 	w, err := iccOpen(*tg)
 	if err != nil {
 		release()
-		fail(core.StateError, "Image Capture: "+err.Error())
+		failICC(dev, core.StateError, "Image Capture: "+err.Error())
 		return
 	}
 	conn, info, err := newICCConn(w, release) // ferme (et libere) si echec
+	if errors.Is(err, errNotMTP) {
+		// appareil photo PTP ou telephone hors « Transfert de fichiers » :
+		// on l'ignore (comme le chemin libusb) au lieu d'ouvrir/fermer une
+		// session du service toutes les 5 s
+		log.Printf("USB %s: %v (ignored)", e.key, err)
+		ignore()
+		return
+	}
 	if err != nil {
-		fail(core.StateError, "Image Capture: "+err.Error())
+		failICC(dev, core.StateError, "Image Capture: "+err.Error())
 		return
 	}
 	if product == "" {
@@ -665,6 +745,7 @@ func (m *Manager) Retry(id string) bool {
 	if e.working || e.adb {
 		return true // une ouverture est deja en cours / rien a rouvrir
 	}
+	e.iccFails = 0 // demande explicite : pas d'attente exponentielle
 	m.startLocked(e, func(e *entry) {
 		e.dev.Close(core.StateConnecting, "", 30*time.Second)
 		m.mu.Lock()
@@ -677,7 +758,13 @@ func (m *Manager) Retry(id string) bool {
 
 // Close implemente server.Manager : ferme les sessions et libere les
 // interfaces.
+//
+// Doit tenir dans ~1,5 s (le parent tue le moteur ensuite) : on n'attend
+// pas une transaction en cours (200 ms au plus pour prendre le verrou ; a
+// defaut la fermeture est laissee a la fin du processus) et la fermeture
+// d'une session Image Capture attend au plus iccShutdownCloseWait.
 func (m *Manager) Close() {
+	iccShutdown.Store(true)
 	close(m.stop)
 	<-m.done
 	m.mu.Lock()
@@ -689,7 +776,7 @@ func (m *Manager) Close() {
 		wg.Add(1)
 		go func(d *core.Device) {
 			defer wg.Done()
-			d.Close(core.StateError, "shutting down", 3*time.Second)
+			d.Close(core.StateError, "shutting down", 200*time.Millisecond)
 		}(e.dev)
 	}
 	m.mu.Unlock()

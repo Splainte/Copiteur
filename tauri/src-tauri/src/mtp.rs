@@ -170,7 +170,7 @@ impl Mtp {
             // Fermer son entree standard suffit a l'arreter proprement (sessions
             // MTP refermees) ; on le tue s'il traine.
             drop(p._stdin);
-            for _ in 0..150 {
+            for _ in 0..300 {
                 match p.child.try_wait() {
                     Ok(None) => std::thread::sleep(Duration::from_millis(10)),
                     _ => return,

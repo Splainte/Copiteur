@@ -90,7 +90,11 @@ func (w *nativeWire) close() error {
 	if w.handle == nil {
 		return nil
 	}
-	err := iccError(C.omtp_ic_close(w.handle))
+	wait := 5.0
+	if iccShutdown.Load() {
+		wait = iccShutdownCloseWait.Seconds() // arret du programme : vite
+	}
+	err := iccError(C.omtp_ic_close_wait(w.handle, C.double(wait)))
 	w.handle = nil
 	return err
 }
