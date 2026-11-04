@@ -44,8 +44,13 @@ type entry struct {
 	// (premiere ouverture ratee) ; remplace des que le n° est connu.
 	fallbackID bool
 	working    bool // une goroutine d'ouverture/rafraichissement tourne
-	removed    bool
-	nextTry    time.Time
+	// releases : arrets de « Transfert d'images » (macOS) deja tentes pour ce
+	// branchement. Plafonne (cf. maxReleases) : si un AUTRE programme tient
+	// le telephone (OpenMTP…), on ne relance pas ce service en boucle — et
+	// launchd finirait par le brider. Remis a zero par « Reessayer ».
+	releases int
+	removed  bool
+	nextTry  time.Time
 }
 
 // Manager surveille le bus USB et gere les sessions MTP.
@@ -235,6 +240,37 @@ func (m *Manager) assignID(e *entry, serial string) string {
 	return id
 }
 
+// Arrets automatiques de « Transfert d'images » par branchement.
+const maxReleases = 3
+
+// claimFreeing reclame l'interface ; si macOS la garde pour « Transfert
+// d'images », libere-la (cf. releaseImageCapture) et reclame aussitot.
+func (m *Manager) claimFreeing(e *entry, t *transport) error {
+	err := t.claim()
+	if err == nil || !errors.Is(err, usb.ERROR_ACCESS) {
+		return err
+	}
+	m.mu.Lock()
+	allowed := e.releases < maxReleases
+	if allowed {
+		e.releases++
+	}
+	m.mu.Unlock()
+	if !allowed || !releaseImageCapture() {
+		return err
+	}
+	log.Printf("USB %s: interface held, released macOS Image Capture (ptpcamerad)", e.key)
+	// Pas d'attente avant le premier essai : le service est relance en
+	// quelques millisecondes et reprendrait l'interface.
+	for i := 0; i < 100; i++ {
+		if err = t.claim(); err == nil || !errors.Is(err, usb.ERROR_ACCESS) {
+			return err
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return err
+}
+
 func isBusyErr(err error) bool {
 	var ue usb.Error
 	if errors.As(err, &ue) {
@@ -285,6 +321,20 @@ func (m *Manager) open(e *entry) {
 	t := &transport{c: c, Timeout: timeoutOpen}
 
 	if err := t.openHandle(); err != nil {
+		// Reference libusb perimee : le telephone a ete re-annonce (bascule
+		// « Recharge » -> « Transfert de fichiers », reset USB) a la MEME
+		// adresse, donc sans debranchement vu par scan(). On oublie l'entree :
+		// le prochain tour la recree depuis une enumeration fraiche. (Sans
+		// ca : LIBUSB_ERROR_NO_DEVICE a chaque essai, pour toujours.)
+		if errors.Is(err, usb.ERROR_NO_DEVICE) {
+			log.Printf("USB %s: stale device reference, re-enumerating", e.key)
+			m.mu.Lock()
+			if !e.removed {
+				m.removeLocked(e)
+			}
+			m.mu.Unlock()
+			return
+		}
 		// Impossible d'ouvrir (Linux : droits udev ; macOS : rare).
 		st, msg := core.StateError, "cannot open USB device: "+err.Error()
 		if isBusyErr(err) && !errors.Is(err, usb.ERROR_ACCESS) {
@@ -317,7 +367,7 @@ func (m *Manager) open(e *entry) {
 	if err := t.ensureConfig(); err != nil {
 		log.Printf("USB %s: set configuration: %v", e.key, err)
 	}
-	if err := t.claim(); err != nil {
+	if err := m.claimFreeing(e, t); err != nil {
 		t.Close()
 		if isBusyErr(err) {
 			fail(core.StateBusy, busyHint+": "+err.Error())
@@ -360,7 +410,7 @@ func (m *Manager) open(e *entry) {
 		t.Close()
 		time.Sleep(time.Second)
 		if err = t.openHandle(); err == nil {
-			if err = t.claim(); err == nil {
+			if err = m.claimFreeing(e, t); err == nil {
 				err = openSession(t)
 			}
 		}
@@ -561,6 +611,7 @@ func (m *Manager) Retry(id string) bool {
 	if e.working || e.adb {
 		return true // une ouverture est deja en cours / rien a rouvrir
 	}
+	e.releases = 0 // demande explicite : on peut de nouveau liberer
 	m.startLocked(e, func(e *entry) {
 		e.dev.Close(core.StateConnecting, "", 30*time.Second)
 		m.mu.Lock()
