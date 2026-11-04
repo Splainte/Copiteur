@@ -2,10 +2,12 @@
 //  Copiteur — pont avec la barre d'outils NATIVE de macOS
 //
 //  Sur macOS, la barre du haut n'est pas dessinee en HTML : c'est une vraie
-//  NSToolbar (capsules Liquid Glass, symboles SF, menu natif des serveurs,
-//  bouton Transferts qui s'etire en pilule de progression), construite cote
+//  NSToolbar (capsules Liquid Glass, symboles SF, bouton Transferts qui
+//  s'etire en pilule de progression), construite cote
 //  Rust (chrome_mac.rs) a partir d'une description envoyee d'ici. Le front
-//  recoit les clics par l'evenement `chrome://toolbar`.
+//  recoit les clics par l'evenement `chrome://toolbar`. Le choix du serveur,
+//  lui, n'est plus dans la barre : chaque panneau a son selecteur de source
+//  (cf. SourcePicker.tsx).
 //
 //  Hors macOS, tout ceci est inerte (Windows a sa barre de titre HTML, cf.
 //  WindowChrome.tsx).
@@ -13,14 +15,13 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Server } from "./files";
 import { t } from "./i18n";
 import type { XferSummary } from "./TransfersPanel";
 
 const isMac = navigator.userAgent.includes("Macintosh");
 
 // ---- Description de la barre (miroir des structures serde de chrome.rs) -------
-type MenuEntry = {
+export type MenuEntry = {
   id?: string;
   title?: string;
   subtitle?: string;
@@ -35,17 +36,25 @@ type TbItem =
   | { kind: "flex" }
   | { kind: "space" }
   | { kind: "button"; id: string; symbol: string; label: string }
-  | { kind: "menu"; id: string; symbol: string; title: string; tip: string; entries: MenuEntry[] }
-  | { kind: "morph"; id: string; symbol: string; label: string; text: string; value: number; expanded: boolean; retry: boolean };
+  | { kind: "menu"; id: string; symbol: string; title: string; tip: string; entries: MenuEntry[]; hidden: boolean }
+  | {
+      kind: "morph";
+      id: string;
+      symbol: string;
+      label: string;
+      text: string;
+      value: number;
+      expanded: boolean;
+      retry: boolean;
+      // Capsule accrochee a gauche de la pilule (telephone branche) : elle
+      // glisse avec elle quand la pilule s'etire.
+      side: { id: string; symbol: string; title: string; tip: string; entries: MenuEntry[]; hidden: boolean };
+    };
 type ToolbarSpec = { items: TbItem[] };
 
 type Handlers = {
-  pick: (label: string) => void;
-  newConnection: () => void;
-  edit: () => void;
-  rename: () => void;
-  forget: () => void;
-  disconnect: () => void;
+  // Choix dans le menu du bouton telephone (« left:<id> » / « right:<id> »).
+  phone: (entry: string) => void;
   toggleTransfers: () => void;
   journal: () => void;
   settings: () => void;
@@ -53,37 +62,14 @@ type Handlers = {
 
 type Opts = {
   appVersion: string;
-  servers: Server[];
-  remoteKey: string | null;
-  connected: boolean;
-  connecting: boolean;
+  // Bouton allonge « telephone branche » : menu Ouvrir a gauche / a droite.
+  // Absent (masque) quand aucun telephone n'attend d'etre ouvert.
+  phone: { title: string; tip: string; entries: MenuEntry[] } | null;
   // Zone des transferts cachee pendant une copie : le bouton s'etire.
   showProgress: boolean;
   summary: XferSummary;
   handlers: Handlers;
 };
-
-function serverEntries(o: Opts): MenuEntry[] {
-  // Actions sur le serveur courant : seulement connecte a un serveur memorise.
-  const current = o.connected && o.servers.some((s) => s.label === o.remoteKey);
-  return [
-    { header: true, title: t(o.servers.length ? "chrome.conn.saved" : "chrome.conn.none") },
-    ...o.servers.map((s) => ({
-      id: "pick:" + s.label,
-      title: s.label,
-      subtitle: `${s.user}@${s.host}${s.port && s.port !== "22" ? ":" + s.port : ""}`,
-      symbol: "server.rack",
-      checked: o.connected && s.label === o.remoteKey,
-    })),
-    { separator: true },
-    { id: "new", title: t("chrome.conn.new"), symbol: "plus" },
-    { separator: true },
-    { id: "edit", title: t("chrome.conn.edit"), symbol: "slider.horizontal.3", enabled: current },
-    { id: "rename", title: t("chrome.conn.rename"), symbol: "pencil", enabled: current },
-    { id: "forget", title: t("chrome.conn.forget"), symbol: "trash", enabled: current },
-    { id: "disconnect", title: t("chrome.conn.disconnect"), symbol: "eject", enabled: o.connected },
-  ];
-}
 
 function buildToolbar(o: Opts): ToolbarSpec {
   const button = (id: string, symbol: string, label: string): TbItem => ({ kind: "button", id, symbol, label });
@@ -104,20 +90,19 @@ function buildToolbar(o: Opts): ToolbarSpec {
         value: s.pct ?? 0,
         expanded: o.showProgress,
         retry: s.state === "retry",
+        // Telephone branche pas encore ouvert : capsule a son nom, collee a
+        // GAUCHE du bouton Transferts et qui se decale quand il s'etire en
+        // pilule. Menu : Ouvrir a gauche / a droite. Masquee sans telephone.
+        side: {
+          id: "phone",
+          symbol: "smartphone",
+          title: o.phone?.title ?? "",
+          tip: o.phone?.tip ?? "",
+          entries: o.phone?.entries ?? [],
+          hidden: !o.phone,
+        },
       },
       { kind: "space" },
-      {
-        kind: "menu",
-        id: "server",
-        symbol: "server.rack",
-        title: o.connecting
-          ? t("chrome.conn.connecting")
-          : o.connected && o.remoteKey
-            ? o.remoteKey
-            : t("chrome.conn.pick"),
-        tip: t("chrome.conn.saved"),
-        entries: serverEntries(o),
-      },
       button("journal", "list.bullet.rectangle", t("app.conn.journal")),
       button("settings", "gearshape", t("app.conn.settings")),
     ],
@@ -175,22 +160,7 @@ export function useMacChrome(o: Opts): number {
 }
 
 function dispatch(h: Handlers, p: { id: string; kind: string; entry?: string }) {
-  if (p.kind === "menu" && p.entry) {
-    if (p.entry.startsWith("pick:")) return h.pick(p.entry.slice(5));
-    switch (p.entry) {
-      case "new":
-        return h.newConnection();
-      case "edit":
-        return h.edit();
-      case "rename":
-        return h.rename();
-      case "forget":
-        return h.forget();
-      case "disconnect":
-        return h.disconnect();
-    }
-    return;
-  }
+  if (p.kind === "menu" && p.id === "phone" && p.entry) return h.phone(p.entry);
   switch (p.id) {
     case "transfers":
       return h.toggleTransfers();

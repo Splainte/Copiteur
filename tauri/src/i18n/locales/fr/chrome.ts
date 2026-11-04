@@ -28,8 +28,6 @@ export default {
   "chrome.xfer.button": "Transferts",
   "chrome.xfer.show": "Afficher les transferts",
   "chrome.xfer.hideAll": "Masquer les transferts",
-  "chrome.xfer.collapse": "Replier",
-  "chrome.xfer.expand": "Déplier",
   "chrome.xfer.idle": "Aucun transfert en cours",
   "chrome.xfer.paused": "Interrompu · reprise automatique",
   "chrome.xfer.remaining": "reste {size}",

@@ -70,8 +70,7 @@ export default {
   "pane.err.pathNotFound": "Path not found on this side: {path}",
 
   "pane.del.title": "Confirmation required",
-  "pane.del.askLocal": "Do you really want to delete {what} from “Your computer”?",
-  "pane.del.askRemote": "Do you really want to delete {what} from the server?",
+  "pane.del.ask": "Do you really want to delete {what} from “{source}”?",
   "pane.del.computing": "Calculating contents…",
   "pane.del.atLeast": "at least {what}",
   "pane.del.permanent": " — permanent deletion",

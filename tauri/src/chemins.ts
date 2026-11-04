@@ -21,7 +21,7 @@
 // demande ; aucune => elle le dit.
 
 import { invoke } from "@tauri-apps/api/core";
-import { rc, fileAddr, listArgs, remoteDirNames, SHARE_BASES, type Side } from "./files";
+import { rc, fileAddr, listArgs, remoteDirNames, SHARE_BASES } from "./files";
 
 // Ce qu'on a lu dans le texte colle. Ne touche a aucun disque.
 export type PastedPath = {
@@ -153,15 +153,16 @@ type Cand = { base: string; segs: string[] };
 const slash = (s: string) => (s.endsWith("/") ? s : s + "/");
 
 // Regarde si le candidat existe : "dir", "file" ou null.
-async function probe(side: Side, c: Cand): Promise<"dir" | "file" | null> {
+// `remote` : prefixe de remote rclone de la source ("" = disque local).
+async function probe(remote: string, c: Cand): Promise<"dir" | "file" | null> {
   const opts =
-    side === "remote"
+    remote
       ? { _config: { ConnectTimeout: "8s", Timeout: "8s", LowLevelRetries: 1 } }
       : {};
   try {
     if (c.segs.length === 0) {
       await rc("operations/list", {
-        ...listArgs(side, c.base),
+        ...listArgs(remote, c.base),
         opt: { noModTime: true, dirsOnly: true },
         ...opts,
       });
@@ -169,7 +170,7 @@ async function probe(side: Side, c: Cand): Promise<"dir" | "file" | null> {
     }
     const parent = slash(c.base) + c.segs.slice(0, -1).join("/");
     const r = await rc<{ item: { IsDir: boolean } | null }>("operations/stat", {
-      ...fileAddr(side, parent, c.segs[c.segs.length - 1]),
+      ...fileAddr(remote, parent, c.segs[c.segs.length - 1]),
       ...opts,
     });
     if (!r.item) return null;
@@ -181,7 +182,7 @@ async function probe(side: Side, c: Cand): Promise<"dir" | "file" | null> {
 
 // Essaie les candidats d'un palier EN PARALLELE et rend ceux qui existent
 // (dedoublonnes, dans l'ordre des candidats).
-async function probeAll(side: Side, cands: Cand[]): Promise<PathHit[]> {
+async function probeAll(remote: string, cands: Cand[]): Promise<PathHit[]> {
   const seen = new Set<string>();
   const uniq = cands.filter((c) => {
     const k = slash(c.base) + c.segs.join("/");
@@ -189,7 +190,7 @@ async function probeAll(side: Side, cands: Cand[]): Promise<PathHit[]> {
     seen.add(k);
     return true;
   });
-  const kinds = await Promise.all(uniq.map((c) => probe(side, c)));
+  const kinds = await Promise.all(uniq.map((c) => probe(remote, c)));
   const hits: PathHit[] = [];
   uniq.forEach((c, i) => {
     const k = kinds[i];
@@ -291,6 +292,7 @@ function localTiers(p: PastedPath, roots: () => Promise<LocalRoot[]>, isWin: boo
 }
 
 function remoteTiers(
+  remote: string,
   p: PastedPath,
   roots: () => Promise<LocalRoot[]>,
   currentDir: string,
@@ -317,7 +319,7 @@ function remoteTiers(
   let listed: Promise<{ base: string; names: string[] }[]> | null = null;
   const listing = () =>
     (listed ??= Promise.all(
-      bases.map(async (base) => ({ base, names: (await remoteDirNames(base)) ?? [] })),
+      bases.map(async (base) => ({ base, names: (await remoteDirNames(remote, base)) ?? [] })),
     ));
 
   // Partage connu (ecrit, ou retrouve via le lecteur du poste) : on le cherche
@@ -359,7 +361,9 @@ function escapeRe(s: string): string {
 // Rend les emplacements ou le chemin colle existe : 0 = introuvable, 1 = on y
 // va, plusieurs = l'utilisateur choisit.
 export async function resolvePastedPath(
-  side: Side,
+  // Source du panneau : "" = disque local, sinon prefixe de remote (serveur,
+  // telephone).
+  remote: string,
   p: PastedPath,
   currentDir: string,
   isWin: boolean,
@@ -367,11 +371,11 @@ export async function resolvePastedPath(
   let cached: Promise<LocalRoot[]> | null = null;
   const roots = () =>
     (cached ??= invoke<LocalRoot[]>("local_roots").catch(() => [] as LocalRoot[]));
-  const tiers = side === "local" ? localTiers(p, roots, isWin) : remoteTiers(p, roots, currentDir);
+  const tiers = !remote ? localTiers(p, roots, isWin) : remoteTiers(remote, p, roots, currentDir);
   for (const tier of tiers) {
     // Garde-fou : un serveur avec des centaines de partages ne doit pas
     // declencher des centaines de requetes.
-    const hits = await probeAll(side, (await tier()).slice(0, 80));
+    const hits = await probeAll(remote, (await tier()).slice(0, 80));
     if (hits.length) return hits;
   }
   return [];

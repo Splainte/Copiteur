@@ -118,9 +118,30 @@ function AdobeBadge({ letters, bg, fg }: { letters: string; bg: string; fg: stri
 }
 
 // ---- Icone de disque (volet de navigation, cote local) ---------------------
-export type DriveKind = "fixed" | "network" | "removable" | "cdrom" | "cloud";
+export type DriveKind = "fixed" | "network" | "removable" | "cdrom" | "cloud" | "phone" | "server";
 
 export function DriveIcon({ kind }: { kind: DriveKind }) {
+  // Racine d'un telephone Android (branche en USB).
+  if (kind === "phone")
+    return (
+      <svg viewBox="0 0 48 48" className="ficon" aria-hidden>
+        <rect x="14" y="5" width="20" height="38" rx="4.5" fill="#7f8896" />
+        <rect x="16.5" y="9" width="15" height="28" rx="1.5" fill="#cfe0ff" />
+        <rect x="21" y="39.2" width="6" height="1.6" rx="0.8" fill="#c9d0da" />
+      </svg>
+    );
+  // Racine d'un serveur (NAS, SFTP).
+  if (kind === "server")
+    return (
+      <svg viewBox="0 0 48 48" className="ficon" aria-hidden>
+        <rect x="8" y="9" width="32" height="13" rx="3" fill="#8b93a1" />
+        <rect x="8" y="26" width="32" height="13" rx="3" fill="#a7aeba" />
+        <circle cx="14" cy="15.5" r="2" fill="#39b36e" />
+        <circle cx="14" cy="32.5" r="2" fill="#39b36e" />
+        <rect x="20" y="14.5" width="14" height="2" rx="1" fill="#c9d0da" />
+        <rect x="20" y="31.5" width="14" height="2" rx="1" fill="#e2e6ec" />
+      </svg>
+    );
   if (kind === "cloud")
     return (
       <svg viewBox="0 0 48 48" className="ficon" aria-hidden>
@@ -162,10 +183,54 @@ export function DriveIcon({ kind }: { kind: DriveKind }) {
 export function UiIcon({
   name,
 }: {
-  name: "list" | "tiles" | "back" | "forward" | "up" | "chevron" | "caret" | "refresh" | "journal" | "search";
+  name:
+    | "list"
+    | "tiles"
+    | "back"
+    | "forward"
+    | "up"
+    | "chevron"
+    | "caret"
+    | "refresh"
+    | "journal"
+    | "search"
+    | "computer"
+    | "server"
+    | "phone"
+    | "plus";
 }) {
   const c = "uicon";
   switch (name) {
+    // Sources d'un panneau (selecteur de source).
+    case "computer":
+      return (
+        <svg viewBox="0 0 16 16" className={c} aria-hidden>
+          <rect x="1.8" y="2.6" width="12.4" height="8.4" rx="1.3" fill="none" stroke="currentColor" strokeWidth="1.3" />
+          <path d="M5.5 13.6h5M8 11v2.6" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
+      );
+    case "server":
+      return (
+        <svg viewBox="0 0 16 16" className={c} aria-hidden>
+          <rect x="2" y="2.3" width="12" height="4.6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+          <rect x="2" y="9.1" width="12" height="4.6" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+          <circle cx="4.7" cy="4.6" r=".8" />
+          <circle cx="4.7" cy="11.4" r=".8" />
+        </svg>
+      );
+    case "phone":
+      return (
+        <svg viewBox="0 0 16 16" className={c} aria-hidden>
+          <rect x="4.2" y="1.5" width="7.6" height="13" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
+          <path d="M7 12.3h2" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
+      );
+    case "plus":
+      return (
+        <svg viewBox="0 0 16 16" className={c} aria-hidden>
+          <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      );
     case "search":
       return (
         <svg viewBox="0 0 16 16" className={c} aria-hidden>

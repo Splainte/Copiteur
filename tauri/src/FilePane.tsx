@@ -14,6 +14,7 @@ import {
 import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
+  ReactNode,
   RefObject,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -39,7 +40,8 @@ import {
   hiddenAttrNames,
   drag,
   type Entry,
-  type Side,
+  type Loc,
+  type PaneId,
   type PaneBus,
   type Payload,
   type SortKey,
@@ -50,9 +52,6 @@ import { NavTree, type TreeSection } from "./NavTree";
 import { logEvent } from "./journal";
 import { parsePastedPath, resolvePastedPath, type PathHit } from "./chemins";
 import { t, tn, tx, useLang, type Key } from "./i18n";
-
-// Libelle du cote pour le journal (« Ton PC » / « Serveur »).
-const sideLabel = (s: Side) => (s === "local" ? t("common.yourPc") : t("common.server"));
 
 const isWin = navigator.userAgent.includes("Windows");
 const isMac = navigator.userAgent.includes("Macintosh");
@@ -79,8 +78,10 @@ const COLS: { key: SortKey; label: Key; className: string }[] = [
 ];
 
 export function FilePane({
-  title,
-  side,
+  pane,
+  loc,
+  picker,
+  placeholder,
   enabled,
   anyModal,
   active,
@@ -104,8 +105,16 @@ export function FilePane({
   onSetStartDir,
   rootLabel,
 }: {
-  title: string;
-  side: Side;
+  // Panneau gauche ou droit : les deux sont identiques, seule leur source change.
+  pane: PaneId;
+  // Source affichee (disque local, serveur, telephone) — cf. files.ts.
+  loc: Loc;
+  // Selecteur de source, affiche a la place du titre dans l'en-tete.
+  picker: ReactNode;
+  // Message (ou contenu) a la place de la liste quand la source n'est pas
+  // exploitable : rien de choisi, connexion en cours ou en echec, telephone
+  // verrouille ou debranche…
+  placeholder?: ReactNode;
   enabled: boolean;
   // Une modale d'App (parametres, conflit, confirmation…) est ouverte : on gele
   // le clavier du panneau tant qu'elle est la (cf. onKeyDown).
@@ -113,9 +122,9 @@ export function FilePane({
   active: boolean;
   onFocus: () => void;
   bus: PaneBus;
-  onDropItems: (payload: Payload, destSide: Side, intoDir?: string) => void;
-  onCopy: (side: Side) => void;
-  onPaste: (side: Side) => void;
+  onDropItems: (payload: Payload, destPane: PaneId, intoDir?: string) => void;
+  onCopy: (pane: PaneId) => void;
+  onPaste: (pane: PaneId) => void;
   hasClipboard: boolean;
   busyRef: RefObject<boolean>;
   showHidden: boolean;
@@ -124,10 +133,12 @@ export function FilePane({
   onPin: (path: string, label: string) => void;
   onUnpin: (path: string) => void;
   onReorderPin: (from: string, to: string, after: boolean) => void;
-  // Ouvrir un fichier distant : telechargement d'une copie temporaire, ouverture
-  // avec l'appli OS, et surveillance pour proposer le renvoi si modifie (cf. App).
-  // Cote local, l'ouverture est directe et n'a pas besoin de ce rappel.
+  // Ouvrir un fichier distant (serveur, telephone) : telechargement d'une copie
+  // temporaire, ouverture avec l'appli OS, et surveillance pour proposer le
+  // renvoi si modifie (cf. App). Cote local, l'ouverture est directe et n'a pas
+  // besoin de ce rappel.
   onOpenRemote?: (
+    loc: Loc,
     dir: string,
     name: string,
     size: number,
@@ -147,7 +158,13 @@ export function FilePane({
   // Nom affiche pour la racine du fil d'Ariane (cf. breadcrumb).
   rootLabel?: string;
 }) {
-  const isLocal = side === "local";
+  const isLocal = loc.kind === "local";
+  const remote = loc.remote;
+  const title = loc.label;
+  // Les reglages d'affichage (vue, largeurs) restent memorises par COTE, sous
+  // leurs anciennes cles (« local » a gauche, « remote » a droite) : ils
+  // survivent ainsi a la mise a jour et au changement de source.
+  const prefKey = pane === "left" ? "local" : "remote";
   // Abonne le panneau au changement de langue (re-rendu dans la nouvelle langue).
   const lang = useLang();
   const rootPath = isLocal ? "/" : "/";
@@ -167,7 +184,7 @@ export function FilePane({
   // supprimer, glisser…) doit viser ce dossier-la, pas `dir` — sinon on construit
   // un chemin sous le mauvais parent (« directory not found »).
   const [entriesDir, setEntriesDir] = useState(rootPath);
-  // Miroir en ref : `load` est un useCallback stable (deps [enabled, side]),
+  // Miroir en ref : `load` est un useCallback stable (deps [enabled, remote]),
   // il ne peut pas lire l'etat `entriesDir` sans se recreer a chaque listage.
   const entriesDirRef = useRef(entriesDir);
   entriesDirRef.current = entriesDir;
@@ -197,7 +214,7 @@ export function FilePane({
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [view, setView] = useState<View>(
-    () => (localStorage.getItem(`copiteur.view.${side}`) as View) || "list",
+    () => (localStorage.getItem(`copiteur.view.${prefKey}`) as View) || "list",
   );
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<1 | -1>(1);
@@ -271,16 +288,21 @@ export function FilePane({
   const crumbsMirrorRef = useRef<HTMLDivElement>(null);
   const [hiddenCrumbs, setHiddenCrumbs] = useState(0);
   const [crumbMenu, setCrumbMenu] = useState(false);
-  const crumbs = useMemo(() => breadcrumb(side, dir, rootLabel), [side, dir, rootLabel]);
+  // Source pas prete (rien de choisi, connexion en cours…) : fil d'Ariane vide
+  // plutot qu'un chemin qui ne correspond a rien.
+  const crumbs = useMemo(
+    () => (enabled ? breadcrumb(loc.kind, dir, rootLabel) : []),
+    [enabled, loc.kind, dir, rootLabel],
+  );
 
   // Largeur du volet de navigation (redimensionnable, memorisee).
   const [navW, setNavW] = useState<number>(
-    () => Number(localStorage.getItem(`copiteur.nav.${side}`)) || 200,
+    () => Number(localStorage.getItem(`copiteur.nav.${prefKey}`)) || 200,
   );
   // Largeurs de colonnes (redimensionnables, memorisees).
   const [colW, setColW] = useState<ColW>(() => {
     try {
-      return { ...DEFAULT_COLS, ...JSON.parse(localStorage.getItem(`copiteur.cols.${side}`) || "{}") };
+      return { ...DEFAULT_COLS, ...JSON.parse(localStorage.getItem(`copiteur.cols.${prefKey}`) || "{}") };
     } catch {
       return DEFAULT_COLS;
     }
@@ -317,11 +339,11 @@ export function FilePane({
     );
 
   useEffect(() => {
-    localStorage.setItem(`copiteur.nav.${side}`, String(navW));
-  }, [navW, side]);
+    localStorage.setItem(`copiteur.nav.${prefKey}`, String(navW));
+  }, [navW, prefKey]);
   useEffect(() => {
-    localStorage.setItem(`copiteur.cols.${side}`, JSON.stringify(colW));
-  }, [colW, side]);
+    localStorage.setItem(`copiteur.cols.${prefKey}`, JSON.stringify(colW));
+  }, [colW, prefKey]);
 
   // Fil d'Ariane trop long : on replie les parents LOINTAINS dans un menu « … »
   // (facon explorateur Windows) en gardant visibles le dossier courant et ses
@@ -419,7 +441,7 @@ export function FilePane({
     // Cote serveur, tant qu'on n'est pas connecte, le volet de navigation reste
     // vide : pas de racine « Serveur » ni d'acces rapides a deplier (sinon on
     // verrait l'arborescence de l'ancienne connexion).
-    if (!isLocal && !enabled) return [];
+    if (!enabled) return [];
     const quick =
       pins.length > 0
         ? [
@@ -440,9 +462,9 @@ export function FilePane({
         {
           nodes: [
             {
-              label: t("common.server"),
+              label: loc.label,
               path: "/",
-              icon: "drive" as const,
+              icon: loc.kind === "phone" ? ("phone" as const) : ("server" as const),
               defaultOpen: true,
             },
           ],
@@ -464,7 +486,7 @@ export function FilePane({
           })),
       },
     ];
-  }, [isLocal, enabled, roots, pins, showNetworkDrives, lang]);
+  }, [isLocal, enabled, roots, pins, showNetworkDrives, lang, loc.label, loc.kind]);
 
   // Chargement resilient : garde la liste precedente sur echec transitoire,
   // retente les vides suspects tant qu'une copie tourne (SFTP sature).
@@ -476,7 +498,7 @@ export function FilePane({
       const stale = () => seq !== loadSeq.current;
       setLoading(true);
       setError("");
-      const args = listArgs(side, target);
+      const args = listArgs(remote, target);
       const MAX = 6;
       let lastErr = "";
       for (let attempt = 0; attempt < MAX; attempt++) {
@@ -516,7 +538,7 @@ export function FilePane({
           // Attribut « caché » de Windows : hors du nom, donc hors de rclone.
           // On garde la liste COMPLÈTE en mémoire (les noms cachés comptent pour
           // les collisions) et on ne masque qu'à l'affichage.
-          hiddenAttrNames(side, target, list).then((h) => {
+          hiddenAttrNames(loc.kind, target, list).then((h) => {
             if (!stale()) setHiddenAttr(h);
           });
           return;
@@ -530,7 +552,7 @@ export function FilePane({
       setError(lastErr);
       setLoading(false);
     },
-    [enabled, side, busyRef],
+    [enabled, remote, loc.kind, busyRef],
   );
 
   // Navigation : pousse dans l'historique + charge.
@@ -567,7 +589,7 @@ export function FilePane({
     setResolving(true);
     let hits: PathHit[] = [];
     try {
-      hits = await resolvePastedPath(side, parsed, entriesDir, isWin);
+      hits = await resolvePastedPath(remote, parsed, entriesDir, isWin);
     } finally {
       setResolving(false);
     }
@@ -621,6 +643,18 @@ export function FilePane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, isLocal, roots.length, connKey, startAt]);
 
+  // La source devient indisponible (telephone debranche…) : on oublie la liste et
+  // la selection, qui ne designent plus rien de joignable.
+  useEffect(() => {
+    if (enabled) return;
+    setEntries([]);
+    setSelected(new Set());
+    setAnchor(null);
+    setLead(null);
+    setRenaming(null);
+    setMenu(null);
+  }, [enabled]);
+
   // Ce qui est REELLEMENT affiche : `entries` reste la liste complete (les noms
   // caches comptent pour les collisions de renommage), on ne masque qu'ici.
   // Basculer le reglage est donc instantane, sans relister.
@@ -629,9 +663,9 @@ export function FilePane({
       showHidden
         ? entries
         : entries.filter(
-            (e) => !isNameHidden(side, e.Name) && !hiddenAttr.has(e.Name),
+            (e) => !isNameHidden(loc.kind, e.Name) && !hiddenAttr.has(e.Name),
           ),
-    [entries, hiddenAttr, showHidden, side],
+    [entries, hiddenAttr, showHidden, loc.kind],
   );
 
   // Filtre de recherche, applique AVANT le tri. Requete vide (ou barre repliee)
@@ -654,6 +688,7 @@ export function FilePane({
   useEffect(() => {
     // `entriesDir` (et non `dir`) : les elements selectionnes appartiennent au
     // dossier REELLEMENT affiche, c'est lui la source/destination d'un transfert.
+    bus.loc = loc;
     bus.dir = entriesDir;
     bus.selected = sorted.filter((e) => selected.has(e.Path));
     bus.refresh = () => load(dir);
@@ -707,10 +742,10 @@ export function FilePane({
   const openEntry = (e: Entry) => {
     if (e.IsDir) {
       navigate(joinDir(entriesDir, e.Name));
-    } else if (side === "local") {
+    } else if (isLocal) {
       openPath(joinDir(entriesDir, e.Name)).catch(() => {});
     } else {
-      onOpenRemote?.(entriesDir, e.Name, e.Size, e.ModTime);
+      onOpenRemote?.(loc, entriesDir, e.Name, e.Size, e.ModTime);
     }
   };
 
@@ -747,11 +782,12 @@ export function FilePane({
 
   const startDrag = (e: Entry) => {
     const chosen = selected.has(e.Path) ? selectedEntries() : [e];
-    drag.payload = { side, dir: entriesDir, items: chosen };
+    drag.payload = { pane, loc, dir: entriesDir, items: chosen };
   };
 
   // Suppression : ouvre la confirmation, puis supprime via rclone.
   const askDelete = () => {
+    if (!enabled) return;
     const items = selectedEntries();
     if (items.length) setDel(items);
   };
@@ -779,7 +815,7 @@ export function FilePane({
         }
         try {
           const r = await rc<{ bytes: number; count: number }>("operations/size", {
-            fs: dirFs(side, entriesDir, it.Name),
+            fs: dirFs(remote, entriesDir, it.Name),
           });
           bytes += r.bytes ?? 0;
           count += r.count ?? 0;
@@ -794,19 +830,19 @@ export function FilePane({
     return () => {
       cancelled = true;
     };
-  }, [del, side, entriesDir]);
+  }, [del, remote, entriesDir]);
   const doDelete = async () => {
     const items = del ?? [];
     setDel(null);
     for (const it of items) {
-      const a = fileAddr(side, entriesDir, it.Name);
+      const a = fileAddr(remote, entriesDir, it.Name);
       try {
         await rc(it.IsDir ? "operations/purge" : "operations/deletefile", a);
         logEvent(
           "info",
           "operation",
           t("pane.log.deleted", {
-            path: `${sideLabel(side)} ${entriesDir}${it.Name}${it.IsDir ? "/" : ""}`,
+            path: `${loc.label} ${entriesDir}${it.Name}${it.IsDir ? "/" : ""}`,
           }),
         );
       } catch (e) {
@@ -814,7 +850,7 @@ export function FilePane({
           "error",
           "operation",
           t("pane.log.deleteFailed", {
-            path: `${sideLabel(side)} ${entriesDir}${it.Name}`,
+            path: `${loc.label} ${entriesDir}${it.Name}`,
             err: String(e),
           }),
         );
@@ -872,11 +908,11 @@ export function FilePane({
     setOpErr("");
     const name = freeName(t("pane.newFolderName"), new Set(entries.map((e) => e.Name)));
     try {
-      await rc("operations/mkdir", fileAddr(side, entriesDir, name));
+      await rc("operations/mkdir", fileAddr(remote, entriesDir, name));
       logEvent(
         "info",
         "operation",
-        t("pane.log.newFolder", { path: `${sideLabel(side)} ${entriesDir}${name}` }),
+        t("pane.log.newFolder", { path: `${loc.label} ${entriesDir}${name}` }),
       );
     } catch (e) {
       setOpErr(t("pane.err.create", { err: String(e) }));
@@ -884,14 +920,14 @@ export function FilePane({
         "error",
         "operation",
         t("pane.log.createFailed", {
-          path: `${sideLabel(side)} ${entriesDir}${name}`,
+          path: `${loc.label} ${entriesDir}${name}`,
           err: String(e),
         }),
       );
       return;
     }
     await load(entriesDir);
-    const path = entryPath(side, entriesDir, name);
+    const path = entryPath(remote, entriesDir, name);
     setSelected(new Set([path]));
     skipBlur.current = false;
     setRenaming({ path, value: name });
@@ -921,13 +957,13 @@ export function FilePane({
     try {
       if (target.IsDir) {
         await rc("sync/move", {
-          srcFs: dirFs(side, entriesDir, target.Name),
-          dstFs: dirFs(side, entriesDir, name),
+          srcFs: dirFs(remote, entriesDir, target.Name),
+          dstFs: dirFs(remote, entriesDir, name),
           deleteEmptySrcDirs: true,
         });
       } else {
-        const s = fileAddr(side, entriesDir, target.Name);
-        const d = fileAddr(side, entriesDir, name);
+        const s = fileAddr(remote, entriesDir, target.Name);
+        const d = fileAddr(remote, entriesDir, name);
         await rc("operations/movefile", {
           srcFs: s.fs,
           srcRemote: s.remote,
@@ -939,7 +975,7 @@ export function FilePane({
         "info",
         "operation",
         t("pane.log.renamed", {
-          path: `${sideLabel(side)} ${entriesDir}${target.Name}`,
+          path: `${loc.label} ${entriesDir}${target.Name}`,
           name,
         }),
       );
@@ -949,7 +985,7 @@ export function FilePane({
         "error",
         "operation",
         t("pane.log.renameFailed", {
-          path: `${sideLabel(side)} ${entriesDir}${target.Name}`,
+          path: `${loc.label} ${entriesDir}${target.Name}`,
           name,
           err: String(e),
         }),
@@ -960,12 +996,13 @@ export function FilePane({
     // change de place dans le tri, et le perdre de vue apres l'avoir renomme
     // oblige a le rechercher a l'oeil. On defile jusqu'a lui pour la meme
     // raison — un renommage peut l'envoyer tout en bas d'une longue liste.
-    const moved = entryPath(side, entriesDir, name);
+    const moved = entryPath(remote, entriesDir, name);
     setSelected(new Set([moved]));
     revealPath(moved);
   };
 
   const startRename = (e: Entry) => {
+    if (!enabled) return;
     skipBlur.current = false;
     setRenaming({ path: e.Path, value: e.Name });
   };
@@ -1068,13 +1105,13 @@ export function FilePane({
       try {
         if (it.IsDir) {
           await rc("sync/move", {
-            srcFs: dirFs(side, payload.dir, it.Name),
-            dstFs: dirFs(side, destDir, it.Name),
+            srcFs: dirFs(payload.loc.remote, payload.dir, it.Name),
+            dstFs: dirFs(payload.loc.remote, destDir, it.Name),
             deleteEmptySrcDirs: true,
           });
         } else {
-          const s = fileAddr(side, payload.dir, it.Name);
-          const d = fileAddr(side, destDir, it.Name);
+          const s = fileAddr(payload.loc.remote, payload.dir, it.Name);
+          const d = fileAddr(payload.loc.remote, destDir, it.Name);
           await rc("operations/movefile", {
             srcFs: s.fs,
             srcRemote: s.remote,
@@ -1086,7 +1123,7 @@ export function FilePane({
           "info",
           "operation",
           t("pane.log.moved", {
-            path: `${sideLabel(side)} ${payload.dir}${it.Name}`,
+            path: `${loc.label} ${payload.dir}${it.Name}`,
             dest: destDir,
           }),
         );
@@ -1096,7 +1133,7 @@ export function FilePane({
           "error",
           "operation",
           t("pane.log.moveFailed", {
-            path: `${sideLabel(side)} ${payload.dir}${it.Name}`,
+            path: `${loc.label} ${payload.dir}${it.Name}`,
             dest: destDir,
             err: String(e),
           }),
@@ -1118,7 +1155,7 @@ export function FilePane({
     let cancelled = false;
     setSizeInfo({ path: t.Path, bytes: -1, count: -1 });
     rc<{ bytes: number; count: number }>("operations/size", {
-      fs: dirFs(side, entriesDir, t.Name),
+      fs: dirFs(remote, entriesDir, t.Name),
     })
       .then((r) => {
         if (!cancelled)
@@ -1130,7 +1167,7 @@ export function FilePane({
     return () => {
       cancelled = true;
     };
-  }, [menu, side, entriesDir]);
+  }, [menu, remote, entriesDir]);
 
   // Selection au lasso : depuis une zone vide du volet fichiers, on entoure
   // les elements ; ceux que le rectangle touche sont selectionnes.
@@ -1188,7 +1225,7 @@ export function FilePane({
 
   const onDrop = () => {
     setDropHover(false);
-    if (drag.payload && drag.payload.side !== side) onDropItems(drag.payload, side);
+    if (enabled && drag.payload && drag.payload.pane !== pane) onDropItems(drag.payload, pane);
     drag.payload = null;
   };
 
@@ -1202,7 +1239,7 @@ export function FilePane({
 
   const setViewMode = (v: View) => {
     setView(v);
-    localStorage.setItem(`copiteur.view.${side}`, v);
+    localStorage.setItem(`copiteur.view.${prefKey}`, v);
   };
 
   // Ferme le menu contextuel : clic (ou clic droit) ailleurs, ouverture d'un
@@ -1293,7 +1330,9 @@ export function FilePane({
     // suppression) : le panneau ne doit plus rien faire au clavier. `del` est
     // deja intercepte en amont par un ecouteur `window`, mais on double la garde
     // ici pour les modales d'App.
-    if (anyModal || del) return;
+    // Source pas prete (telephone debranche, serveur deconnecte) : la liste
+    // affichee n'a plus de cible valable, aucune action clavier.
+    if (anyModal || del || !enabled) return;
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === "INPUT") return;
     const arrow =
@@ -1393,7 +1432,7 @@ export function FilePane({
     const canDrop = () =>
       it.IsDir &&
       !!drag.payload &&
-      (drag.payload.side !== side ||
+      (drag.payload.pane !== pane ||
         !drag.payload.items.some((x) => x.Name === it.Name));
     return {
       onDragOver: (e: React.DragEvent) => {
@@ -1413,8 +1452,8 @@ export function FilePane({
         drag.payload = null;
         setDropRow(null);
         setDropHover(false);
-        if (p.side === side) moveInto(p, it);
-        else onDropItems(p, side, joinDir(entriesDir, it.Name));
+        if (p.pane === pane) moveInto(p, it);
+        else onDropItems(p, pane, joinDir(entriesDir, it.Name));
       },
     };
   };
@@ -1430,7 +1469,7 @@ export function FilePane({
       onFocus={onFocus}
       onKeyDown={onKeyDown}
       onDragOver={(e) => {
-        if (enabled && drag.payload && drag.payload.side !== side) {
+        if (enabled && drag.payload && drag.payload.pane !== pane) {
           e.preventDefault();
           setDropHover(true);
         }
@@ -1442,7 +1481,7 @@ export function FilePane({
     >
       {/* En-tete : titre + navigation + adresse + bascule de vue */}
       <header className="explorer-head">
-        <span className="explorer-title">{title}</span>
+        {picker}
         <div className="nav-btns">
           <button
             className="nav-btn"
@@ -1453,7 +1492,7 @@ export function FilePane({
             <UiIcon name="back" />
           </button>
           <button
-            className="nav-btn"
+            className="nav-btn nav-fwd"
             disabled={!enabled || hist.idx >= hist.stack.length - 1}
             onClick={goForward}
             title={t("pane.head.forward")}
@@ -1705,7 +1744,8 @@ export function FilePane({
           // deja deplies garderaient en cache les sous-dossiers de l'ancien
           // serveur (chaque noeud stocke ses enfants dans son etat local).
           key={connKey ?? 0}
-          side={side}
+          remote={remote}
+          kind={loc.kind}
           sections={sections}
           current={dir}
           showHidden={showHidden}
@@ -1740,6 +1780,9 @@ export function FilePane({
           className="files-pane"
           onContextMenu={(e) => {
             e.preventDefault();
+            // Rien a proposer tant que la source n'est pas prete (sinon
+            // « Nouveau dossier » viserait un chemin qui n'existe pas).
+            if (!enabled) return;
             onFocus();
             setMenu({ x: e.clientX, y: e.clientY, target: ctxTarget.current });
             ctxTarget.current = null;
@@ -1813,7 +1856,7 @@ export function FilePane({
             onPointerDown={onBandStart}
           >
             {!enabled ? (
-              <div className="files-empty">{t("pane.list.notConnected")}</div>
+              <div className="files-empty">{placeholder ?? t("pane.list.notConnected")}</div>
             ) : sorted.length === 0 ? (
               loading ? (
                 <div className="files-empty">{t("pane.head.loading")}</div>
@@ -2012,7 +2055,7 @@ export function FilePane({
               )}
 
               {/* Ouverture OS (uniquement cote local, sur un element cible). */}
-              {side === "local" && menu.target && (
+              {isLocal && menu.target && (
                 <>
                   <button
                     className="ctx-item"
@@ -2049,7 +2092,7 @@ export function FilePane({
 
               {/* Cote serveur : ouvrir telecharge une copie temporaire puis
                   l'ouvre (un dossier, lui, s'ouvre = on entre dedans). */}
-              {side === "remote" && menu.target && (
+              {!isLocal && menu.target && (
                 <>
                   <button
                     className="ctx-item"
@@ -2067,7 +2110,7 @@ export function FilePane({
                 className="ctx-item"
                 disabled={selected.size === 0}
                 onClick={() => {
-                  onCopy(side);
+                  onCopy(pane);
                   setMenu(null);
                 }}
               >
@@ -2077,7 +2120,7 @@ export function FilePane({
                 className="ctx-item"
                 disabled={!hasClipboard}
                 onClick={() => {
-                  onPaste(side);
+                  onPaste(pane);
                   setMenu(null);
                 }}
               >
@@ -2133,7 +2176,7 @@ export function FilePane({
               {/* Dossier de depart : ouvre le serveur direct sur ce dossier a
                   chaque connexion. Toggle Definir <-> Reinitialiser selon que ce
                   dossier EST deja le depart. Serveur uniquement. */}
-              {side === "remote" &&
+              {loc.kind === "server" &&
                 menu.target?.IsDir &&
                 onSetStartDir &&
                 (() => {
@@ -2200,7 +2243,8 @@ export function FilePane({
           <div className="modal modal-confirm" onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-title">{t("pane.del.title")}</div>
             <div className="modal-body">
-              {tx(side === "local" ? "pane.del.askLocal" : "pane.del.askRemote", {
+              {tx("pane.del.ask", {
+                source: loc.label,
                 what: (
                   <strong>
                     {(() => {

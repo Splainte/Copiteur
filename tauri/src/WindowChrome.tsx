@@ -1,8 +1,6 @@
 // ============================================================
 //  Copiteur — habillage de la fenetre (Windows) et morceaux partages :
 //   - ConnectSheet : feuille « Nouvelle connexion » / « Modifier le serveur » ;
-//   - ServerButton : bouton serveur + menu deroulant (Windows ; macOS a le
-//                    sien en natif dans la barre d'outils, cf. macChrome.tsx) ;
 //   - WinTitleBar  : barre de titre Windows 11 (icone, titre, zone de
 //                    deplacement, outils, boutons de fenetre) ;
 //   - MorphButton  : bouton Transferts qui s'etire en pilule de progression.
@@ -10,63 +8,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { Server } from "./files";
 import { t, useLang } from "./i18n";
 import { XferRing, type XferSummary } from "./TransfersPanel";
 import appIcon from "./assets/app-icon.png";
 
 const appWindow = getCurrentWindow();
-
-// ---- Menu deroulant HTML (menu serveur sous Windows) ---------------------------
-export type MenuEntry = { text: string; action: () => void; enabled?: boolean } | "sep";
-
-export function Flyout({
-  x,
-  y,
-  entries,
-  onClose,
-}: {
-  x: number;
-  y: number;
-  entries: MenuEntry[];
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const close = () => onClose();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("mousedown", close);
-    window.addEventListener("blur", close);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("blur", close);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
-  const left = Math.min(x, window.innerWidth - 240);
-  const top = Math.min(y, window.innerHeight - entries.length * 34 - 16);
-  return (
-    <div className="flyout" style={{ left, top }} onMouseDown={(e) => e.stopPropagation()}>
-      {entries.map((e, i) =>
-        e === "sep" ? (
-          <div key={i} className="flyout-sep" />
-        ) : (
-          <button
-            key={i}
-            className="flyout-item"
-            disabled={e.enabled === false}
-            onClick={() => {
-              onClose();
-              e.action();
-            }}
-          >
-            {e.text}
-          </button>
-        ),
-      )}
-    </div>
-  );
-}
 
 // ---- Feuille « Nouvelle connexion » ------------------------------------------
 export function ConnectSheet({
@@ -154,83 +100,6 @@ export function ConnectSheet({
         </div>
       </div>
     </div>
-  );
-}
-
-// ---- Bouton serveur + menu (Windows) ----------------------------------------
-export function serverMenuEntries({
-  servers,
-  remoteKey,
-  connected,
-  onPick,
-  onNew,
-  onEdit,
-  onRename,
-  onForget,
-  onDisconnect,
-}: {
-  servers: Server[];
-  remoteKey: string | null;
-  connected: boolean;
-  onPick: (s: Server) => void;
-  onNew: () => void;
-  onEdit: () => void;
-  onRename: () => void;
-  onForget: () => void;
-  onDisconnect: () => void;
-}): MenuEntry[] {
-  // Les actions sur le serveur courant ne valent que connecte a un serveur
-  // memorise.
-  const current = connected && servers.some((s) => s.label === remoteKey);
-  return [
-    ...servers.map((s) => ({
-      text: (connected && s.label === remoteKey ? "✓  " : "     ") + s.label,
-      action: () => onPick(s),
-    })),
-    ...(servers.length ? (["sep"] as MenuEntry[]) : []),
-    { text: t("chrome.conn.new"), action: onNew },
-    "sep",
-    { text: t("chrome.conn.edit"), action: onEdit, enabled: current },
-    { text: t("chrome.conn.rename"), action: onRename, enabled: current },
-    { text: t("chrome.conn.forget"), action: onForget, enabled: current },
-    { text: t("chrome.conn.disconnect"), action: onDisconnect, enabled: connected },
-  ];
-}
-
-export function ServerButton({
-  label,
-  connected,
-  connecting,
-  entries,
-}: {
-  label: string;
-  connected: boolean;
-  connecting: boolean;
-  entries: MenuEntry[];
-}) {
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const ref = useRef<HTMLButtonElement>(null);
-  return (
-    <>
-      <button
-        ref={ref}
-        className={"server-btn" + (connected ? " is-on" : "")}
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={() => {
-          const r = ref.current!.getBoundingClientRect();
-          setMenu(menu ? null : { x: r.left, y: r.bottom + 4 });
-        }}
-      >
-        <span className={"server-dot" + (connecting ? " is-busy" : connected ? " is-on" : "")} />
-        <span className="server-texts">
-          <span className="server-label">{label}</span>
-        </span>
-        <svg className="server-caret" viewBox="0 0 16 16" aria-hidden>
-          <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button>
-      {menu && <Flyout x={menu.x} y={menu.y} entries={entries} onClose={() => setMenu(null)} />}
-    </>
   );
 }
 

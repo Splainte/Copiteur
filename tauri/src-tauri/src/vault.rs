@@ -162,9 +162,11 @@ mod tests {
         // Autre cle, texte abime : refuse, sans paniquer.
         let autre = fresh_key().unwrap();
         assert_eq!(decrypt(&autre, &e), None);
+        // (Caractere final REMPLACE par un autre : le remplacer par « 0 »
+        // ne changeait rien quand il valait deja « 0 », 1 fois sur 16.)
         let mut abime = e.clone();
-        abime.pop();
-        abime.push('0');
+        let last = abime.pop().unwrap();
+        abime.push(if last == '0' { '1' } else { '0' });
         assert_eq!(decrypt(&k, &abime), None);
         assert_eq!(decrypt(&k, "v1:zz"), None);
         assert_eq!(decrypt(&k, "clair"), None);

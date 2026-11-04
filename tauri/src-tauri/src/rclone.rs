@@ -50,6 +50,10 @@ pub struct Rclone {
     /// L'app se ferme : interdit toute relance, sinon un appel en vol au moment de
     /// la sortie ressusciterait un daemon qui resterait orphelin.
     stopping: std::sync::atomic::AtomicBool,
+    /// Numero de « vie » du daemon : incremente a chaque (re)lancement. Sa
+    /// config (les remotes) vit en memoire et meurt avec lui : mtp.rs s'en sert
+    /// pour savoir quand reposer les remotes des telephones.
+    generation: std::sync::atomic::AtomicU64,
 }
 
 impl Default for Rclone {
@@ -62,6 +66,7 @@ impl Default for Rclone {
             paths: Mutex::new(None),
             error: Mutex::new(String::new()),
             stopping: std::sync::atomic::AtomicBool::new(false),
+            generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -268,6 +273,9 @@ fn spawn_daemon(state: &Rclone) -> Result<(), String> {
             *lock(&state.auth) = auth;
             *lock(&state.child) = Some(child);
             lock(&state.error).clear();
+            state
+                .generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(())
         }
         Err(e) => {
@@ -382,8 +390,21 @@ async fn rc_post(
 // de programme sur le poste. On ne laisse donc passer que ce dont l'app se sert,
 // sous la forme ou elle s'en sert.
 
-/// Nom du remote du serveur courant (cf. `REMOTE` dans `files.ts`).
-const REMOTE_NAME: &str = "serveur";
+/// Remotes fabriques par l'app (cf. `fsKind` dans `files.ts`) : un par serveur
+/// connecte (`srv1`, `srv2`…, crees par le front, SFTP uniquement) et un par
+/// telephone (`tel1`…, crees ICI par mtp.rs, jamais par le front). Prefixe +
+/// 1 a 4 chiffres, rien d'autre : ni options a la volee ni remote quelconque.
+fn is_app_remote(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix).is_some_and(|n| {
+        (1..=4).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()) && !n.starts_with('0')
+    })
+}
+pub(crate) fn is_server_remote(name: &str) -> bool {
+    is_app_remote(name, "srv")
+}
+pub(crate) fn is_phone_remote(name: &str) -> bool {
+    is_app_remote(name, "tel")
+}
 
 /// Methodes RC utilisees par le front. Tout le reste est refuse.
 const ALLOWED_METHODS: &[&str] = &[
@@ -414,14 +435,17 @@ const ALLOWED_METHODS: &[&str] = &[
 const ALLOWED_SFTP_PARAMS: &[&str] =
     &["host", "user", "pass", "port", "concurrency", "disable_hashcheck"];
 
-/// Un `fs` acceptable : le remote du serveur (`serveur:...`) ou un chemin local
-/// SANS syntaxe de remote. rclone interprete `xxx:` (avant le premier
-/// separateur) comme un remote et `:backend,opt=...:` comme un remote cree a
-/// la volee, avec des options arbitraires — c'est ce qu'il faut barrer. Seule
-/// exception : la lettre de lecteur Windows (`C:`), que rclone traite en local.
+/// Un `fs` acceptable : un remote de l'app (`srv2:...`, `tel1:...`) ou un
+/// chemin local SANS syntaxe de remote. rclone interprete `xxx:` (avant le
+/// premier separateur) comme un remote et `:backend,opt=...:` comme un remote
+/// cree a la volee, avec des options arbitraires — c'est ce qu'il faut barrer.
+/// Seule exception : la lettre de lecteur Windows (`C:`), que rclone traite en
+/// local.
 fn is_safe_fs(fs: &str) -> bool {
-    if let Some(rest) = fs.strip_prefix(REMOTE_NAME) {
-        return rest.starts_with(':');
+    if let Some((name, _)) = fs.split_once(':') {
+        if is_server_remote(name) || is_phone_remote(name) {
+            return true;
+        }
     }
     let head = fs.split(['/', '\\']).next().unwrap_or("");
     if !head.contains(':') {
@@ -431,6 +455,44 @@ fn is_safe_fs(fs: &str) -> bool {
     b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
 }
 
+/// Parametres « speciaux » de l'API RC (prefixe `_`) que le front emploie. Les
+/// autres (`_filter` : lecture de fichiers au choix…) sont refuses.
+const ALLOWED_UNDERSCORE: &[&str] = &["_async", "_group", "_config"];
+
+/// Reglages qu'un `_config` (par appel) a le droit de surcharger. PIEGE : sans
+/// cette liste, `_config` acceptait N'IMPORTE QUEL reglage rclone — dont
+/// `BackupDir` / `CompareDest` / `CopyDest`, qui prennent un `fs`… donc une
+/// chaine `:sftp,ssh='programme':` qui fait EXECUTER un programme, ou
+/// `MetadataMapper`, qui en lance un directement.
+const ALLOWED_CALL_CONFIG: &[&str] = &[
+    "MultiThreadStreams",
+    "IgnoreTimes",
+    "ConnectTimeout",
+    "Timeout",
+    "LowLevelRetries",
+];
+
+/// Reglages globaux de transfert que le front pose (bloc `main` d'`options/set`,
+/// cf. `xferConfig` dans files.ts). Meme raison que ci-dessus : rien d'autre.
+const ALLOWED_MAIN_OPTIONS: &[&str] = &[
+    "MultiThreadStreams",
+    "MultiThreadChunkSize",
+    "MultiThreadCutoff",
+    "Timeout",
+    "ConnectTimeout",
+    "Inplace",
+    "BwLimit",
+];
+
+/// Toutes les cles d'un objet JSON appartiennent a la liste.
+fn only_keys(v: Option<&Value>, allowed: &[&str]) -> bool {
+    match v {
+        None => true,
+        Some(Value::Object(o)) => o.keys().all(|k| allowed.contains(&k.as_str())),
+        Some(_) => false,
+    }
+}
+
 /// Verifie qu'un appel RC est l'un de ceux que l'app emet. Rend la raison du
 /// refus, journalisee cote front comme n'importe quelle erreur rclone.
 fn check_call(method: &str, params: &Value) -> Result<(), String> {
@@ -438,6 +500,15 @@ fn check_call(method: &str, params: &Value) -> Result<(), String> {
         return Err(format!("appel rclone refusé : {method}"));
     }
     if let Some(obj) = params.as_object() {
+        if let Some(bad) = obj
+            .keys()
+            .find(|k| k.starts_with('_') && !ALLOWED_UNDERSCORE.contains(&k.as_str()))
+        {
+            return Err(format!("appel rclone refusé : paramètre « {bad} »"));
+        }
+        if !only_keys(obj.get("_config"), ALLOWED_CALL_CONFIG) {
+            return Err("appel rclone refusé : réglage non autorisé".into());
+        }
         for key in ["fs", "srcFs", "dstFs"] {
             if let Some(v) = obj.get(key) {
                 let ok = v.as_str().is_some_and(is_safe_fs);
@@ -451,7 +522,10 @@ fn check_call(method: &str, params: &Value) -> Result<(), String> {
         "config/create" => {
             let name = params.get("name").and_then(Value::as_str);
             let kind = params.get("type").and_then(Value::as_str);
-            if name != Some(REMOTE_NAME) || kind != Some("sftp") {
+            // Le front ne cree QUE des serveurs SFTP ; les remotes des
+            // telephones (WebDAV local) sont poses par mtp.rs, hors de ce
+            // passe-plat.
+            if !name.is_some_and(is_server_remote) || kind != Some("sftp") {
                 return Err("appel rclone refusé : remote non autorisé".into());
             }
             let Some(p) = params.get("parameters").and_then(Value::as_object) else {
@@ -467,13 +541,50 @@ fn check_call(method: &str, params: &Value) -> Result<(), String> {
             let only_main = params
                 .as_object()
                 .is_some_and(|o| o.keys().all(|k| k == "main"));
-            if !only_main {
+            if !only_main || !only_keys(params.get("main"), ALLOWED_MAIN_OPTIONS) {
                 return Err("appel rclone refusé : options non autorisées".into());
             }
         }
         _ => {}
     }
     Ok(())
+}
+
+/// Appel RC INTERNE au backend (hors liste blanche : reserve au code Rust, ex.
+/// mtp.rs qui pose les remotes des telephones). Rend aussi la « vie » du
+/// daemon qui a repondu.
+pub(crate) async fn call_internal(
+    app: &AppHandle,
+    state: &Rclone,
+    method: &str,
+    params: &Value,
+) -> Result<(Value, u64), String> {
+    let (base, auth, http, err) = {
+        let started = ensure_alive(state);
+        // Relance faite ICI : le front doit le savoir comme pour `rc_call`
+        // (reglages globaux et remotes des serveurs a reposer).
+        if matches!(started, Ok(true)) {
+            let _ = app.emit("copiteur://rclone-relance", ());
+        }
+        let base = lock(&state.base).clone();
+        let auth = lock(&state.auth).clone();
+        let err = started.err().unwrap_or_else(|| lock(&state.error).clone());
+        (base, auth, state.http.clone(), err)
+    };
+    if base.is_empty() {
+        return Err(if err.is_empty() {
+            tr("rclone n'est pas démarré", "rclone is not running").into()
+        } else {
+            err
+        });
+    }
+    let gen = state.generation.load(std::sync::atomic::Ordering::Relaxed);
+    rc_post(&http, &base, &auth, method, params).await.map(|v| (v, gen))
+}
+
+/// Vie courante du daemon (cf. `generation`).
+pub(crate) fn generation(state: &Rclone) -> u64 {
+    state.generation.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Passe-plat vers l'API RC de rclone, restreint par `check_call`.
@@ -735,16 +846,22 @@ mod tests {
         use serde_json::json;
         let ok = [
             ("core/version", json!({})),
-            ("operations/list", json!({ "fs": "serveur:", "remote": "a/b" })),
-            ("operations/list", json!({ "fs": "serveur:/share/x", "remote": "" })),
+            ("operations/list", json!({ "fs": "srv1:", "remote": "a/b" })),
+            ("operations/list", json!({ "fs": "srv12:/share/x", "remote": "" })),
+            ("operations/list", json!({ "fs": "tel1:/DCIM/Camera", "remote": "" })),
+            ("operations/copyfile", json!({ "srcFs": "tel2:/DCIM", "srcRemote": "a.mp4", "dstFs": "srv3:/share", "dstRemote": "a.mp4" })),
             ("operations/list", json!({ "fs": "/home/alice/Rushs", "remote": "" })),
             ("operations/list", json!({ "fs": "C:\\Users\\alice", "remote": "" })),
             ("operations/list", json!({ "fs": "\\\\nas\\partage", "remote": "" })),
-            ("operations/copyfile", json!({ "srcFs": "serveur:/a", "srcRemote": "x:y.mp4", "dstFs": "D:\\", "dstRemote": "x.mp4" })),
+            ("operations/copyfile", json!({ "srcFs": "srv1:/a", "srcRemote": "x:y.mp4", "dstFs": "D:\\", "dstRemote": "x.mp4" })),
             ("sync/move", json!({ "srcFs": "/a", "dstFs": "/b/c:d" })),
             ("options/set", json!({ "main": { "Inplace": true } })),
+            ("options/set", json!({ "main": { "MultiThreadStreams": 16, "MultiThreadChunkSize": "128M", "MultiThreadCutoff": "256M", "Timeout": "1m0s", "ConnectTimeout": "30s", "Inplace": true, "BwLimit": "0" } })),
+            ("operations/copyfile", json!({ "srcFs": "tel1:/DCIM", "srcRemote": "a", "dstFs": "/x", "dstRemote": "a", "_async": true, "_group": "copy/3", "_config": { "MultiThreadStreams": 0, "IgnoreTimes": true } })),
+            ("operations/list", json!({ "fs": "srv1:", "remote": "", "_config": { "ConnectTimeout": "12s", "Timeout": "12s", "LowLevelRetries": 1 } })),
             ("core/stats-reset", json!({ "group": "copy/12" })),
-            ("config/create", json!({ "name": "serveur", "type": "sftp", "parameters": { "host": "h", "user": "u", "pass": "p", "port": "22", "concurrency": "64", "disable_hashcheck": "true" }, "opt": { "obscure": true } })),
+            ("config/create", json!({ "name": "srv1", "type": "sftp", "parameters": { "host": "h", "user": "u", "pass": "p", "port": "22", "concurrency": "64", "disable_hashcheck": "true" }, "opt": { "obscure": true } })),
+            ("config/create", json!({ "name": "srv9999", "type": "sftp", "parameters": { "host": "h" } })),
         ];
         for (m, p) in ok {
             assert!(check_call(m, &p).is_ok(), "{m} {p} devrait passer : {:?}", check_call(m, &p));
@@ -813,17 +930,35 @@ mod tests {
             ("rc/noop", json!({})),
             // Remote a la volee avec programme externe.
             ("operations/list", json!({ "fs": ":sftp,host=h,ssh='calc.exe':", "remote": "" })),
-            ("operations/list", json!({ "fs": "serveur,ssh='calc.exe':", "remote": "" })),
+            ("operations/list", json!({ "fs": "srv1,ssh='calc.exe':", "remote": "" })),
             ("operations/list", json!({ "fs": "autre:", "remote": "" })),
+            ("operations/list", json!({ "fs": "serveur:", "remote": "" })),
+            ("operations/list", json!({ "fs": "srv:", "remote": "" })),
+            ("operations/list", json!({ "fs": "srv01:", "remote": "" })),
+            ("operations/list", json!({ "fs": "srv12345:", "remote": "" })),
+            ("operations/list", json!({ "fs": "telx:", "remote": "" })),
+            ("operations/list", json!({ "fs": "tel1,url='http://x':", "remote": "" })),
             ("operations/copyfile", json!({ "srcFs": "/a", "dstFs": ":local:" })),
             ("operations/list", json!({ "fs": 3, "remote": "" })),
             // Parametres SFTP qui executent une commande ou lisent un fichier.
-            ("config/create", json!({ "name": "serveur", "type": "sftp", "parameters": { "host": "h", "ssh": "calc.exe" } })),
-            ("config/create", json!({ "name": "serveur", "type": "sftp", "parameters": { "host": "h", "md5sum_command": "rm -rf /" } })),
-            ("config/create", json!({ "name": "serveur", "type": "local", "parameters": {} })),
+            ("config/create", json!({ "name": "srv1", "type": "sftp", "parameters": { "host": "h", "ssh": "calc.exe" } })),
+            ("config/create", json!({ "name": "srv1", "type": "sftp", "parameters": { "host": "h", "md5sum_command": "rm -rf /" } })),
+            ("config/create", json!({ "name": "srv1", "type": "local", "parameters": {} })),
             ("config/create", json!({ "name": "autre", "type": "sftp", "parameters": { "host": "h" } })),
+            ("config/create", json!({ "name": "serveur", "type": "sftp", "parameters": { "host": "h" } })),
+            // Un telephone n'est JAMAIS cree par le front (url arbitraire).
+            ("config/create", json!({ "name": "tel1", "type": "webdav", "parameters": { "url": "http://evil" } })),
+            ("config/create", json!({ "name": "tel1", "type": "sftp", "parameters": { "host": "h" } })),
             ("options/set", json!({ "sftp": { "ssh": "calc.exe" } })),
             ("options/set", json!({ "main": {}, "rc": { "NoAuth": true } })),
+            // Reglages qui prennent un `fs` (remote a la volee + `ssh`) ou
+            // lancent un programme : par appel comme en global.
+            ("operations/copyfile", json!({ "srcFs": "/tmp", "srcRemote": "a", "dstFs": "/tmp", "dstRemote": "b", "_config": { "BackupDir": ":sftp,host=x,ssh='calc.exe':" } })),
+            ("operations/copyfile", json!({ "srcFs": "/tmp", "srcRemote": "a", "dstFs": "/tmp", "dstRemote": "b", "_config": { "MetadataMapper": ["calc.exe"], "Metadata": true } })),
+            ("operations/copyfile", json!({ "srcFs": "/tmp", "srcRemote": "a", "dstFs": "/tmp", "dstRemote": "b", "_config": "x" })),
+            ("operations/list", json!({ "fs": "/tmp", "remote": "", "_filter": { "FilesFrom": ["/etc/passwd"] } })),
+            ("options/set", json!({ "main": { "CompareDest": [":sftp,ssh='calc.exe':"] } })),
+            ("options/set", json!({ "main": { "Inplace": true, "BackupDir": "/x" } })),
         ];
         for (m, p) in ko {
             assert!(check_call(m, &p).is_err(), "{m} {p} devrait etre refuse");

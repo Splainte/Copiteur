@@ -10,14 +10,15 @@ import {
   isNameHidden,
   hiddenAttrNames,
   type Entry,
-  type Side,
+  type SourceKind,
 } from "./files";
 import { FileIcon, DriveIcon, UiIcon } from "./icons";
 
 export type TreeNode = {
   label: string;
   path: string;
-  icon: "drive" | "folder";
+  // « phone » / « server » : racine d'un telephone ou d'un serveur.
+  icon: "drive" | "folder" | "phone" | "server";
   driveType?: string;
   // Chemin UNC (lecteur reseau) : cle de renommage. Vide/absent sinon.
   unc?: string;
@@ -35,7 +36,8 @@ let pinDragFrom: string | null = null;
 
 // Un noeud de l'arbre : ligne cliquable + chevron d'expansion + enfants (dossiers).
 function Node({
-  side,
+  remote,
+  kind,
   node,
   level,
   current,
@@ -44,7 +46,8 @@ function Node({
   onNodeContext,
   reorder,
 }: {
-  side: Side;
+  remote: string;
+  kind: SourceKind;
   node: TreeNode;
   level: number;
   current: string;
@@ -65,13 +68,13 @@ function Node({
   const fetchChildren = async (): Promise<Entry[]> => {
     const res = await rc<{ list: Entry[] }>(
       "operations/list",
-      listArgs(side, node.path),
+      listArgs(remote, node.path),
     );
     let dirs = (res.list ?? []).filter((e) => e.IsDir);
     if (!showHidden) {
-      dirs = dirs.filter((e) => !isNameHidden(side, e.Name));
+      dirs = dirs.filter((e) => !isNameHidden(kind, e.Name));
       // Windows : l'attribut « caché » n'est pas dans le nom.
-      const attr = await hiddenAttrNames(side, node.path, dirs);
+      const attr = await hiddenAttrNames(kind, node.path, dirs);
       if (attr.size) dirs = dirs.filter((e) => !attr.has(e.Name));
     }
     return dirs.sort((a, b) =>
@@ -182,6 +185,8 @@ function Node({
         <span className="tree-icon">
           {node.icon === "drive" ? (
             <DriveIcon kind={driveKindFor(node.label, node.driveType ?? "fixed")} />
+          ) : node.icon === "phone" || node.icon === "server" ? (
+            <DriveIcon kind={node.icon} />
           ) : (
             <FileIcon kind="folder" />
           )}
@@ -194,7 +199,8 @@ function Node({
           {children.map((c) => (
             <Node
               key={c.Path}
-              side={side}
+              remote={remote}
+              kind={kind}
               node={{ label: c.Name, path: joinChild(node.path, c.Name), icon: "folder" }}
               level={level + 1}
               current={current}
@@ -215,7 +221,8 @@ function joinChild(dir: string, name: string): string {
 }
 
 export function NavTree({
-  side,
+  remote,
+  kind,
   sections,
   current,
   showHidden,
@@ -225,7 +232,9 @@ export function NavTree({
   width,
   status,
 }: {
-  side: Side;
+  // Source affichee : prefixe de remote rclone ("" = disque local) et nature.
+  remote: string;
+  kind: SourceKind;
   sections: TreeSection[];
   current: string;
   showHidden: boolean;
@@ -245,7 +254,8 @@ export function NavTree({
           {sec.nodes.map((n) => (
             <Node
               key={n.path}
-              side={side}
+              remote={remote}
+              kind={kind}
               node={n}
               level={0}
               current={current}

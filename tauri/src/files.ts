@@ -21,14 +21,51 @@ export type Entry = {
   MimeType?: string;
 };
 
-export type Side = "local" | "remote";
+// ---- Sources : ce qu'un panneau affiche ---------------------------------------
+// Les deux panneaux ne sont plus attaches a un role (« local » a gauche,
+// « serveur » a droite) : chacun choisit sa source — l'ordinateur, un serveur
+// memorise, ou un telephone Android branche (macOS). Toutes les combinaisons
+// sont donc possibles : Mac <-> serveur, serveur <-> serveur, telephone <->
+// serveur, etc. Le moteur de transfert (rclone) ne voit que des `fs`.
+export type PaneId = "left" | "right";
+export const PANES: PaneId[] = ["left", "right"];
+export const otherPane = (p: PaneId): PaneId => (p === "left" ? "right" : "left");
 
-// Remote SFTP cree a la volee sous ce nom via config/create.
-export const REMOTE = "serveur:";
+export type SourceKind = "local" | "server" | "phone";
+
+// Source RESOLUE d'un panneau : de quoi construire ses adresses rclone.
+export type Loc = {
+  kind: SourceKind;
+  // Prefixe de remote rclone : "" (disque local), "srv2:" (un serveur SFTP),
+  // "tel1:" (un telephone, expose en WebDAV local par copiteur-mtp).
+  remote: string;
+  // Identite STABLE de la source (cle des acces rapides, du remontage du
+  // panneau…) : "local", "server:<nom du serveur>", "phone:<id du telephone>".
+  key: string;
+  // Nom affiche (« Ton Mac », « NAS Neufsept », « Pixel 9 Pro »).
+  label: string;
+};
+
+// Nature d'un `fs` rclone, d'apres son prefixe de remote. Les noms de remote
+// sont fabriques par l'app (serveurs « srvN », telephones « telN ») : tout le
+// reste est un chemin local.
+const SERVER_FS = /^srv\d+:/;
+const PHONE_FS = /^tel\d+:/;
+export function fsKind(fs: string): SourceKind {
+  if (SERVER_FS.test(fs)) return "server";
+  if (PHONE_FS.test(fs)) return "phone";
+  return "local";
+}
+// Remote (« srv2: », « tel1: ») d'un `fs`, ou "" pour un chemin local.
+export function fsRemote(fs: string): string {
+  const m = /^(srv|tel)\d+:/.exec(fs);
+  return m ? m[0] : "";
+}
 
 // Instantane d'un panneau, partage avec App (DnD, copier-coller, transferts).
 export type PaneBus = {
-  side: Side;
+  pane: PaneId;
+  loc: Loc;
   dir: string;
   selected: Entry[];
   refresh: () => void;
@@ -36,8 +73,9 @@ export type PaneBus = {
   selectAll: () => void;
 };
 
-// Charge utile d'un glisser / copier (source d'un transfert).
-export type Payload = { side: Side; dir: string; items: Entry[] };
+// Charge utile d'un glisser / copier (source d'un transfert). `pane` = panneau
+// d'origine : lacher dans le MEME panneau deplace, dans l'autre copie.
+export type Payload = { pane: PaneId; loc: Loc; dir: string; items: Entry[] };
 
 // Element en cours de glisser (partage entre panneaux, hors etat React).
 export const drag: { payload: Payload | null } = { payload: null };
@@ -52,6 +90,20 @@ export type Server = {
   // Dossier de depart memorise : chemin ABSOLU sur le serveur ("/share/…").
   // Absent/"" = pas de dossier de depart. Optionnel pour compat anciens serveurs.
   startDir?: string;
+};
+
+// Un telephone Android branche en USB (macOS), tel que le decrit le backend
+// (commande `phones_list`, cf. mtp.rs). `remote` = remote rclone deja configure
+// pour lui (« tel1: »), vide tant qu'il n'est pas pret.
+export type PhoneState = "connecting" | "ready" | "locked" | "busy" | "error";
+export type Phone = {
+  id: string;
+  name: string;
+  manufacturer: string;
+  state: PhoneState;
+  error: string;
+  storages: { name: string; total: number; free: number }[];
+  remote: string;
 };
 
 // ---- Reglages rclone (fenetre parametres) ---------------------------------
@@ -171,6 +223,10 @@ export type Xfer = {
   srcRemote: string;
   dstFs: string;
   dstRemote: string;
+  // Noms des deux sources au moment de la mise en file (« Pixel 9 Pro »,
+  // « NAS Neufsept »…), pour afficher le trajet de chaque ligne.
+  srcLabel?: string;
+  dstLabel?: string;
   size: number;
   bytes: number;
   speed: number;
@@ -228,6 +284,7 @@ export type EditItem = {
   name: string; // nom du fichier
   dstFs: string; // fs rclone distant (cible du renvoi)
   dstRemote: string; // chemin rclone distant
+  dstLabel?: string; // nom de la source distante (serveur, telephone)
   // Etat du fichier distant a l'ouverture (detection de conflit avant renvoi).
   baseRemoteMod: string;
   baseRemoteSize: number;
@@ -249,11 +306,12 @@ export type Plan = {
 // copier. Un dossier est liste recursivement : chaque fichier devient une ligne
 // de la file. `mkdirs` = les dossiers VIDES, qu'une copie fichier par fichier ne
 // creerait jamais (rclone cree les dossiers parents des fichiers, pas les vides).
+// `srcRemote` / `destRemote` : prefixe de remote de chaque cote ("" = local).
 export async function planItem(
-  srcSide: Side,
+  srcRemote: string,
   srcDir: string,
   item: Entry,
-  destSide: Side,
+  destRemote: string,
   destDir: string,
 ): Promise<{ plans: Plan[]; mkdirs: { fs: string; remote: string }[] }> {
   if (!item.IsDir) {
@@ -263,8 +321,8 @@ export async function planItem(
           name: item.Name,
           rel: "",
           size: item.Size,
-          src: fileAddr(srcSide, srcDir, item.Name),
-          dst: fileAddr(destSide, destDir, item.Name),
+          src: fileAddr(srcRemote, srcDir, item.Name),
+          dst: fileAddr(destRemote, destDir, item.Name),
         },
       ],
       mkdirs: [],
@@ -281,7 +339,7 @@ export async function planItem(
   // repond "object not found" sur TOUTE copie de dossier DEPUIS le serveur. On
   // ancre donc le `fs` sur `srcRoot` (remote vide) : `Path` revient alors relatif
   // a `srcRoot` des deux cotes (local ET distant), comme le suppose la suite.
-  const srcRootFs = dirFs(srcSide, srcDir, item.Name);
+  const srcRootFs = dirFs(srcRemote, srcDir, item.Name);
 
   const files = await rc<{ list: Entry[] }>("operations/list", {
     fs: srcRootFs,
@@ -293,8 +351,8 @@ export async function planItem(
     name: e.Name,
     rel: e.Path.slice(0, Math.max(0, e.Path.length - e.Name.length - 1)),
     size: e.Size,
-    src: fileAddr(srcSide, srcRoot, e.Path),
-    dst: fileAddr(destSide, dstRoot, e.Path),
+    src: fileAddr(srcRemote, srcRoot, e.Path),
+    dst: fileAddr(destRemote, dstRoot, e.Path),
   }));
 
   // Dossiers vides = ceux qu'aucun fichier ne "traverse".
@@ -314,9 +372,9 @@ export async function planItem(
   }
   const mkdirs = (dirs.list ?? [])
     .filter((d) => !traversed.has(d.Path))
-    .map((d) => fileAddr(destSide, dstRoot, d.Path));
+    .map((d) => fileAddr(destRemote, dstRoot, d.Path));
   // Le dossier depose est lui-meme vide : rien ne le creerait.
-  if (!plans.length) mkdirs.push(fileAddr(destSide, destDir, item.Name));
+  if (!plans.length) mkdirs.push(fileAddr(destRemote, destDir, item.Name));
 
   return { plans, mkdirs };
 }
@@ -343,20 +401,21 @@ const SYNO_SYSTEM = new Set([
   "aquota.group",
 ]);
 
-// Element cache d'apres son NOM (le seul critere hors Windows).
-export function isNameHidden(side: Side, name: string): boolean {
+// Element cache d'apres son NOM (le seul critere hors Windows). Le bruit
+// systeme des NAS ne concerne que les serveurs.
+export function isNameHidden(kind: SourceKind, name: string): boolean {
   if (name.startsWith(".")) return true;
-  if (side !== "remote") return false;
+  if (kind !== "server") return false;
   return name.startsWith("@") || SYNO_SYSTEM.has(name);
 }
 
 // Noms portant l'attribut « cache »/« systeme » de Windows (vide ailleurs).
 export async function hiddenAttrNames(
-  side: Side,
+  kind: SourceKind,
   dir: string,
   list: Entry[],
 ): Promise<Set<string>> {
-  if (side !== "local" || !isWindows || !list.length) return new Set();
+  if (kind !== "local" || !isWindows || !list.length) return new Set();
   try {
     const names = await invoke<string[]>("hidden_names", {
       dir,
@@ -510,13 +569,26 @@ export function xferStreams(
   x: Xfer,
   s: Settings,
 ): { n: number; fallback: boolean } {
-  const isUpload = x.dstFs.startsWith(REMOTE);
+  // Un telephone ne copie qu'un flux a la fois (MTP), dans un sens comme dans
+  // l'autre : jamais de decoupe (cf. le `_config` du lancement, App.tsx).
+  if (touchesPhone(x)) return { n: 1, fallback: false };
+  const isUpload = isUploadXfer(x);
   const requested = isUpload ? (x.upStreams ?? s.uploadStreams) : (x.downStreams ?? s.streams);
   const n = x.size >= parseSize(s.cutoff) ? Math.max(1, requested) : 1;
   const fallback = isUpload
     ? x.upStreams !== undefined && x.upStreams < s.uploadStreams
     : x.downStreams !== undefined && x.downStreams < s.streams;
   return { n, fallback };
+}
+
+// Sens d'un transfert pour le reglage des flux : un ENVOI ecrit sur un
+// serveur (depuis le disque, un autre serveur ou un telephone) ; tout le reste
+// est un TELECHARGEMENT (le serveur source est lu en plusieurs flux).
+export function isUploadXfer(x: { dstFs: string }): boolean {
+  return fsKind(x.dstFs) === "server";
+}
+export function touchesPhone(x: { srcFs: string; dstFs: string }): boolean {
+  return fsKind(x.srcFs) === "phone" || fsKind(x.dstFs) === "phone";
 }
 
 // Formateur recree quand la langue change (pas fige sur une locale au chargement).
@@ -556,45 +628,46 @@ function withSlash(s: string): string {
   return s.endsWith("/") ? s : s + "/";
 }
 
-// `fs` rclone d'un dossier SERVEUR : le chemin ABSOLU est loge dans le `fs`
-// (serveur:/  |  serveur:/share/x), jamais dans `remote`. rclone SFTP : un
+// `fs` rclone d'un dossier SERVEUR (ou telephone) : le chemin ABSOLU est loge
+// dans le `fs` (srv1:/  |  srv1:/share/x), jamais dans `remote`. rclone SFTP : un
 // slash de tete = chemin absolu depuis la racine du serveur ; sans lui on reste
 // prisonnier du dossier d'accueil (l'ancien `remote: trimSlashes(dir)` rabotait
 // le slash et enfermait la navigation dans le home). Verifie sur SFTP reel :
 // l'absolu passe par le `fs`, un `remote` a slash de tete est nettoye en relatif.
-function remoteFs(dir: string): string {
-  return REMOTE + "/" + trimSlashes(dir);
+function remoteFs(remote: string, dir: string): string {
+  return remote + "/" + trimSlashes(dir);
 }
 
-// Arguments operations/list pour lister le dossier `dir` d'un cote.
-export function listArgs(side: Side, dir: string): RcParams {
-  return side === "local"
+// Arguments operations/list pour lister le dossier `dir` d'une source
+// (`remote` = "" pour le disque local, « srv2: », « tel1: »…).
+export function listArgs(remote: string, dir: string): RcParams {
+  return !remote
     ? { fs: withSlash(dir), remote: "" }
-    : { fs: remoteFs(dir), remote: "" };
+    : { fs: remoteFs(remote, dir), remote: "" };
 }
 
 // Le `Path` que `operations/list` donnera a une entree — c'est la CLE utilisee
 // partout pour la selection et le renommage en place. Il est relatif au `fs`, et
 // des deux cotes le `fs` est desormais le dossier lui-meme, donc Path = nom nu.
-export function entryPath(_side: Side, _dir: string, name: string): string {
+export function entryPath(_remote: string, _dir: string, name: string): string {
   return name;
 }
 
 // Adresse {fs, remote} d'un fichier (pour operations/copyfile). `name` peut etre
 // un sous-chemin relatif (ex. "rushs/jour1/a.mp4") lors d'une copie recursive.
-export function fileAddr(side: Side, dir: string, name: string) {
-  return side === "local"
+export function fileAddr(remote: string, dir: string, name: string) {
+  return !remote
     ? { fs: withSlash(dir), remote: name }
-    : { fs: remoteFs(dir), remote: name };
+    : { fs: remoteFs(remote, dir), remote: name };
 }
 
 // Chaine `fs` COMPLETE d'un dossier (ex. "/home/alice/Rushs" ou
 // "serveur:/share/a/b"). Necessaire pour les commandes qui ne prennent pas de
 // couple {fs, remote} : `operations/size` (fs seul) et `sync/move` (srcFs/dstFs).
-export function dirFs(side: Side, dir: string, name: string): string {
-  return side === "local"
+export function dirFs(remote: string, dir: string, name: string): string {
+  return !remote
     ? withSlash(dir) + name
-    : remoteFs(joinDir(dir, name));
+    : remoteFs(remote, joinDir(dir, name));
 }
 
 // ---- Dossier de depart / detection des racines de partages -----------------
@@ -629,10 +702,10 @@ const RAW_ROOT_MARKERS = new Set([
 ]);
 
 // Liste les NOMS des sous-dossiers d'un dossier serveur, ou null si illisible.
-export async function remoteDirNames(dir: string): Promise<string[] | null> {
+export async function remoteDirNames(remote: string, dir: string): Promise<string[] | null> {
   try {
     const r = await rc<{ list: Entry[] }>("operations/list", {
-      ...listArgs("remote", dir),
+      ...listArgs(remote, dir),
       opt: { noModTime: true, dirsOnly: true },
       _config: { ConnectTimeout: "8s", Timeout: "8s", LowLevelRetries: 1 },
     });
@@ -649,15 +722,15 @@ export async function remoteDirNames(dir: string): Promise<string[] | null> {
 //      ressemble a un systeme de fichiers brut (sinon le serveur nous chroote
 //      deja sur les partages — cas Synology — et on ne change rien) ;
 //   3. la racine "/" par defaut.
-export async function resolveRemoteStart(startDir?: string): Promise<string> {
+export async function resolveRemoteStart(remote: string, startDir?: string): Promise<string> {
   if (startDir) {
-    const ok = await remoteDirNames(startDir);
+    const ok = await remoteDirNames(remote, startDir);
     if (ok !== null) return startDir;
   }
-  const rootNames = await remoteDirNames("/");
+  const rootNames = await remoteDirNames(remote, "/");
   if (rootNames && rootNames.some((n) => RAW_ROOT_MARKERS.has(n.toLowerCase()))) {
     for (const base of SHARE_BASES) {
-      const names = await remoteDirNames(base);
+      const names = await remoteDirNames(remote, base);
       if (names && names.length) return base;
     }
   }
@@ -773,13 +846,13 @@ export function parentDir(dir: string): string {
 
 // Fil d'Ariane cliquable : segments {label, path} du chemin courant.
 export function breadcrumb(
-  side: Side,
+  kind: SourceKind,
   dir: string,
-  // Nom affiche pour la racine (nom du serveur, « Macintosh HD »).
+  // Nom affiche pour la racine (nom du serveur, du telephone, « Macintosh HD »).
   rootLabel?: string,
 ): { label: string; path: string }[] {
   const crumbs: { label: string; path: string }[] = [];
-  if (side === "remote") {
+  if (kind !== "local") {
     crumbs.push({ label: rootLabel || t("common.server"), path: "/" });
     let acc = "/";
     for (const seg of trimSlashes(dir).split("/").filter(Boolean)) {

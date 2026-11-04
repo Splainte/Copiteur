@@ -79,8 +79,7 @@ export default {
 
   // Confirmation de suppression. {what} = « 3 fichiers » en gras.
   "pane.del.title": "Confirmation requise",
-  "pane.del.askLocal": "Voulez-vous vraiment supprimer {what} de « Ton PC » ?",
-  "pane.del.askRemote": "Voulez-vous vraiment supprimer {what} du serveur ?",
+  "pane.del.ask": "Voulez-vous vraiment supprimer {what} de « {source} » ?",
   "pane.del.computing": "Calcul du contenu…",
   "pane.del.atLeast": "au moins {what}",
   "pane.del.permanent": " — suppression définitive",

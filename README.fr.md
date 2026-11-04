@@ -7,6 +7,10 @@ Client de transfert de fichiers SFTP en double explorateur, façon FileZilla, mo
 un NAS ou un serveur à pleine vitesse — y compris quand il ne reste qu'**un seul gros
 fichier**, le cas où FileZilla plafonne.
 
+Chaque panneau affiche la source de son choix : l'ordinateur, un serveur mémorisé ou, sous
+macOS, un **téléphone Android branché en USB**. Toutes les combinaisons sont possibles :
+ordinateur ↔ serveur, serveur ↔ serveur, téléphone ↔ serveur, téléphone ↔ ordinateur.
+
 Windows et macOS (Apple Silicon), en français ou en anglais. Tauri v2 + React/TypeScript,
 rclone embarqué.
 
@@ -30,6 +34,20 @@ existe et propose de l'installer. Chaque mise à jour est signée ; une mise à 
 signature ne correspond pas est refusée.
 
 ## Ce que ça fait
+
+**Sources** — le titre de chaque panneau est un menu : *Ton Mac / Ton PC*, les téléphones
+branchés (macOS), les serveurs mémorisés, *Ajouter un serveur…*. Deux serveurs peuvent être
+ouverts en même temps, un de chaque côté. Les actions sur un serveur (modifier, renommer,
+oublier, se déconnecter) sont dans ce même menu.
+
+**Téléphone Android (macOS)** — branché en USB, en mode « Transfert de fichiers », il apparaît
+dans le menu, et un bouton de la barre du haut propose de l'ouvrir à gauche ou à droite. Copier depuis le téléphone
+vers un NAS passe directement du câble au réseau, sans copie temporaire sur le Mac. Un seul
+fichier à la fois côté téléphone (limite du protocole MTP). macOS réserve le téléphone à
+« Transfert d'images » dès le branchement : Copiteur passe alors par ce service (API
+ImageCaptureCore d'Apple) au lieu de le combattre. Fermer OpenMTP ou Android File Transfer
+s'ils tournent. Sous Windows,
+l'Explorateur gère déjà les téléphones : cette source n'y existe pas.
 
 **Transferts** — glisser-déposer entre les deux panneaux et Ctrl/Cmd+C · V, dans les deux sens.
 Lâcher sur un dossier copie dedans. Un dossier déposé est éclaté en un transfert par fichier.
@@ -115,6 +133,15 @@ transferts échouent. Copiteur reconnaît la signature (un md5 fait 32 hexadéci
 connexion en `disable_hashcheck` et relance. La taille reste vérifiée. Par serveur, remis à
 zéro à chaque connexion : ceux dont les empreintes marchent les gardent.
 
+**Une source = un remote rclone.** Chaque serveur connecté a le sien (`srv1:`, `srv2:`…) : deux
+serveurs coexistent, et une copie en file garde son serveur même si le panneau change de
+source. Un téléphone est présenté à rclone par `copiteur-mtp` (programme Go, sources dans
+`tauri/mtp/`, moteur MTP de [go-mtpfs](https://github.com/ganeshrvel/go-mtpfs), celui
+d'OpenMTP) comme un **serveur WebDAV local** (`tel1:`, 127.0.0.1 uniquement, jeton tiré au
+hasard) : toute la mécanique de copie (progression, annulation, reprises, conflits) s'applique
+sans réécriture. Côté téléphone : un flux, un fichier à la fois, et `IgnoreTimes` (le téléphone
+ne conserve pas les dates, rclone sauterait sinon un « Remplacer » à taille égale).
+
 **Délais courts** (`Timeout` 1 min au lieu de 5) pour échouer vite sur un lien mort et laisser
 la reprise travailler, plutôt que de rester pendu.
 
@@ -151,7 +178,7 @@ ligne de commande, que `ps` et le Gestionnaire des tâches exposent. Verrouillé
 de téléchargement est un jour compromis, puisque ce binaire finit dans l'installeur signé.
 
 **Seules les commandes rclone dont l'app se sert passent.** Le pont entre l'interface et
-rclone n'accepte que 16 méthodes de l'API, et refuse tout paramètre ou chemin qui ferait
+rclone n'accepte que les méthodes de l'API dont l'app se sert, et refuse tout paramètre ou chemin qui ferait
 lancer un programme par rclone (option SFTP `ssh`, remotes créés à la volée `:sftp,…:`,
 `core/command`…). Même une faille d'affichage future ne donnerait pas d'exécution de code.
 Couvert par des tests.
@@ -167,6 +194,10 @@ rangée dans le trousseau du système — Gestionnaire d'identifiants sous Windo
 sous macOS. Un fichier d'une ancienne version (mots de passe en clair) est converti au
 premier lancement. Sous macOS, l'app n'étant pas signée par un compte développeur Apple, le
 Trousseau redemande l'autorisation après chaque mise à jour (« Toujours autoriser »).
+
+**Le moteur des téléphones n'écoute que la machine** (127.0.0.1), derrière un jeton tiré au
+hasard et passé par l'environnement ; seul le backend crée les remotes des téléphones, jamais
+l'interface. Il s'arrête de lui-même si Copiteur disparaît.
 
 **La config rclone reste en mémoire** (`--config ""`) : le mot de passe du serveur courant
 n'est jamais écrit dans un `rclone.conf`.

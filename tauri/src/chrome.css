@@ -306,8 +306,7 @@
 
 /* ---- macOS : menus HTML restants (menu contextuel des fichiers…) ---------- */
 .app[data-os="macos"] .ctx-menu,
-.app[data-os="macos"] .crumb-menu,
-.app[data-os="macos"] .flyout {
+.app[data-os="macos"] .crumb-menu {
   border-radius: 12px;
   padding: 5px;
   -webkit-backdrop-filter: blur(30px) saturate(1.8);
@@ -463,10 +462,6 @@
   height: 100%;
   gap: 2px;
 }
-.w11-right > .server-btn {
-  margin-right: 4px;
-  max-width: 280px;
-}
 .w11-tool {
   position: relative;
   width: 36px;
@@ -520,7 +515,7 @@
   color: #fff;
 }
 
-/* Apparition des menus deroulants (cf. .flyout). */
+/* Apparition des menus deroulants (selecteur de source). */
 @keyframes flyout-in {
   from {
     opacity: 0;
@@ -740,8 +735,7 @@
 
 /* ---- Windows : menus ------------------------------------------------------ */
 .app[data-os="windows"] .ctx-menu,
-.app[data-os="windows"] .crumb-menu,
-.flyout {
+.app[data-os="windows"] .crumb-menu {
   border-radius: 8px;
   padding: 4px;
   border: 1px solid var(--cp-menu-stroke);
@@ -755,104 +749,6 @@
 .app[data-os="windows"] .ctx-item:hover:not(:disabled) {
   background: var(--w-subtle-hover);
   color: var(--w-text);
-}
-
-/* ---- Menu deroulant HTML (menu serveur sous Windows) ---------------------- */
-.flyout {
-  position: fixed;
-  z-index: 220;
-  min-width: 220px;
-  max-width: 320px;
-  animation: flyout-in 0.16s cubic-bezier(0, 0, 0, 1);
-}
-.flyout-item {
-  display: block;
-  width: 100%;
-  padding: 7px 12px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--cp-text);
-  font: inherit;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: default;
-}
-.flyout-item:hover:not(:disabled) {
-  background: var(--cp-control-hover);
-}
-.flyout-item:disabled {
-  opacity: 0.4;
-}
-.flyout-sep {
-  height: 1px;
-  margin: 4px 0;
-  background: var(--cp-stroke);
-}
-
-/* ---- Bouton serveur (barre de titre Windows) ------------------------------ */
-.server-btn {
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 10px 0 12px;
-  border-radius: 4px;
-  border: 1px solid var(--w-control-stroke);
-  border-bottom-color: var(--w-control-stroke-bottom);
-  background: var(--w-control);
-  color: var(--cp-text);
-  font: inherit;
-  cursor: default;
-  min-width: 0;
-}
-.server-btn:hover {
-  background: var(--w-control-hover);
-}
-.server-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--cp-text-muted);
-  opacity: 0.5;
-  flex: 0 0 auto;
-}
-.server-dot.is-on {
-  background: #3fb950;
-  opacity: 1;
-  box-shadow: 0 0 0 3px color-mix(in srgb, #3fb950 22%, transparent);
-}
-.server-dot.is-busy {
-  background: var(--cp-accent);
-  opacity: 1;
-  animation: dot-pulse 1s ease-in-out infinite;
-}
-@keyframes dot-pulse {
-  50% {
-    opacity: 0.35;
-  }
-}
-.server-texts {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-.server-label {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.server-caret {
-  width: 12px;
-  height: 12px;
-  margin-left: auto;
-  color: var(--cp-text-muted);
-  flex: 0 0 auto;
 }
 
 /* ---- Feuille « Nouvelle connexion » / « Modifier le serveur » ------------- */
@@ -1204,9 +1100,6 @@
     opacity 0.18s ease,
     transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.app .transfers-host.is-collapsed {
-  height: 48px;
-}
 .app .transfers-host.is-hidden {
   height: 0;
   margin-top: calc(-1 * var(--x-gap));
@@ -1231,7 +1124,7 @@
   height: 48px;
   padding: 0 10px 0 16px;
 }
-.xfer-island:not(.is-collapsed) .xfer-island-head {
+.xfer-island .xfer-island-head {
   border-bottom: 1px solid var(--x-sep);
 }
 .xfer-island-title {
@@ -1429,7 +1322,230 @@
   color: var(--x-warn, #e8930c);
 }
 
-.app .w11-right > .server-btn {
+
+/* ============================================================
+   SELECTEUR DE SOURCE (titre de chaque panneau) — macOS et Windows
+   Chaque panneau choisit ce qu'il affiche : l'ordinateur, un telephone
+   branche, un serveur memorise (cf. SourcePicker.tsx).
+   ============================================================ */
+.src-picker {
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: 4px;
+}
+.src-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  max-width: min(220px, 22vw);
+  min-width: 0;
+  padding: 0 7px 0 9px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--cp-text) 6%, transparent);
+  color: var(--cp-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: default;
+  transition: background-color 0.12s ease;
+}
+.src-btn:hover,
+.src-btn.is-open {
+  background: color-mix(in srgb, var(--cp-text) 11%, transparent);
+}
+/* Panneau actif : le selecteur prend la couleur d'accent (repere visuel du
+   panneau qui recoit le clavier, comme le titre en gras d'avant). */
+.explorer.is-active .src-btn {
+  background: color-mix(in srgb, var(--cp-accent) 15%, transparent);
+  color: color-mix(in srgb, var(--cp-accent) 70%, var(--cp-text));
+}
+.explorer.is-active .src-btn:hover,
+.explorer.is-active .src-btn.is-open {
+  background: color-mix(in srgb, var(--cp-accent) 23%, transparent);
+}
+.src-btn.is-empty {
+  font-weight: 500;
+}
+.src-btn:focus-visible {
+  outline: 2px solid var(--cp-accent);
+  outline-offset: 1px;
+}
+.src-btn-icon {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
-  max-width: 260px;
+}
+.src-btn-icon .ctx-spinner {
+  width: 12px;
+  height: 12px;
+}
+.src-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.src-btn-caret {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  opacity: 0.6;
+}
+.src-btn-caret .uicon {
+  width: 11px;
+  height: 11px;
+}
+.app[data-os="windows"] .src-btn {
+  height: 30px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+/* Le menu (meme habillage que les menus contextuels de chaque systeme). */
+.ctx-menu.src-menu {
+  z-index: 60;
+  min-width: 250px;
+  max-width: 340px;
+  overflow-y: auto;
+  animation: flyout-in 0.14s cubic-bezier(0, 0, 0, 1);
+}
+.src-head {
+  padding: 8px 10px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cp-text-muted);
+  white-space: nowrap;
+}
+.src-head:first-child {
+  padding-top: 4px;
+}
+.src-note {
+  padding: 3px 10px 5px 52px;
+  font-size: 12px;
+  color: var(--cp-text-muted);
+}
+.ctx-item.src-item {
+  display: grid;
+  grid-template-columns: 12px 16px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 7px;
+}
+.src-check {
+  font-size: 11px;
+  text-align: center;
+}
+.src-icon {
+  display: grid;
+  place-items: center;
+}
+.src-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.src-detail {
+  margin-left: 14px;
+  font-size: 11px;
+  color: var(--cp-text-muted);
+  white-space: nowrap;
+}
+.ctx-item.src-item:hover:not(:disabled) .src-detail,
+.ctx-item.src-item:focus-visible .src-detail {
+  color: inherit;
+  opacity: 0.75;
+}
+/* Navigation au clavier : l'entree visee a le meme rendu que le survol. */
+.ctx-item.src-item:focus-visible {
+  outline: none;
+  background: var(--cp-accent);
+  color: var(--cp-accent-text);
+}
+.app[data-os="windows"] .ctx-item.src-item:focus-visible {
+  background: var(--w-subtle-hover);
+  color: var(--w-text);
+}
+
+/* Message a la place de la liste (aucune source, connexion, telephone
+   verrouille ou debranche…), avec son bouton d'action. */
+.pane-msg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 400px;
+  margin: 0 auto;
+  line-height: 1.45;
+  text-align: center;
+}
+.pane-msg .ctx-spinner {
+  width: 16px;
+  height: 16px;
+}
+.pane-msg-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pane-msg-btn {
+  min-width: 120px;
+}
+
+/* Trajet d'un transfert (« Pixel 9 Pro → NAS Neufsept · RUSHS »). */
+.xfer-route {
+  flex: 0 0 26%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--cp-text-muted);
+  font-size: 11.5px;
+}
+
+/* Fenetre etroite : la barre d'adresse garde une largeur utile, c'est le nom
+   de la source qui passe en ellipse. Le fil d'Ariane ne deborde jamais sur la
+   loupe. */
+.explorer-head .addr-wrap {
+  min-width: 80px;
+}
+.explorer-head .src-picker {
+  min-width: 112px;
+}
+.explorer-head .crumbs {
+  overflow: hidden;
+}
+/* Consignes et erreurs dans un panneau : plus lisibles que le simple « dossier
+   vide » (meme couleur secondaire que le reste de l'interface). */
+.app[data-os="macos"] .pane-msg-text {
+  color: var(--m-text-2);
+}
+.app[data-os="windows"] .pane-msg-text {
+  color: var(--w-text-2, var(--cp-text-muted));
+}
+/* Colonne « flux » de largeur fixe, presente sur toutes les lignes de la file :
+   le trajet reste aligne d'une ligne a l'autre. */
+.xfer-row .xfer-streams {
+  flex: 0 0 52px;
+}
+/* Fenetre etroite (moins de ~1000 px, donc des panneaux d'environ 450 px) :
+   le bouton « Suivant » s'efface pour laisser sa place au selecteur et a la
+   barre d'adresse (requete sur la FENETRE et non sur le panneau : une requete
+   de conteneur ferait du panneau le repere des menus en position fixe). */
+@media (max-width: 1000px) {
+  .explorer-head .nav-fwd {
+    display: none;
+  }
+  .explorer-head .src-picker {
+    min-width: 104px;
+  }
+}
+/* Les boutons de l'en-tete gardent leur taille : seuls le nom de la source et
+   le fil d'Ariane cedent de la place. */
+.explorer-head > .nav-btn,
+.explorer-head > .view-btns,
+.explorer-head > .nav-btns {
+  flex-shrink: 0;
 }
