@@ -153,7 +153,7 @@ export default {
   "app.phone.unplugged": "{name} est débranché. Rebranche-le pour continuer.",
   "app.phone.connecting": "Connexion à {name}…",
   "app.phone.locked": "Déverrouille {name}, puis choisis « Transfert de fichiers » dans la notification USB du téléphone.",
-  "app.phone.busy": "{name} est déjà utilisé par un autre programme (OpenMTP, Android File Transfer, Transfert d'images…). Ferme-le, puis réessaie.",
+  "app.phone.busy": "{name} est déjà utilisé par un autre programme (OpenMTP, Android File Transfer…). Ferme-le, puis clique sur Réessayer.",
   "app.phone.error": "Impossible de lire {name} : {err}",
   "app.phone.errorUnknown": "Impossible de lire {name}. Débranche-le puis rebranche-le.",
   "app.phone.bannerReady": "branché en USB · {used} utilisés",

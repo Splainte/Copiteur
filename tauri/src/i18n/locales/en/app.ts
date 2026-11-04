@@ -143,7 +143,7 @@ export default {
   "app.phone.unplugged": "{name} is unplugged. Plug it back in to continue.",
   "app.phone.connecting": "Connecting to {name}…",
   "app.phone.locked": "Unlock {name}, then choose “File transfer” in the phone's USB notification.",
-  "app.phone.busy": "{name} is already used by another program (OpenMTP, Android File Transfer, Image Capture…). Quit it, then try again.",
+  "app.phone.busy": "{name} is already used by another program (OpenMTP, Android File Transfer…). Quit it, then click Retry.",
   "app.phone.error": "Cannot read {name}: {err}",
   "app.phone.errorUnknown": "Cannot read {name}. Unplug it and plug it back in.",
   "app.phone.bannerReady": "plugged in over USB · {used} used",

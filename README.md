@@ -42,8 +42,9 @@ actions (edit, rename, forget, disconnect) live in the same menu.
 **Android phone (macOS)** — plugged in over USB in “File transfer” mode, it shows up in the menu
 and a banner offers to open it on the left or the right. Copying from the phone to a NAS goes
 straight from the cable to the network, with no temporary copy on the Mac. One file at a time
-on the phone side (an MTP limit). Quit OpenMTP, Android File Transfer and Image Capture, which
-can keep the phone to themselves. On Windows, File Explorer already handles phones: this
+on the phone side (an MTP limit). macOS hands the phone to Image Capture as soon as it is plugged
+in: Copiteur stops that service (macOS restarts it by itself) when opening the phone. Quit
+OpenMTP or Android File Transfer if they are running. On Windows, File Explorer already handles phones: this
 source does not exist there.
 
 **Transfers** — drag and drop between the two panes and Ctrl/Cmd+C · V, in both directions.
