@@ -125,7 +125,9 @@ func (s *Server) dav(w http.ResponseWriter, r *http.Request, id, sub string) {
 		_ = rc.SetReadDeadline(time.Time{})
 		_ = rc.SetWriteDeadline(time.Time{})
 	}()
-	ctx := r.Context()
+	// toute la requete est epinglee sur la session MTP courante : si elle
+	// est reinitialisee en cours de route, 503 plutot qu'un mauvais handle
+	ctx := d.Pin(r.Context())
 	p := core.CleanPath(sub)
 	var err error
 	switch r.Method {

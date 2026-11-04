@@ -59,6 +59,8 @@ const (
 	DefaultMaxPad         = 256 << 20
 	DefaultInfoBatch      = 32
 	DefaultIncrementalMin = 256
+	DefaultFullRefreshAge = 10 * time.Minute
+	DefaultRecentAge      = 10 * time.Minute
 )
 
 // Device est un appareil MTP vu par la couche WebDAV. Toutes les
@@ -74,6 +76,13 @@ type Device struct {
 	CacheTTL  time.Duration
 	MaxPad    int64 // upload coupe : on complete avec des zeros jusqu'a cette taille, au-dela on resynchronise
 	InfoBatch int   // nombre de GetObjectInfo par prise du verrou pendant un listing
+	// FullRefreshAge : au-dela, un gros dossier est relu en entier (pas par
+	// difference), pour rattraper les fichiers modifies sur le telephone.
+	FullRefreshAge time.Duration
+	// RecentAge : dans un rafraichissement par difference, les objets
+	// modifies il y a moins de RecentAge (ou de taille 0 : en cours
+	// d'ecriture) sont relus quand meme.
+	RecentAge time.Duration
 	// IncrementalMin : un dossier en cache d'au moins ce nombre d'objets est
 	// rafraichi par difference de handles (un seul GetObjectHandles puis
 	// GetObjectInfo des seuls nouveaux handles) au lieu d'etre relu en
@@ -97,6 +106,10 @@ type Device struct {
 	mu       sync.Mutex // verrou des transactions MTP
 	conn     Conn       // protege par mu
 	closeReq atomic.Bool
+	// sess change a chaque nouvelle session MTP (Attach, Resync, perte de
+	// l'appareil) : les handles d'une session ne valent rien dans la
+	// suivante. Modifie sous mu. Voir Pin.
+	sess atomic.Uint64
 
 	cacheMu  sync.Mutex
 	cache    map[dirKey]*dirEntry
@@ -111,9 +124,10 @@ type dirKey struct {
 }
 
 type dirEntry struct {
-	objs  []Object
-	at    time.Time
-	stale bool // modifie par nous : a rafraichir (par difference si gros)
+	objs   []Object
+	at     time.Time
+	fullAt time.Time // derniere lecture complete (sans difference)
+	stale  bool      // modifie par nous : a rafraichir (par difference si gros)
 }
 
 type cacheGen struct{ k, epoch uint64 }
@@ -134,6 +148,8 @@ func NewDevice(id string) *Device {
 		MaxPad:         DefaultMaxPad,
 		InfoBatch:      DefaultInfoBatch,
 		IncrementalMin: DefaultIncrementalMin,
+		FullRefreshAge: DefaultFullRefreshAge,
+		RecentAge:      DefaultRecentAge,
 		state:          StateConnecting,
 		cache:          map[dirKey]*dirEntry{},
 		inflight:       map[dirKey]*flight{},
@@ -191,6 +207,7 @@ func (d *Device) Attach(c Conn, storages []Storage) {
 	old := d.conn
 	d.conn = c
 	d.closeReq.Store(false)
+	d.sess.Add(1)
 	d.mu.Unlock()
 	if old != nil && old != c {
 		_ = old.Close()
@@ -256,7 +273,7 @@ func lockWithin(mu *sync.Mutex, wait time.Duration) bool {
 // WithConn execute fn sous le verrou des transactions (pour les
 // gestionnaires : re-interrogation des stockages d'un appareil verrouille).
 func (d *Device) WithConn(fn func(c Conn) error) error {
-	return d.do(fn)
+	return d.do(context.Background(), fn)
 }
 
 // RefreshStorages relit la liste des stockages. Si wait est faux et qu'une
@@ -296,10 +313,42 @@ func (d *Device) storageList() ([]Storage, time.Time) {
 	return d.storages, d.storagesAt
 }
 
-// do execute fn sous le verrou des transactions.
-func (d *Device) do(fn func(c Conn) error) error {
+type sessKey struct{ d *Device }
+
+// Pin attache a ctx la session MTP courante. Toute transaction faite
+// ensuite avec ce ctx echoue (ErrDesync -> 503, rclone reessaie) si la
+// session a change entre-temps (Resync apres un upload coupe, reouverture) :
+// les handles resolus avant ne designent plus forcement le meme objet.
+// Sans effet si ctx est deja epingle.
+func (d *Device) Pin(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(sessKey{d}).(uint64); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, sessKey{d}, d.sess.Load())
+}
+
+// repin epingle ctx sur la session courante (nettoyage apres notre propre
+// Resync).
+func (d *Device) repin(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sessKey{d}, d.sess.Load())
+}
+
+// sessOKLocked verifie la session epinglee (mu tenu).
+func (d *Device) sessOKLocked(ctx context.Context) error {
+	if v, ok := ctx.Value(sessKey{d}).(uint64); ok && v != d.sess.Load() {
+		return fmt.Errorf("%w: the MTP session was reset during the request, retry", ErrDesync)
+	}
+	return nil
+}
+
+// do execute fn sous le verrou des transactions, si la session epinglee
+// dans ctx est toujours la bonne.
+func (d *Device) do(ctx context.Context, fn func(c Conn) error) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := d.sessOKLocked(ctx); err != nil {
+		return err
+	}
 	return d.doLocked(fn)
 }
 
@@ -324,6 +373,7 @@ func (d *Device) doLocked(fn func(c Conn) error) error {
 func (d *Device) goneLocked(err error) {
 	c := d.conn
 	d.conn = nil
+	d.sess.Add(1)
 	if c != nil {
 		_ = c.Close()
 	}
@@ -414,11 +464,28 @@ func (d *Device) list(ctx context.Context, k dirKey) ([]Object, error) {
 	return d.listEmit(ctx, k, nil)
 }
 
+// emitError : erreur du consommateur d'un listing en flux (client parti,
+// ecriture impossible). Ce n'est pas une erreur de l'appareil : ceux qui
+// attendaient la meme lecture la refont au lieu d'echouer.
+type emitError struct{ err error }
+
+func (e *emitError) Error() string { return "listing consumer: " + e.err.Error() }
+func (e *emitError) Unwrap() error { return e.err }
+
 // listEmit est list avec, si emit != nil, transmission des objets au fur
 // et a mesure de leur lecture (PROPFIND en flux : des octets partent vers
 // le client meme si le dossier met des minutes a etre lu). Une erreur
 // d'emit interrompt la lecture.
 func (d *Device) listEmit(ctx context.Context, k dirKey, emit func([]Object) error) ([]Object, error) {
+	if emit != nil {
+		user := emit
+		emit = func(objs []Object) error {
+			if err := user(objs); err != nil {
+				return &emitError{err}
+			}
+			return nil
+		}
+	}
 	for {
 		d.cacheMu.Lock()
 		e := d.cache[k]
@@ -433,8 +500,9 @@ func (d *Device) listEmit(ctx context.Context, k dirKey, emit func([]Object) err
 			return objs, nil
 		}
 		var prev []Object
+		var prevFull time.Time
 		if e != nil {
-			prev = e.objs
+			prev, prevFull = e.objs, e.fullAt
 		}
 		cur := d.inflight[k]
 		if emit == nil && cur != nil && cur.gen == d.genLocked(k) {
@@ -446,8 +514,12 @@ func (d *Device) listEmit(ctx context.Context, k dirKey, emit func([]Object) err
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
-			if cur.err != nil && (errors.Is(cur.err, context.Canceled) || errors.Is(cur.err, context.DeadlineExceeded)) {
-				continue // le client de cette lecture est parti, pas nous
+			var ee *emitError
+			if cur.err != nil && (errors.Is(cur.err, context.Canceled) || errors.Is(cur.err, context.DeadlineExceeded) ||
+				errors.As(cur.err, &ee) || errors.Is(cur.err, ErrDesync)) {
+				// echec propre a l'autre requete (client parti, session
+				// epinglee perimee) : on relit nous-memes
+				continue
 			}
 			return cur.objs, cur.err
 		}
@@ -457,14 +529,18 @@ func (d *Device) listEmit(ctx context.Context, k dirKey, emit func([]Object) err
 		}
 		d.cacheMu.Unlock()
 
-		objs, err := d.fetch(ctx, k, prev, emit)
+		objs, full, err := d.fetch(ctx, k, prev, prevFull, emit)
 
 		d.cacheMu.Lock()
 		if d.inflight[k] == f {
 			delete(d.inflight, k)
 		}
 		if err == nil && f.gen == d.genLocked(k) {
-			d.cache[k] = &dirEntry{objs: objs, at: time.Now()}
+			ne := &dirEntry{objs: objs, at: time.Now(), fullAt: prevFull}
+			if full {
+				ne.fullAt = ne.at
+			}
+			d.cache[k] = ne
 		}
 		d.cacheMu.Unlock()
 		f.objs, f.err = objs, err
@@ -473,30 +549,59 @@ func (d *Device) listEmit(ctx context.Context, k dirKey, emit func([]Object) err
 	}
 }
 
+// updateCached remplace (ou retire si gone) un objet dans le cache de son
+// dossier, apres une relecture fraiche.
+func (d *Device) updateCached(k dirKey, o Object, gone bool) {
+	d.cacheMu.Lock()
+	defer d.cacheMu.Unlock()
+	e := d.cache[k]
+	if e == nil {
+		return
+	}
+	objs := make([]Object, 0, len(e.objs))
+	for _, x := range e.objs {
+		if x.Handle != o.Handle {
+			objs = append(objs, x)
+		} else if !gone {
+			objs = append(objs, o)
+		}
+	}
+	e.objs = objs
+}
+
 // fetch lit un dossier sur l'appareil : GetObjectHandles puis un
-// GetObjectInfo par enfant (sauf ceux deja connus si le dossier est gros,
-// voir IncrementalMin), par lots, en rendant le verrou entre deux lots pour
-// qu'un telechargement en cours continue d'avancer.
-func (d *Device) fetch(ctx context.Context, k dirKey, prev []Object, emit func([]Object) error) ([]Object, error) {
+// GetObjectInfo par enfant, par lots, en rendant le verrou entre deux lots
+// pour qu'un telechargement en cours continue d'avancer.
+//
+// Gros dossier deja lu (voir IncrementalMin) : seuls sont relus les
+// nouveaux handles et les objets recents (modifies depuis moins de
+// RecentAge, ou de taille 0 : photo/video peut-etre en cours d'ecriture) ;
+// relecture complete si la derniere date de plus de FullRefreshAge.
+// full = lecture complete.
+func (d *Device) fetch(ctx context.Context, k dirKey, prev []Object, prevFull time.Time, emit func([]Object) error) (objs []Object, full bool, err error) {
 	var handles []uint32
-	err := d.do(func(c Conn) error {
+	err = d.do(ctx, func(c Conn) error {
 		var err error
 		handles, err = c.Handles(k.storage, k.parent)
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	objs := make([]Object, 0, len(handles))
+	objs = make([]Object, 0, len(handles))
 	todo := handles
-	if d.IncrementalMin > 0 && len(prev) >= d.IncrementalMin {
+	full = true
+	if d.IncrementalMin > 0 && len(prev) >= d.IncrementalMin && time.Since(prevFull) < d.FullRefreshAge {
+		full = false
 		known := make(map[uint32]Object, len(prev))
 		for _, o := range prev {
 			known[o.Handle] = o
 		}
+		recent := time.Now().Add(-d.RecentAge)
 		todo = nil
 		for _, h := range handles {
-			if o, ok := known[h]; ok {
+			o, ok := known[h]
+			if ok && (o.IsDir || (o.Size > 0 && o.ModTime.Before(recent) && !o.ModTime.IsZero())) {
 				objs = append(objs, o)
 			} else {
 				todo = append(todo, h)
@@ -504,18 +609,18 @@ func (d *Device) fetch(ctx context.Context, k dirKey, prev []Object, emit func([
 		}
 		if emit != nil && len(objs) > 0 {
 			if err := emit(objs); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 	}
 	batch := max(d.InfoBatch, 1)
 	for i := 0; i < len(todo); i += batch {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		end := min(i+batch, len(todo))
 		start := len(objs)
-		err := d.do(func(c Conn) error {
+		err := d.do(ctx, func(c Conn) error {
 			for _, h := range todo[i:end] {
 				o, err := c.Info(h)
 				if errors.Is(err, ErrNotFound) {
@@ -532,13 +637,13 @@ func (d *Device) fetch(ctx context.Context, k dirKey, prev []Object, emit func([
 			return nil
 		})
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if emit != nil && len(objs) > start {
 			if err := emit(objs[start:]); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
 	}
-	return objs, nil
+	return objs, full, nil
 }

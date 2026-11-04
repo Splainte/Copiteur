@@ -479,7 +479,7 @@ func (d *transport) bulkWrite(hdr *usbBulkHeader, r io.Reader, size int64, progr
 	// Android (MtpFfsHandle::receiveFile) abandonne alors l'envoi (< 4 Gio)
 	// ou, pour un fichier >= 4 Gio (longueur 0xFFFFFFFF), prend le paquet
 	// court pour la fin du fichier et le tronque sans erreur.
-	buf := make([]byte, sendChunkSize)
+	buf := make([]byte, min(size, sendChunkSize))
 	var lastTransfer int
 
 	for size > 0 {

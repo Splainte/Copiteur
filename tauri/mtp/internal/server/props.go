@@ -72,6 +72,12 @@ func (s *Server) propfind(ctx context.Context, w http.ResponseWriter, r *http.Re
 	if err != nil {
 		return err
 	}
+	if !n.IsDir() {
+		// taille/date fraiches (rclone verifie la taille apres un envoi)
+		if n, err = d.Refresh(ctx, n); err != nil {
+			return err
+		}
+	}
 	const head = `<?xml version="1.0" encoding="utf-8"?>` + "\n" + `<D:multistatus xmlns:D="DAV:">`
 	if depth == "0" || !n.IsDir() {
 		var b bytes.Buffer
@@ -230,6 +236,13 @@ func (s *Server) get(ctx context.Context, w http.ResponseWriter, r *http.Request
 	n, err := d.Resolve(ctx, p)
 	if err != nil {
 		return err
+	}
+	if !n.IsDir() {
+		// taille fraiche : le cache d'un gros dossier peut dater (photo
+		// modifiee sur le telephone) et la reponse serait tronquee
+		if n, err = d.Refresh(ctx, n); err != nil {
+			return err
+		}
 	}
 	if n.IsDir() {
 		w.Header().Set("Allow", "OPTIONS, PROPFIND, DELETE, MKCOL, MOVE")

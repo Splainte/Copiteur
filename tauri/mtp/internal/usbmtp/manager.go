@@ -40,9 +40,12 @@ type entry struct {
 
 	ignored bool // pas un appareil MTP
 	adb     bool // telephone sans interface MTP (mode "recharge"), vu par son interface ADB
-	working bool // une goroutine d'ouverture/rafraichissement tourne
-	removed bool
-	nextTry time.Time
+	// fallbackID : identifiant vid-pid-bus-adresse faute de n° de serie
+	// (premiere ouverture ratee) ; remplace des que le n° est connu.
+	fallbackID bool
+	working    bool // une goroutine d'ouverture/rafraichissement tourne
+	removed    bool
+	nextTry    time.Time
 }
 
 // Manager surveille le bus USB et gere les sessions MTP.
@@ -385,6 +388,13 @@ func (m *Manager) open(e *entry) {
 	if serial == "" {
 		serial = strings.TrimSpace(info.SerialNumber)
 	}
+	m.mu.Lock()
+	switchID := e.dev != nil && e.fallbackID && serial != ""
+	m.mu.Unlock()
+	if switchID {
+		// identifiant provisoire (echec precedent) -> identifiant stable
+		m.dropDevice(e)
+	}
 	dev := devFor(serial)
 	name := strings.TrimSpace(info.Model)
 	if name == "" {
@@ -491,6 +501,7 @@ func (m *Manager) ensureDevice(e *entry, serial, product, manufacturer string) *
 	}
 	m.mu.Lock()
 	e.dev = dev
+	e.fallbackID = strings.TrimSpace(serial) == ""
 	m.mu.Unlock()
 	log.Printf("device %s detected (%s)", id, e.key)
 	return dev

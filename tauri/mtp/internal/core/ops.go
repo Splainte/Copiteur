@@ -10,6 +10,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 var bufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
@@ -19,6 +21,7 @@ var bufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 // l'appareil ne sait pas lire partiellement ce fichier, une seule
 // transaction GetObject (verrou tenu tout du long).
 func (d *Device) ReadRange(ctx context.Context, n Node, off, length int64, w io.Writer) error {
+	ctx = d.Pin(ctx)
 	if n.kind != nodeObject || n.Obj.IsDir {
 		return ErrIsDir
 	}
@@ -27,12 +30,12 @@ func (d *Device) ReadRange(ctx context.Context, n Node, off, length int64, w io.
 	}
 	h := n.Obj.Handle
 	partial := false
-	if err := d.do(func(c Conn) error { partial = c.PartialRead(n.Obj.Size); return nil }); err != nil {
+	if err := d.do(ctx, func(c Conn) error { partial = c.PartialRead(n.Obj.Size); return nil }); err != nil {
 		return err
 	}
 	if !partial {
 		ww := &windowWriter{w: w, skip: off, remain: length}
-		if err := d.do(func(c Conn) error { return c.ReadAll(h, ww) }); err != nil {
+		if err := d.do(ctx, func(c Conn) error { return c.ReadAll(h, ww) }); err != nil {
 			return err
 		}
 		if ww.err != nil {
@@ -52,7 +55,7 @@ func (d *Device) ReadRange(ctx context.Context, n Node, off, length int64, w io.
 		}
 		want := min(chunk, length)
 		buf.Reset()
-		err := d.do(func(c Conn) error { return c.ReadPartial(h, off, uint32(want), buf) })
+		err := d.do(ctx, func(c Conn) error { return c.ReadPartial(h, off, uint32(want), buf) })
 		if err != nil {
 			return err
 		}
@@ -150,8 +153,14 @@ func (p *padReader) Read(b []byte) (int, error) {
 }
 
 // parentFor resout le dossier qui doit contenir un nouvel element.
+//
+// Le nom renvoye est normalise en NFC : rclone sur macOS envoie les noms du
+// disque local en NFD ("e" + accent combinant), alors qu'Android et le
+// reste du monde ecrivent en NFC. Seuls les noms CREES sont normalises ; la
+// recherche d'objets existants essaie le nom brut puis sa forme NFC.
 func (d *Device) parentFor(ctx context.Context, p string) (Node, string, error) {
 	parentPath, name := SplitPath(p)
+	name = norm.NFC.String(name)
 	if err := ValidName(name); err != nil {
 		return Node{}, "", err
 	}
@@ -174,6 +183,7 @@ func (d *Device) parentFor(ctx context.Context, p string) (Node, string, error) 
 // Put cree ou remplace le fichier p avec size octets lus dans body.
 // created = true si le fichier n'existait pas.
 func (d *Device) Put(ctx context.Context, p string, size int64, mtime time.Time, body io.Reader) (created bool, err error) {
+	ctx = d.Pin(ctx)
 	pn, name, err := d.parentFor(ctx, p)
 	if err != nil {
 		return false, err
@@ -182,7 +192,10 @@ func (d *Device) Put(ctx context.Context, p string, size int64, mtime time.Time,
 	if err != nil {
 		return false, err
 	}
-	existing, exists := findName(objs, name)
+	// Collision au sens du stockage Android (insensible a la casse) : PUT
+	// "A.jpg" quand seul "a.jpg" existe remplace "a.jpg" (le telephone
+	// refuserait de creer le second).
+	existing, exists := findCollision(objs, name)
 	if exists && existing.IsDir {
 		return false, fmt.Errorf("%w: %s", ErrIsDir, p)
 	}
@@ -190,11 +203,12 @@ func (d *Device) Put(ctx context.Context, p string, size int64, mtime time.Time,
 	defer d.invalidate(key)
 	dst := joinPath(pn.Path, name)
 
-	created, cleanup, err := d.putLocked(key, name, existing, exists, size, mtime, body)
+	created, cleanup, err := d.putLocked(ctx, key, name, existing, exists, size, mtime, body)
 	if cleanup {
-		// Nettoyage par CHEMIN, verrou rendu, cache vide : apres un
-		// Resync les handles de l'ancienne session ne sont plus fiables.
-		if cerr := d.deleteFileByPath(context.WithoutCancel(ctx), dst); cerr != nil {
+		// Nettoyage par CHEMIN, verrou rendu, cache vide, epingle sur la
+		// NOUVELLE session : apres un Resync les handles de l'ancienne
+		// session ne sont plus fiables.
+		if cerr := d.deleteFileByPath(d.repin(context.WithoutCancel(ctx)), dst); cerr != nil {
 			log.Printf("WARNING: could not delete the incomplete file %q: %v (it may remain on the phone)", dst, cerr)
 			return false, fmt.Errorf("%w (and the incomplete file could not be deleted: %v)", err, cerr)
 		}
@@ -205,9 +219,12 @@ func (d *Device) Put(ctx context.Context, p string, size int64, mtime time.Time,
 // putLocked fait l'envoi sous le verrou. cleanup = un fichier incomplet a
 // peut-etre ete laisse a l'emplacement de destination et doit etre
 // supprime par chemin (apres Resync).
-func (d *Device) putLocked(key dirKey, name string, existing Object, exists bool, size int64, mtime time.Time, body io.Reader) (created, cleanup bool, err error) {
+func (d *Device) putLocked(ctx context.Context, key dirKey, name string, existing Object, exists bool, size int64, mtime time.Time, body io.Reader) (created, cleanup bool, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := d.sessOKLocked(ctx); err != nil {
+		return false, false, err // key/existing viennent d'une session perimee
+	}
 	if exists {
 		// MTP ne sait pas ecraser : on supprime d'abord.
 		//
@@ -220,7 +237,7 @@ func (d *Device) putLocked(key dirKey, name string, existing Object, exists bool
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			return false, false, err
 		}
-		d.invalidate(key)
+		d.forget(key, existing.Handle)
 	}
 	pr := &padReader{r: body, size: size, maxPad: d.MaxPad}
 	var h uint32
@@ -229,6 +246,11 @@ func (d *Device) putLocked(key dirKey, name string, existing Object, exists bool
 		h, err = c.Send(key.storage, key.parent, name, size, mtime, pr)
 		return err
 	})
+	if h != 0 {
+		// au cas ou l'appareil reutiliserait un handle : jamais d'infos
+		// en cache pour l'objet qu'on vient de creer
+		d.forget(key, h)
+	}
 	if err == nil && !pr.short {
 		return !exists, false, nil
 	}
@@ -283,6 +305,7 @@ func (d *Device) putLocked(key dirKey, name string, existing Object, exists bool
 // listings ferait lire ou supprimer un autre objet). Appele avec mu tenu.
 func (d *Device) resyncLocked() error {
 	rerr := d.doLocked(func(c Conn) error { return c.Resync() })
+	d.sess.Add(1) // les requetes en cours (handles resolus avant) -> 503
 	d.invalidateAll()
 	if rerr != nil && !errors.Is(rerr, ErrGone) && !errors.Is(rerr, ErrNotReady) {
 		d.goneLocked(fmt.Errorf("%w: resync failed: %v", ErrGone, rerr))
@@ -307,7 +330,7 @@ func (d *Device) deleteFileByPath(ctx context.Context, p string) error {
 			return nil
 		}
 		log.Printf("deleting incomplete file %q", p)
-		err = d.do(func(c Conn) error { return c.Delete(n.Obj.Handle) })
+		err = d.do(ctx, func(c Conn) error { return c.Delete(n.Obj.Handle) })
 		d.invalidate(n.parent)
 		if err == nil || errors.Is(err, ErrNotFound) {
 			return nil
@@ -317,7 +340,11 @@ func (d *Device) deleteFileByPath(ctx context.Context, p string) error {
 }
 
 // Delete supprime un fichier ou un dossier (recursif).
+//
+// Recherche EXACTE (nom brut, puis forme NFC) : jamais insensible a la
+// casse, sinon un rclone sync qui supprime "a.jpg" effacerait "A.jpg".
 func (d *Device) Delete(ctx context.Context, p string) error {
+	ctx = d.Pin(ctx)
 	n, err := d.Resolve(ctx, p)
 	if err != nil {
 		return err
@@ -326,16 +353,15 @@ func (d *Device) Delete(ctx context.Context, p string) error {
 		return fmt.Errorf("%w: cannot delete a storage root", ErrForbidden)
 	}
 	err = d.deleteObj(ctx, n.Obj)
-	if n.Obj.IsDir {
-		d.invalidateAll()
-	} else {
-		d.invalidate(n.parent)
-	}
+	// Seul le dossier parent change. Pour un dossier, les listings en cache
+	// de ses descendants deviennent orphelins (handles supprimes, jamais
+	// reutilises) : inutile de vider tout le cache (DCIM a relire...).
+	d.forget(n.parent, n.Obj.Handle)
 	return err
 }
 
 func (d *Device) deleteObj(ctx context.Context, o Object) error {
-	err := d.do(func(c Conn) error { return c.Delete(o.Handle) })
+	err := d.do(ctx, func(c Conn) error { return c.Delete(o.Handle) })
 	if err == nil || errors.Is(err, ErrNotFound) {
 		return nil
 	}
@@ -344,7 +370,7 @@ func (d *Device) deleteObj(ctx context.Context, o Object) error {
 	}
 	// Repli : suppression manuelle du contenu puis du dossier.
 	log.Printf("DeleteObject on folder %q failed (%v), deleting recursively", o.Name, err)
-	children, ferr := d.fetch(ctx, dirKey{storage: o.StorageID, parent: o.Handle}, nil, nil)
+	children, _, ferr := d.fetch(ctx, dirKey{storage: o.StorageID, parent: o.Handle}, nil, time.Time{}, nil)
 	if ferr != nil {
 		return ferr
 	}
@@ -353,7 +379,7 @@ func (d *Device) deleteObj(ctx context.Context, o Object) error {
 			return err
 		}
 	}
-	err = d.do(func(c Conn) error { return c.Delete(o.Handle) })
+	err = d.do(ctx, func(c Conn) error { return c.Delete(o.Handle) })
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
@@ -362,6 +388,7 @@ func (d *Device) deleteObj(ctx context.Context, o Object) error {
 
 // Mkdir cree un dossier.
 func (d *Device) Mkdir(ctx context.Context, p string) error {
+	ctx = d.Pin(ctx)
 	if _, err := d.Resolve(ctx, p); err == nil {
 		// existe deja (y compris la racine ou un stockage) : 405
 		return fmt.Errorf("%w: %s", ErrExists, p)
@@ -374,12 +401,12 @@ func (d *Device) Mkdir(ctx context.Context, p string) error {
 	if err != nil {
 		return err
 	}
-	if _, ok := findName(objs, name); ok {
+	if _, ok := findCollision(objs, name); ok {
 		return fmt.Errorf("%w: %s", ErrExists, p)
 	}
 	key := pn.key()
 	defer d.invalidate(key)
-	return d.do(func(c Conn) error {
+	return d.do(ctx, func(c Conn) error {
 		_, err := c.CreateFolder(key.storage, key.parent, name)
 		return err
 	})
@@ -397,7 +424,8 @@ func (d *Device) prepareDest(ctx context.Context, src Node, dst string, overwrit
 	if err != nil {
 		return Node{}, "", false, err
 	}
-	existing, exists := findName(objs, name)
+	// collision au sens du stockage (insensible a la casse)
+	existing, exists := findCollision(objs, name)
 	if exists && existing.Handle == src.Obj.Handle {
 		// meme objet (changement de casse seulement) : pas un ecrasement
 		return pn, name, false, nil
@@ -409,11 +437,7 @@ func (d *Device) prepareDest(ctx context.Context, src Node, dst string, overwrit
 		if err := d.deleteObj(ctx, existing); err != nil {
 			return Node{}, "", true, err
 		}
-		if existing.IsDir {
-			d.invalidateAll()
-		} else {
-			d.invalidate(pn.key())
-		}
+		d.forget(pn.key(), existing.Handle)
 	}
 	return pn, name, exists, nil
 }
@@ -424,6 +448,7 @@ func isInside(child, parent string) bool {
 
 // Move deplace/renomme src vers dst.
 func (d *Device) Move(ctx context.Context, src, dst string, overwrite bool) (existed bool, err error) {
+	ctx = d.Pin(ctx)
 	sn, err := d.Resolve(ctx, src)
 	if err != nil {
 		return false, err
@@ -444,13 +469,12 @@ func (d *Device) Move(ctx context.Context, src, dst string, overwrite bool) (exi
 	}
 	dk := pn.key()
 	o := sn.Obj
+	dstPath := joinPath(pn.Path, name)
 	defer func() {
-		if o.IsDir {
-			d.invalidateAll()
-			return
-		}
-		// fichier : seuls les deux dossiers changent ; l'objet est oublie
-		// (son nom a pu changer, il sera relu)
+		// Seuls les deux dossiers parents changent ; l'objet est oublie
+		// (son nom a pu changer, il sera relu). Pour un dossier deplace par
+		// MoveObject, le contenu garde ses handles : ses listings en cache
+		// restent justes. Pas d'invalidation globale (DCIM a relire...).
 		d.forget(sn.parent, o.Handle)
 		d.forget(dk, o.Handle)
 	}()
@@ -458,13 +482,13 @@ func (d *Device) Move(ctx context.Context, src, dst string, overwrite bool) (exi
 		if o.Name == name {
 			return existed, nil
 		}
-		err := d.do(func(c Conn) error { return c.Rename(o.Handle, name) })
+		err := d.do(ctx, func(c Conn) error { return c.Rename(o.Handle, name) })
 		if errors.Is(err, ErrNotSupported) && !o.IsDir {
-			return existed, d.copyThenDelete(ctx, o, dk, name, dst)
+			return existed, d.copyThenDelete(ctx, o, dk, name, dstPath)
 		}
 		return existed, err
 	}
-	return existed, d.moveObj(ctx, o, sn.parent, dk, name, dst)
+	return existed, d.moveObj(ctx, o, sn.parent, dk, name, dstPath)
 }
 
 func samePathFold(a, b string) bool {
@@ -481,15 +505,15 @@ func (d *Device) moveObj(ctx context.Context, o Object, from, to dirKey, name, d
 		return err
 	}
 	moveName := o.Name
-	if _, clash := findName(destObjs, o.Name); clash && o.Name != name {
+	if _, clash := findCollision(destObjs, o.Name); clash && o.Name != name {
 		tmp := fmt.Sprintf(".copiteur-move-%d", time.Now().UnixNano())
-		if err := d.do(func(c Conn) error { return c.Rename(o.Handle, tmp) }); err != nil {
+		if err := d.do(ctx, func(c Conn) error { return c.Rename(o.Handle, tmp) }); err != nil {
 			return err
 		}
 		d.forget(from, o.Handle)
 		moveName = tmp
 	}
-	err = d.do(func(c Conn) error { return c.Move(o.Handle, to.storage, to.parent) })
+	err = d.do(ctx, func(c Conn) error { return c.Move(o.Handle, to.storage, to.parent) })
 	if errors.Is(err, ErrNotSupported) {
 		if o.IsDir {
 			return d.moveDirManually(ctx, o, to, name, dstPath)
@@ -500,7 +524,7 @@ func (d *Device) moveObj(ctx context.Context, o Object, from, to dirKey, name, d
 		return err
 	}
 	if moveName != name {
-		return d.do(func(c Conn) error { return c.Rename(o.Handle, name) })
+		return d.do(ctx, func(c Conn) error { return c.Rename(o.Handle, name) })
 	}
 	return nil
 }
@@ -508,7 +532,7 @@ func (d *Device) moveObj(ctx context.Context, o Object, from, to dirKey, name, d
 // moveDirManually : repli quand MoveObject n'existe pas pour un dossier.
 func (d *Device) moveDirManually(ctx context.Context, o Object, to dirKey, name, dstPath string) error {
 	var nh uint32
-	err := d.do(func(c Conn) error {
+	err := d.do(ctx, func(c Conn) error {
 		var err error
 		nh, err = c.CreateFolder(to.storage, to.parent, name)
 		return err
@@ -517,7 +541,7 @@ func (d *Device) moveDirManually(ctx context.Context, o Object, to dirKey, name,
 		return err
 	}
 	from := dirKey{storage: o.StorageID, parent: o.Handle}
-	children, err := d.fetch(ctx, from, nil, nil)
+	children, _, err := d.fetch(ctx, from, nil, time.Time{}, nil)
 	if err != nil {
 		return err
 	}
@@ -545,6 +569,7 @@ func (d *Device) copyThenDelete(ctx context.Context, o Object, to dirKey, name, 
 
 // Copy copie le fichier src vers dst.
 func (d *Device) Copy(ctx context.Context, src, dst string, overwrite bool) (existed bool, err error) {
+	ctx = d.Pin(ctx)
 	sn, err := d.Resolve(ctx, src)
 	if err != nil {
 		return false, err
@@ -568,7 +593,7 @@ func (d *Device) Copy(ctx context.Context, src, dst string, overwrite bool) (exi
 		return existed, fmt.Errorf("%w: source and destination are the same", ErrForbidden)
 	}
 	defer d.invalidate(pn.key())
-	return existed, d.copyFile(ctx, sn.Obj, pn.key(), name, dst)
+	return existed, d.copyFile(ctx, sn.Obj, pn.key(), name, joinPath(pn.Path, name))
 }
 
 func findNameSameHandle(ctx context.Context, d *Device, pn Node, name string, h uint32) (Object, bool) {
@@ -576,7 +601,7 @@ func findNameSameHandle(ctx context.Context, d *Device, pn Node, name string, h 
 	if err != nil {
 		return Object{}, false
 	}
-	o, ok := findName(objs, name)
+	o, ok := findCollision(objs, name)
 	return o, ok && o.Handle == h
 }
 
@@ -589,10 +614,10 @@ func (d *Device) copyFile(ctx context.Context, o Object, to dirKey, name, dstPat
 	if err != nil {
 		return err
 	}
-	_, clash := findName(destObjs, o.Name)
+	_, clash := findCollision(destObjs, o.Name)
 	if !clash || o.Name == name {
 		var nh uint32
-		err := d.do(func(c Conn) error {
+		err := d.do(ctx, func(c Conn) error {
 			var err error
 			nh, err = c.Copy(o.Handle, to.storage, to.parent)
 			return err
@@ -602,12 +627,12 @@ func (d *Device) copyFile(ctx context.Context, o Object, to dirKey, name, dstPat
 			if o.Name == name {
 				return nil
 			}
-			err = d.do(func(c Conn) error { return c.Rename(nh, name) })
+			err = d.do(ctx, func(c Conn) error { return c.Rename(nh, name) })
 			d.forget(to, nh)
 			if err == nil {
 				return nil
 			}
-			_ = d.do(func(c Conn) error { return c.Delete(nh) })
+			_ = d.do(ctx, func(c Conn) error { return c.Delete(nh) })
 			if errors.Is(err, ErrGone) {
 				return err
 			}
@@ -637,6 +662,9 @@ func (d *Device) streamCopy(ctx context.Context, o Object, to dirKey, name, dstP
 	cleanup, err := func() (bool, error) {
 		d.mu.Lock()
 		defer d.mu.Unlock()
+		if err := d.sessOKLocked(ctx); err != nil {
+			return false, err
+		}
 		var h uint32
 		err := d.doLocked(func(c Conn) error {
 			var err error
@@ -652,7 +680,7 @@ func (d *Device) streamCopy(ctx context.Context, o Object, to dirKey, name, dstP
 		return false, err
 	}()
 	if cleanup {
-		if cerr := d.deleteFileByPath(context.WithoutCancel(ctx), dstPath); cerr != nil {
+		if cerr := d.deleteFileByPath(d.repin(context.WithoutCancel(ctx)), dstPath); cerr != nil {
 			log.Printf("WARNING: could not delete the incomplete file %q: %v", dstPath, cerr)
 		}
 	}

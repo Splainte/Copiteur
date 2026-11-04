@@ -680,11 +680,12 @@ func TestNames(t *testing.T) {
 	if r := e.dav("GET", url.PathEscape("😁.jpg"), nil, nil); string(r.body) != "beam" {
 		t.Fatalf("emoji collision: %q", r.body)
 	}
-	// limites : 253 unites UTF-16 / 255 octets
-	expect(t, e.dav("PUT", strings.Repeat("a", 253), nil, []byte("x")), 201)
-	expect(t, e.dav("PUT", strings.Repeat("b", 254), nil, []byte("x")), 400)
+	// limites : 254 unites UTF-16 (255 avec le NUL) / 255 octets / UTF-8
+	expect(t, e.dav("PUT", strings.Repeat("a", 254), nil, []byte("x")), 201)
+	expect(t, e.dav("PUT", strings.Repeat("b", 255), nil, []byte("x")), 400)
 	expect(t, e.dav("PUT", url.PathEscape(strings.Repeat("é", 128)), nil, []byte("x")), 400) // 256 octets
-	expect(t, e.dav("MKCOL", url.PathEscape(strings.Repeat("😀", 127)), nil, nil), 400)       // 254 unites
+	expect(t, e.dav("MKCOL", url.PathEscape(strings.Repeat("😀", 64)), nil, nil), 400)        // 256 octets
+	expect(t, e.dav("PUT", "bad%FFname", nil, []byte("x")), 400)                             // UTF-8 invalide
 }
 
 // Gros dossier : apres une modification, seul le nouvel objet est relu
@@ -698,6 +699,7 @@ func TestIncrementalListing(t *testing.T) {
 		}
 	})
 	e.dev.IncrementalMin = 10
+	e.dev.RecentAge = 0 // les fichiers du test viennent d'etre crees
 	count := func() int {
 		r := e.dav("PROPFIND", "cam/", map[string]string{"Depth": "1"}, nil)
 		expect(t, r, 207)
@@ -723,6 +725,19 @@ func TestIncrementalListing(t *testing.T) {
 	expect(t, e.dav("DELETE", "cam/IMG_001.jpg", nil, nil), 204)
 	if n := count(); n != 40 {
 		t.Fatalf("after DELETE: %d", n)
+	}
+	// deplacer/supprimer un AUTRE dossier ne doit pas faire relire le gros
+	// dossier (plus d'invalidation globale)
+	expect(t, e.dav("MKCOL", "other", nil, nil), 201)
+	expect(t, e.dav("MKCOL", "other/sub", nil, nil), 201)
+	expect(t, e.dav("MOVE", "other/", map[string]string{"Destination": e.url("moved/")}, nil), 201)
+	expect(t, e.dav("DELETE", "moved/", nil, nil), 204)
+	before = calls.Load()
+	if n := count(); n != 40 {
+		t.Fatalf("after folder ops: %d", n)
+	}
+	if d := calls.Load() - before; d > 1 {
+		t.Errorf("%d GetObjectInfo: big folder re-read after unrelated folder MOVE/DELETE", d)
 	}
 	// expiration du cache : rafraichissement par difference aussi
 	e.dev.CacheTTL = 0
@@ -779,5 +794,105 @@ func TestPropfindStreaming(t *testing.T) {
 	r := e.dav("PROPFIND", "big/", map[string]string{"Depth": "1"}, nil)
 	if len(parseMS(t, r.body)) != 501 || time.Since(t0) > time.Second {
 		t.Fatalf("cached listing: %v", time.Since(t0))
+	}
+}
+
+// Fichier modifie SUR le telephone (meme handle) dans un gros dossier :
+// GET/HEAD et PROPFIND Depth 0 doivent servir la vraie taille, et un
+// fichier recent est relu au rafraichissement par difference.
+func TestFreshSizeInBigFolder(t *testing.T) {
+	e := newEnv(t, fake.Options{}, func(dir string) {
+		_ = os.MkdirAll(filepath.Join(dir, "cam"), 0o755)
+		for i := range 20 {
+			_ = os.WriteFile(filepath.Join(dir, "cam", fmt.Sprintf("IMG_%02d.jpg", i)), []byte("x"), 0o644)
+		}
+	})
+	e.dev.IncrementalMin = 10
+	e.dev.CacheTTL = 0
+	e.dev.RecentAge = 0 // pire cas : rien n'est "recent"
+	expect(t, e.dav("PROPFIND", "cam/", map[string]string{"Depth": "1"}, nil), 207)
+	big := randBytes(1000)
+	e.write("cam/IMG_00.jpg", big) // modifie cote telephone, meme handle
+	r := e.dav("GET", "cam/IMG_00.jpg", nil, nil)
+	if r.code != 200 || !bytes.Equal(r.body, big) {
+		t.Fatalf("GET after in-place change: %d, %d bytes", r.code, len(r.body))
+	}
+	r = e.dav("HEAD", "cam/IMG_00.jpg", nil, nil)
+	if r.hdr.Get("Content-Length") != "1000" {
+		t.Fatalf("HEAD: %q", r.hdr.Get("Content-Length"))
+	}
+	r = e.dav("PROPFIND", "cam/IMG_00.jpg", map[string]string{"Depth": "0"}, nil)
+	if ms := parseMS(t, r.body); ms[0].Prop.Length != "1000" {
+		t.Fatalf("PROPFIND Depth 0: %s", ms[0].Prop.Length)
+	}
+	// et la mise a jour profite au listing
+	r = e.dav("PROPFIND", "cam/", map[string]string{"Depth": "1"}, nil)
+	if !strings.Contains(string(r.body), "<D:getcontentlength>1000<") {
+		t.Fatal("listing not updated")
+	}
+	// fichier recent : relu par le rafraichissement par difference
+	e.dev.RecentAge = time.Hour
+	e.write("cam/IMG_01.jpg", randBytes(777))
+	r = e.dav("PROPFIND", "cam/", map[string]string{"Depth": "1"}, nil)
+	if !strings.Contains(string(r.body), "<D:getcontentlength>777<") {
+		t.Fatal("recent file not re-read")
+	}
+	// lecture complete forcee apres FullRefreshAge
+	e.dev.RecentAge = 0
+	e.dev.FullRefreshAge = 0
+	e.write("cam/IMG_02.jpg", randBytes(555))
+	r = e.dav("PROPFIND", "cam/", map[string]string{"Depth": "1"}, nil)
+	if !strings.Contains(string(r.body), "<D:getcontentlength>555<") {
+		t.Fatal("full refresh not done")
+	}
+}
+
+// DELETE/GET exacts : jamais d'effet sur un fichier qui ne differe que par
+// la casse. PUT d'un nom qui differe par la casse remplace l'objet en
+// collision (le stockage Android est insensible a la casse).
+func TestCaseSensitivity(t *testing.T) {
+	e := newEnv(t, fake.Options{}, nil)
+	e.write("A.jpg", []byte("upper"))
+	expect(t, e.dav("DELETE", "a.jpg", nil, nil), 404)
+	expect(t, e.dav("GET", "a.jpg", nil, nil), 404)
+	expect(t, e.dav("MOVE", "a.jpg", map[string]string{"Destination": e.url("b.jpg")}, nil), 404)
+	if b, _ := e.read("A.jpg"); string(b) != "upper" {
+		t.Fatal("A.jpg touched")
+	}
+	expect(t, e.dav("PUT", "a.jpg", nil, []byte("lower")), 204)
+	if e.exists("A.jpg") {
+		t.Fatal("colliding A.jpg kept next to a.jpg")
+	}
+	if b, _ := e.read("a.jpg"); string(b) != "lower" {
+		t.Fatal("PUT a.jpg")
+	}
+	expect(t, e.dav("MKCOL", "A.JPG", nil, nil), 405)
+}
+
+// Un lecteur qui attendait un listing en flux ne doit pas heriter de
+// l'erreur d'ecriture du client de ce flux.
+func TestWaiterSurvivesStreamClientError(t *testing.T) {
+	e := newEnv(t, fake.Options{Delay: 3 * time.Millisecond}, func(dir string) {
+		_ = os.MkdirAll(filepath.Join(dir, "big"), 0o755)
+		for i := range 300 {
+			_ = os.WriteFile(filepath.Join(dir, "big", fmt.Sprintf("f%04d", i)), []byte("x"), 0o644)
+		}
+	})
+	// client du flux qui part tout de suite
+	req, _ := http.NewRequest("PROPFIND", e.url("big/"), nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Depth", "1")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pendant ce temps un GET dans le meme dossier attend la meme lecture
+	got := make(chan resp, 1)
+	go func() { got <- e.dav("GET", "big/f0299", nil, nil) }()
+	time.Sleep(100 * time.Millisecond)
+	res.Body.Close() // coupe la connexion : erreur d'ecriture cote serveur
+	r := <-got
+	if r.code != 200 || string(r.body) != "x" {
+		t.Fatalf("waiter got %d %q", r.code, r.body)
 	}
 }

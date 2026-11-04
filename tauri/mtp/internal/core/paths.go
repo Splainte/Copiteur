@@ -2,11 +2,13 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
 	"time"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -82,13 +84,9 @@ func (n Node) key() dirKey {
 
 // CleanPath normalise un chemin WebDAV relatif a l'appareil : pas de "/"
 // au debut ni a la fin, pas de "." ni "..".
-//
-// Les noms recus sont normalises en NFC : rclone sur macOS envoie les noms
-// du disque local en NFD ("e" + accent combinant), alors qu'Android et le
-// reste du monde ecrivent en NFC. Sans cela, "Été.jpg" serait cree en NFD
-// sur le telephone et ne correspondrait a rien a la comparaison.
+// Pas de normalisation Unicode ici : voir lookupName / parentFor.
 func CleanPath(p string) string {
-	p = path.Clean("/" + norm.NFC.String(p))
+	p = path.Clean("/" + p)
 	return strings.TrimPrefix(p, "/")
 }
 
@@ -105,23 +103,18 @@ func SplitPath(p string) (string, string) {
 // ValidName verifie qu'un nom est acceptable pour MTP (chaine MTP : 254
 // unites UTF-16 au plus, sans "/").
 //
-// Limites : 253 unites UTF-16 (chaine MTP de 255 unites max, NUL compris,
-// avec une marge comme go-mtpfs) et 255 octets en UTF-8 (limite des
-// systemes de fichiers d'Android, ext4/f2fs).
+// Limites : UTF-8 valide ; 254 unites UTF-16 (une chaine MTP fait au plus
+// 255 unites, NUL final compris : limite exacte de l'encodeur, voir
+// usbmtp/strings.go) ; 255 octets en UTF-8 (limite des systemes de
+// fichiers d'Android, ext4/f2fs).
 func ValidName(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\x00") || !utf8.ValidString(name) {
 		return fmt.Errorf("%w: %q", ErrBadName, name)
 	}
-	if len(utf16.Encode([]rune(name))) > 253 || len(name) > 255 {
+	if len(utf16.Encode([]rune(name))) > 254 || len(name) > 255 {
 		return fmt.Errorf("%w: name too long", ErrBadName)
 	}
 	return nil
-}
-
-// sameName compare deux noms comme le stockage Android : insensible a la
-// casse, et a la forme de normalisation Unicode (NFC/NFD).
-func sameName(a, b string) bool {
-	return a == b || strings.EqualFold(norm.NFC.String(a), norm.NFC.String(b))
 }
 
 // StorageNames calcule les noms de dossier des stockages (mode
@@ -153,16 +146,34 @@ func StorageNames(st []Storage) []string {
 	return names
 }
 
-// findName cherche un enfant par nom : exact d'abord, puis sans tenir
-// compte de la casse (le stockage Android est insensible a la casse).
+// findName cherche un objet EXISTANT par son nom : nom brut d'abord, puis
+// meme forme NFC (rclone sur macOS envoie du NFD). Jamais insensible a la
+// casse : GET/DELETE/MOVE de "a.jpg" ne doivent pas toucher "A.jpg".
 func findName(objs []Object, name string) (Object, bool) {
 	for _, o := range objs {
 		if o.Name == name {
 			return o, true
 		}
 	}
+	nfc := norm.NFC.String(name)
 	for _, o := range objs {
-		if sameName(o.Name, name) {
+		if norm.NFC.String(o.Name) == nfc {
+			return o, true
+		}
+	}
+	return Object{}, false
+}
+
+// findCollision cherche, AVANT une creation, l'objet qui occuperait deja
+// ce nom sur le stockage Android (insensible a la casse et a la forme
+// NFC/NFD) : le telephone refuserait de creer "A.jpg" a cote de "a.jpg".
+func findCollision(objs []Object, name string) (Object, bool) {
+	if o, ok := findName(objs, name); ok {
+		return o, true
+	}
+	nfc := norm.NFC.String(name)
+	for _, o := range objs {
+		if strings.EqualFold(norm.NFC.String(o.Name), nfc) {
 			return o, true
 		}
 	}
@@ -171,6 +182,7 @@ func findName(objs []Object, name string) (Object, bool) {
 
 // Resolve traduit un chemin en noeud.
 func (d *Device) Resolve(ctx context.Context, p string) (Node, error) {
+	ctx = d.Pin(ctx)
 	if err := d.checkReady(); err != nil {
 		return Node{}, err
 	}
@@ -200,7 +212,7 @@ func (d *Device) Resolve(ctx context.Context, p string) (Node, error) {
 		}
 		if idx < 0 {
 			for i, nm := range names {
-				if sameName(nm, comps[0]) {
+				if norm.NFC.String(nm) == norm.NFC.String(comps[0]) {
 					idx = i
 					break
 				}
@@ -237,8 +249,42 @@ func joinPath(a, b string) string {
 	return a + "/" + b
 }
 
+// Refresh relit les metadonnees d'un fichier (une transaction) et met le
+// cache a jour. A appeler avant de servir un fichier (GET/HEAD, PROPFIND
+// Depth 0) : dans un gros dossier rafraichi par difference, la taille en
+// cache peut dater (photo modifiee ou encore en ecriture), et rclone
+// accepterait une copie tronquee.
+func (d *Device) Refresh(ctx context.Context, n Node) (Node, error) {
+	ctx = d.Pin(ctx)
+	if n.kind != nodeObject || n.Obj.IsDir {
+		return n, nil
+	}
+	var o Object
+	err := d.do(ctx, func(c Conn) error {
+		var err error
+		o, err = c.Info(n.Obj.Handle)
+		return err
+	})
+	if errors.Is(err, ErrNotFound) {
+		d.updateCached(n.parent, n.Obj, true)
+		return Node{}, err
+	}
+	if err != nil {
+		return Node{}, err
+	}
+	if o.IsDir || o.Name != n.Obj.Name {
+		// l'objet a change de nature ou de nom : relecture du dossier
+		d.forget(n.parent, n.Obj.Handle)
+		return d.Resolve(ctx, n.Path)
+	}
+	d.updateCached(n.parent, o, false)
+	n.Obj = o
+	return n, nil
+}
+
 // ReadDir renvoie les enfants d'un dossier.
 func (d *Device) ReadDir(ctx context.Context, n Node) ([]Node, error) {
+	ctx = d.Pin(ctx)
 	if !n.IsDir() {
 		return nil, ErrNotDir
 	}
@@ -266,6 +312,7 @@ func (d *Device) ReadDir(ctx context.Context, n Node) ([]Node, error) {
 // fur et a mesure de leur lecture sur l'appareil (le verrou est rendu entre
 // deux lots). Une erreur d'emit interrompt la lecture.
 func (d *Device) ReadDirStream(ctx context.Context, n Node, emit func([]Node) error) error {
+	ctx = d.Pin(ctx)
 	if !n.IsDir() {
 		return ErrNotDir
 	}
