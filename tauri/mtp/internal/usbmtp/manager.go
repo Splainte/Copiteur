@@ -250,34 +250,46 @@ func (m *Manager) claimFreeing(e *entry, t *transport) error {
 	if err == nil || !errors.Is(err, usb.ERROR_ACCESS) {
 		return err
 	}
-	released := false
-	defer func() {
-		// Le service a pu etre coupe au milieu d'un echange : on remet
-		// l'interface au propre avant notre propre session.
-		if released && err == nil {
-			t.recoverPTP()
-		}
-	}()
 	m.mu.Lock()
 	allowed := e.releases < maxReleases
 	if allowed {
 		e.releases++
 	}
 	m.mu.Unlock()
-	if !allowed || !releaseImageCapture() {
+	if !allowed {
 		return err
 	}
-	released = true
+	// Sequence VERIFIEE sur un Pixel 9 Pro XL : fermer notre handle, arreter
+	// le service, puis rouvrir l'appareil A NEUF et reclamer aussitot. Rouvrir
+	// compte : un appareil ouvert pendant que le service le tenait n'est
+	// obtenu qu'en acces partage, et la session MTP restait alors sans
+	// reponse (LIBUSB_ERROR_TIMEOUT). Rouvert apres l'arret, macOS nous le
+	// donne en exclusivite. Pas d'attente : launchd relance le service en
+	// quelques millisecondes.
+	t.Close()
+	if !releaseImageCapture() {
+		if oerr := t.openHandle(); oerr != nil {
+			return oerr
+		}
+		return t.claim()
+	}
 	log.Printf("USB %s: interface held, released macOS Image Capture (ptpcamerad)", e.key)
-	// Pas d'attente avant le premier essai : le service est relance en
-	// quelques millisecondes et reprendrait l'interface.
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 50; i++ {
+		if err = t.openHandle(); err != nil {
+			return err
+		}
 		if err = t.claim(); err == nil || !errors.Is(err, usb.ERROR_ACCESS) {
 			return err
 		}
+		t.Close()
 		time.Sleep(2 * time.Millisecond)
 	}
-	return err
+	// Dernier essai sans arret supplementaire (le handle doit rester ouvert
+	// pour l'appelant, qui le referme en cas d'echec).
+	if oerr := t.openHandle(); oerr != nil {
+		return oerr
+	}
+	return t.claim()
 }
 
 func isBusyErr(err error) bool {
@@ -418,12 +430,11 @@ func (m *Manager) open(e *entry) {
 		return
 	}
 	if err != nil {
-		// Comme mtp.Device.Configure : reset puis nouvel essai. On tient
-		// l'interface, donc le reset ne perturbe aucun autre programme.
-		log.Printf("USB %s: OpenSession failed (%v), resetting", e.key, err)
-		if t.h != nil {
-			_ = t.h.Reset()
-		}
+		// PAS de reset USB (contrairement a mtp.Device.Configure) : verifie
+		// sur un Pixel, il fait re-annoncer le telephone, qui repasse alors
+		// en « recharge uniquement » (et disparait). On referme et on rouvre
+		// simplement.
+		log.Printf("USB %s: OpenSession failed (%v), reopening", e.key, err)
 		t.Close()
 		time.Sleep(time.Second)
 		if err = t.openHandle(); err == nil {
