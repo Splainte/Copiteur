@@ -105,7 +105,8 @@ That holds for **downloads** with stock rclone. For **uploads**, stock rclone wr
 file on a single stream. Copiteur therefore ships a **patched rclone** (`rclone-mtsftp`, binaries
 in this repository's [release of the same name](https://github.com/Splainte/Copiteur/releases/tag/rclone-mtsftp-v1.74.4))
 that gives the SFTP backend multi-stream writes: uploads went from ~12 to ~90 MB/s on the same
-link. The change has been proposed upstream ([rclone#9724](https://github.com/rclone/rclone/pull/9724)).
+link. The change has been merged upstream ([rclone#9724](https://github.com/rclone/rclone/pull/9724)):
+the patched build can go once an official rclone release includes it.
 If a server refuses that many streams, Copiteur halves them for that file and retries, down to one.
 
 Measured on a remote NAS over VPN (2026-07-10, one single big file):

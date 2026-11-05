@@ -110,8 +110,9 @@ C'est vrai en **téléchargement** avec le rclone d'origine. En **envoi**, le rc
 un fichier SFTP sur un seul flux. Copiteur embarque donc un **rclone patché** (`rclone-mtsftp`,
 binaires dans la [release du même nom](https://github.com/Splainte/Copiteur/releases/tag/rclone-mtsftp-v1.74.4)
 de ce dépôt) qui donne au backend SFTP l'écriture sur plusieurs flux : les envois sont passés
-d'environ 12 à 90 Mo/s sur le même lien. La modification est proposée à rclone
-([rclone#9724](https://github.com/rclone/rclone/pull/9724)). Si un serveur refuse autant de
+d'environ 12 à 90 Mo/s sur le même lien. La modification a été intégrée à rclone
+([rclone#9724](https://github.com/rclone/rclone/pull/9724)) : la version patchée pourra
+disparaître dès qu'une version officielle de rclone l'inclura. Si un serveur refuse autant de
 flux, Copiteur les divise par deux pour ce fichier et réessaie, jusqu'à un seul.
 
 Mesuré sur un NAS distant via VPN (2026-07-10, un seul gros fichier) :
