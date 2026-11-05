@@ -12,7 +12,7 @@ Each pane shows the source of your choice: the computer, a saved server or, on m
 server ↔ server, phone ↔ server, phone ↔ computer.
 
 Windows and macOS (Apple Silicon), in English or French. Tauri v2 + React/TypeScript,
-bundled rclone.
+bundled rclone (a patched build that also uploads over SFTP on several streams).
 
 ## Install
 
@@ -50,10 +50,17 @@ source does not exist there.
 **Transfers** — drag and drop between the two panes and Ctrl/Cmd+C · V, in both directions.
 Dropping onto a folder copies into it. A dropped folder is split into one transfer per file.
 Four-tab queue (pending / done / failed / cancelled), automatic resume after a network drop,
-a "stalled" indicator when not a single byte is getting through.
+a "stalled" indicator when not a single byte is getting through. The queue lives in an island
+under the panes; the *Transfers* button in the top bar shows or hides it, and overall progress
+also shows on the taskbar button (Windows) or the Dock icon (macOS).
 
 **Navigation** — tree + list or thumbnails, sorting, breadcrumb, pinned folders, hidden files
 hidden by default (including the Windows hidden attribute and Synology system folders).
+The search field filters the current folder as you type, ignoring case, accents and punctuation
+(every word must match). A path copied from Finder or File Explorer can be pasted straight into
+the address bar. Server paths are absolute: right-click a folder → *Start here* to open that
+server directly there on every connection. Network drives and remote volumes are hidden from the
+computer source by default (option in Settings).
 
 **Files** — create, rename, move, delete (permanent, with the total size shown), folder size.
 Opening a remote file opens it in its associated application; if it is modified, Copiteur
@@ -93,6 +100,13 @@ A single SFTP connection tops out at ~11 MB/s over a high-latency link: that's t
 **one** connection, not of the network. FileZilla only parallelizes **across** files — as soon
 as only one big file is left, you drop back to 11 MB/s. rclone can split **a single file**
 into several streams to the same server, without installing anything on the NAS.
+
+That holds for **downloads** with stock rclone. For **uploads**, stock rclone writes an SFTP
+file on a single stream. Copiteur therefore ships a **patched rclone** (`rclone-mtsftp`, binaries
+in this repository's [release of the same name](https://github.com/Splainte/Copiteur/releases/tag/rclone-mtsftp-v1.74.4))
+that gives the SFTP backend multi-stream writes: uploads went from ~12 to ~90 MB/s on the same
+link. The change has been proposed upstream ([rclone#9724](https://github.com/rclone/rclone/pull/9724)).
+If a server refuses that many streams, Copiteur halves them for that file and retries, down to one.
 
 Measured on a remote NAS over VPN (2026-07-10, one single big file):
 
@@ -169,8 +183,8 @@ page could send it "simple" requests that go out without a CORS preflight. The s
 passed through the process **environment**, never its command line, which `ps` and the Task
 Manager expose. Locked down by tests.
 
-**The rclone binary is pinned and verified**: fixed version and SHA-256 fingerprint in the
-repository. `scripts/prepare-bins.mjs` rejects an archive that doesn't match — useful even if
+**The rclone binary is pinned and verified**: fixed version (the patched build of the
+`rclone-mtsftp-v1.74.4` release) and SHA-256 fingerprint per platform in the repository. `scripts/prepare-bins.mjs` rejects an archive that doesn't match — useful even if
 the download server is compromised one day, since this binary ends up in the signed installer.
 
 **Only the rclone commands the app uses get through.** The bridge between the interface and
@@ -213,6 +227,11 @@ script or resource.
 Updates are signed with a private key (repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`); the public key is in `tauri.conf.json`.
 **Losing the private key = no more updates possible** for already-installed apps.
+
+**Beta channel.** Test builds ("Copiteur Beta", separate app identifier, installs alongside the
+regular app and imports its servers) are published as public **pre-releases**, never marked
+"latest". Their `latest.json` is copied into the rolling `beta-latest` release, which beta builds
+use as their update endpoint; the regular app keeps following `releases/latest`.
 
 ## License
 

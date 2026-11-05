@@ -12,7 +12,7 @@ macOS, un **téléphone Android branché en USB**. Toutes les combinaisons sont 
 ordinateur ↔ serveur, serveur ↔ serveur, téléphone ↔ serveur, téléphone ↔ ordinateur.
 
 Windows et macOS (Apple Silicon), en français ou en anglais. Tauri v2 + React/TypeScript,
-rclone embarqué.
+rclone embarqué (une version patchée qui envoie aussi en SFTP sur plusieurs flux).
 
 ## Installer
 
@@ -52,10 +52,19 @@ l'Explorateur gère déjà les téléphones : cette source n'y existe pas.
 **Transferts** — glisser-déposer entre les deux panneaux et Ctrl/Cmd+C · V, dans les deux sens.
 Lâcher sur un dossier copie dedans. Un dossier déposé est éclaté en un transfert par fichier.
 File d'attente à quatre onglets (attente / terminés / échoués / annulés), reprise automatique
-sur coupure réseau, indicateur « figé » quand plus un octet ne passe.
+sur coupure réseau, indicateur « figé » quand plus un octet ne passe. La file vit dans un îlot
+sous les panneaux ; le bouton *Transferts* de la barre du haut l'affiche ou la cache, et la
+progression globale s'affiche aussi sur le bouton de la barre des tâches (Windows) ou l'icône du
+Dock (macOS).
 
 **Navigation** — arbre + liste ou miniatures, tri, fil d'Ariane, dossiers épinglés, fichiers
 cachés masqués par défaut (y compris l'attribut caché Windows et les dossiers système Synology).
+Le champ de recherche filtre le dossier courant pendant la frappe, sans tenir compte des
+majuscules, des accents ni de la ponctuation (chaque mot doit correspondre). Un chemin copié
+depuis le Finder ou l'Explorateur se colle directement dans la barre d'adresse. Les chemins
+serveur sont absolus : clic droit sur un dossier → *Démarrer ici* pour ouvrir ce serveur
+directement dedans à chaque connexion. Les lecteurs réseau et volumes distants sont masqués de
+la source ordinateur par défaut (option dans les Paramètres).
 
 **Fichiers** — créer, renommer, déplacer, supprimer (définitif, avec le poids annoncé),
 taille d'un dossier. Ouvrir un fichier distant l'ouvre dans l'application associée ; s'il est
@@ -96,6 +105,14 @@ Une connexion SFTP plafonne à ~11 Mo/s sur un lien à latence : c'est la limite
 connexion, pas du réseau. FileZilla ne parallélise qu'**entre** fichiers — dès qu'il ne reste
 qu'un gros fichier, on retombe à 11 Mo/s. rclone sait découper **un seul fichier** en plusieurs
 flux sur le même serveur, sans rien installer côté NAS.
+
+C'est vrai en **téléchargement** avec le rclone d'origine. En **envoi**, le rclone d'origine écrit
+un fichier SFTP sur un seul flux. Copiteur embarque donc un **rclone patché** (`rclone-mtsftp`,
+binaires dans la [release du même nom](https://github.com/Splainte/Copiteur/releases/tag/rclone-mtsftp-v1.74.4)
+de ce dépôt) qui donne au backend SFTP l'écriture sur plusieurs flux : les envois sont passés
+d'environ 12 à 90 Mo/s sur le même lien. La modification est proposée à rclone
+([rclone#9724](https://github.com/rclone/rclone/pull/9724)). Si un serveur refuse autant de
+flux, Copiteur les divise par deux pour ce fichier et réessaie, jusqu'à un seul.
 
 Mesuré sur un NAS distant via VPN (2026-07-10, un seul gros fichier) :
 
@@ -173,7 +190,8 @@ et une simple page web pouvait lui envoyer des requêtes « simples » qui parte
 pré-vérification CORS. Le secret transite par l'**environnement** du process, jamais par sa
 ligne de commande, que `ps` et le Gestionnaire des tâches exposent. Verrouillé par des tests.
 
-**Le binaire rclone est épinglé et vérifié** : version figée et empreinte SHA-256 dans le dépôt.
+**Le binaire rclone est épinglé et vérifié** : version figée (la version patchée de la
+release `rclone-mtsftp-v1.74.4`) et empreinte SHA-256 par plateforme dans le dépôt.
 `scripts/prepare-bins.mjs` refuse une archive qui ne correspond pas — utile même si le serveur
 de téléchargement est un jour compromis, puisque ce binaire finit dans l'installeur signé.
 
@@ -218,6 +236,12 @@ fichiers, aucun script ni ressource extérieure.
 Les mises à jour sont signées avec une clé privée (secrets `TAURI_SIGNING_PRIVATE_KEY` et
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` du dépôt) ; la clé publique est dans `tauri.conf.json`.
 **Perdre la clé privée = plus aucune mise à jour possible** pour les apps déjà installées.
+
+**Canal beta.** Les versions de test (« Copiteur Beta », identifiant d'app distinct, s'installe à
+côté de la version normale et reprend ses serveurs) sont publiées en **pré-versions** publiques,
+jamais marquées « latest ». Leur `latest.json` est recopié dans la release roulante `beta-latest`,
+que les versions beta interrogent pour se mettre à jour ; l'app normale suit toujours
+`releases/latest`.
 
 ## Licence
 
