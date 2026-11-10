@@ -2972,7 +2972,7 @@ export default function App() {
       {/* Identite du serveur : 1re connexion (empreinte a accepter) ou cle qui
           a change depuis la derniere fois (alerte). */}
       {hostKeyAsk && (
-        <div className="modal-backdrop">
+        <div className="modal-backdrop is-above-sheet">
           <div className="modal modal-hostkey">
             <div className="modal-title">
               {hostKeyAsk.status === "changed"
@@ -3018,13 +3018,20 @@ export default function App() {
               )}
             </div>
             <div className="modal-actions">
-              <button className="btn-ghost" onClick={() => answerHostKey(false)}>
+              {/* Le focus quitte la feuille de connexion dessous : sinon Entree y
+                  relancait la connexion et orphelinait cette question. */}
+              <button
+                className="btn-ghost"
+                autoFocus={hostKeyAsk.status === "changed"}
+                onClick={() => answerHostKey(false)}
+              >
                 {t("common.cancel")}
               </button>
               <button
                 className={
                   hostKeyAsk.status === "changed" ? "btn-accent btn-danger" : "btn-accent"
                 }
+                autoFocus={hostKeyAsk.status !== "changed"}
                 onClick={() => answerHostKey(true)}
               >
                 {hostKeyAsk.status === "changed"
