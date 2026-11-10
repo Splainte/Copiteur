@@ -54,7 +54,9 @@ jobs:
           xcodebuild -version
           xcrun --sdk macosx --show-sdk-version
           vtool -show-build src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app/Contents/MacOS/Copiteur
-          lipo -archs src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app/Contents/MacOS/*
+          for f in src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app/Contents/MacOS/*; do
+            echo "$(basename "$f") : $(lipo -archs "$f")"
+          done
 
       - name: Uploader le .dmg
         uses: actions/upload-artifact@v4
