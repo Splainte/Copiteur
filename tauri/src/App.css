@@ -875,6 +875,11 @@
 .modal-backdrop.is-top {
   z-index: 110;
 }
+/* La confiance de cle d'hote surgit PENDANT la feuille de connexion, rendue
+   apres elle dans le DOM : sans ce cran, elle passait derriere. */
+.modal-backdrop.is-above-sheet {
+  z-index: 105;
+}
 .modal {
   width: min(440px, 90vw);
   padding: 18px 20px 16px;
