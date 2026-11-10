@@ -2,7 +2,10 @@
 // sous le nom attendu par le mécanisme `externalBin` de Tauri :
 //   binaries/rclone-<target-triple>[.exe]
 //
-// Usage : node scripts/prepare-bins.mjs
+// Usage : node scripts/prepare-bins.mjs [--target <triple>]
+//   --target  triple Rust visé quand il diffère de l'hôte (cross-compilation,
+//             ex. x86_64-apple-darwin construit sur un Mac Apple Silicon).
+//             Aussi lisible dans la variable COPITEUR_TARGET.
 // Cross-plateforme (Windows / macOS / Linux) : téléchargement via fetch natif
 // (Node 18+). Les binaires sont des exécutables BRUTS (pas des archives), donc
 // aucun outil de décompression n'est nécessaire.
@@ -37,7 +40,6 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BIN_DIR = join(__dirname, "..", "src-tauri", "binaries");
-const isWin = process.platform === "win32";
 
 // Release GitHub hébergeant les binaires rclone patchés.
 const REPO = "Splainte/Copiteur";
@@ -81,12 +83,19 @@ const PLATFORMS = {
   },
 };
 
-const key = `${process.platform}-${process.arch}`;
-const p = PLATFORMS[key];
+// Cible : `--target <triple>` / COPITEUR_TARGET, sinon la plateforme hôte.
+const argv = process.argv.slice(2);
+const ti = argv.indexOf("--target");
+const target = (ti >= 0 ? argv[ti + 1] : "") || process.env.COPITEUR_TARGET || "";
+const p = target
+  ? Object.values(PLATFORMS).find((x) => x.triple === target)
+  : PLATFORMS[`${process.platform}-${process.arch}`];
 if (!p) {
-  console.error(`Plateforme non gérée : ${key}`);
+  console.error(`Plateforme non gérée : ${target || `${process.platform}-${process.arch}`}`);
   process.exit(1);
 }
+const isWin = p.ext === ".exe";
+const isDarwin = p.triple.endsWith("-apple-darwin");
 
 mkdirSync(BIN_DIR, { recursive: true });
 const name = `rclone-${p.triple}${p.ext}`;
@@ -99,10 +108,12 @@ if (existsSync(dest)) {
 
 // macOS : sidecar copiteur-mtp (téléphones Android en MTP), compilé depuis
 // tauri/mtp une fois rclone en place. Ne fait rien s'il existe déjà.
-if (process.platform === "darwin") {
-  const r = spawnSync(process.execPath, [join(__dirname, "build-mtp.mjs")], {
-    stdio: "inherit",
-  });
+if (isDarwin && process.platform === "darwin") {
+  const r = spawnSync(
+    process.execPath,
+    [join(__dirname, "build-mtp.mjs"), "--target", p.triple],
+    { stdio: "inherit" },
+  );
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
 

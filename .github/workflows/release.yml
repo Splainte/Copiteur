@@ -52,6 +52,10 @@ jobs:
           # avec lequel l'app est liée (cf. build-macos-test.yml).
           - runner: xcode-27
             target: aarch64-apple-darwin
+          # Mac Intel : cross-compilé sur la même image (même SDK, mêmes
+          # sidecars construits avec --target).
+          - runner: xcode-27
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +74,7 @@ jobs:
 
       - name: Télécharger rclone (sidecar, empreinte vérifiée)
         working-directory: tauri
-        run: node scripts/prepare-bins.mjs
+        run: node scripts/prepare-bins.mjs --target ${{ matrix.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -101,8 +105,11 @@ jobs:
           set -euo pipefail
           names=$(gh release view "$TAG" --json assets --jq '.assets[].name')
           win=$(echo "$names" | grep -E -- '-setup\.exe$' | head -1)
-          mac=$(echo "$names" | grep -E -- '\.app\.tar\.gz$' | head -1)
-          test -n "$win" && test -n "$mac" || { echo "Installeurs manquants : $names"; exit 1; }
+          tgz=$(echo "$names" | grep -E -- '\.app\.tar\.gz$' || true)
+          mac=$(echo "$tgz" | grep -E -- '_aarch64\.app\.tar\.gz$' | head -1)
+          intel=$(echo "$tgz" | grep -v -- '_aarch64' | head -1)
+          test -n "$win" && test -n "$mac" && test -n "$intel" \
+            || { echo "Installeurs manquants : $names"; exit 1; }
           sig() { gh release download "$TAG" -p "$1.sig" -O -; }
           base="https://github.com/$GH_REPO/releases/download/$TAG"
           gh release view "$TAG" --json body --jq .body > notes.md
@@ -112,8 +119,10 @@ jobs:
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg winsig "$(sig "$win")" --arg winurl "$base/$win" \
             --arg macsig "$(sig "$mac")" --arg macurl "$base/$mac" \
+            --arg intelsig "$(sig "$intel")" --arg intelurl "$base/$intel" \
             '{version: $version, notes: $notes, pub_date: $date, platforms: {
                "windows-x86_64": {signature: $winsig, url: $winurl},
-               "darwin-aarch64": {signature: $macsig, url: $macurl}}}' > latest.json
+               "darwin-aarch64": {signature: $macsig, url: $macurl},
+               "darwin-x86_64": {signature: $intelsig, url: $intelurl}}}' > latest.json
           cat latest.json
           gh release upload "$TAG" latest.json --clobber

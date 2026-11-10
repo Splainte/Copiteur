@@ -15,6 +15,10 @@ jobs:
             # l'ancien design par compatibilité.
             runner: xcode-27
             label: apple-silicon
+          # Mac Intel : cross-compilé sur la même image (même SDK).
+          - target: x86_64-apple-darwin
+            runner: xcode-27
+            label: intel
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -34,7 +38,7 @@ jobs:
         run: npm install
 
       - name: Télécharger rclone (sidecar)
-        run: node scripts/prepare-bins.mjs
+        run: node scripts/prepare-bins.mjs --target ${{ matrix.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -50,6 +54,7 @@ jobs:
           xcodebuild -version
           xcrun --sdk macosx --show-sdk-version
           vtool -show-build src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app/Contents/MacOS/Copiteur
+          lipo -archs src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app/Contents/MacOS/*
 
       - name: Uploader le .dmg
         uses: actions/upload-artifact@v4

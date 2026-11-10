@@ -11,7 +11,7 @@ Each pane shows the source of your choice: the computer, a saved server or, on m
 **Android phone plugged in over USB**. Every combination works: computer ↔ server,
 server ↔ server, phone ↔ server, phone ↔ computer.
 
-Windows and macOS (Apple Silicon), in English or French. Tauri v2 + React/TypeScript,
+Windows and macOS (Apple Silicon and Intel), in English or French. Tauri v2 + React/TypeScript,
 bundled rclone (a patched build that also uploads over SFTP on several streams).
 
 ## Install
@@ -22,7 +22,8 @@ Download the latest version from the
 - **Windows**: `Copiteur_x.y.z_x64-setup.exe`. The installer is not signed: Windows
   SmartScreen shows "Windows protected your PC" → *More info* → *Run anyway*. No
   administrator rights needed.
-- **macOS**: `Copiteur_x.y.z_aarch64.dmg`, drag the app into Applications. The app is not
+- **macOS**: `Copiteur_x.y.z_aarch64.dmg` (Apple Silicon) or `Copiteur_x.y.z_x64.dmg`
+  (Intel), drag the app into Applications. The app is not
   notarized by Apple: on first launch, right-click the app → *Open* → *Open*
   (or System Settings → Privacy & Security → *Open Anyway*).
 
