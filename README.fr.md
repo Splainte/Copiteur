@@ -11,7 +11,7 @@ Chaque panneau affiche la source de son choix : l'ordinateur, un serveur mémori
 macOS, un **téléphone Android branché en USB**. Toutes les combinaisons sont possibles :
 ordinateur ↔ serveur, serveur ↔ serveur, téléphone ↔ serveur, téléphone ↔ ordinateur.
 
-Windows et macOS (Apple Silicon), en français ou en anglais. Tauri v2 + React/TypeScript,
+Windows et macOS (Apple Silicon et Intel), en français ou en anglais. Tauri v2 + React/TypeScript,
 rclone embarqué (une version patchée qui envoie aussi en SFTP sur plusieurs flux).
 
 ## Installer
@@ -22,7 +22,8 @@ Télécharger la dernière version dans les
 - **Windows** : `Copiteur_x.y.z_x64-setup.exe`. L'installeur n'est pas signé : Windows
   SmartScreen affiche « Windows a protégé votre ordinateur » → *Informations
   complémentaires* → *Exécuter quand même*. Pas besoin de droits administrateur.
-- **macOS** : `Copiteur_x.y.z_aarch64.dmg`, glisser l'app dans Applications. L'app n'est pas
+- **macOS** : `Copiteur_x.y.z_aarch64.dmg` (Apple Silicon) ou `Copiteur_x.y.z_x64.dmg`
+  (Intel), glisser l'app dans Applications. L'app n'est pas
   notariée par Apple : au premier lancement, clic droit sur l'app → *Ouvrir* → *Ouvrir*
   (ou Réglages Système → Confidentialité et sécurité → *Ouvrir quand même*).
 

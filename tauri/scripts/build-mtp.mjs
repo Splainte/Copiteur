@@ -3,6 +3,11 @@
 //   binaries/copiteur-mtp-<target-triple>
 //
 // Usage : node scripts/build-mtp.mjs [--force] [--fake-only] [--keep-temp]
+//                                    [--target <triple>]
+//   --target     (macOS) aarch64-apple-darwin ou x86_64-apple-darwin ;
+//                defaut = l'hote. Une cible d'une autre architecture est
+//                cross-compilee (clang -arch, GOARCH) : un Mac Apple Silicon
+//                produit aussi le binaire Intel.
 //   --force      recompile meme si le binaire existe deja
 //   --fake-only  (toute plateforme) binaire SANS USB (CGO_ENABLED=0), utile
 //                seulement pour developper/tester avec `--fake DIR`
@@ -53,7 +58,10 @@ const LIBUSB_SHA256 =
 const MACOS_MIN = "11.0";
 const GO_MIN = [1, 24]; // directive "go" de tauri/mtp/go.mod
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
+const ti = argv.indexOf("--target");
+const targetArg = ti >= 0 ? argv[ti + 1] : "";
 const force = args.has("--force");
 const fakeOnly = args.has("--fake-only");
 const keepTemp = args.has("--keep-temp");
@@ -154,7 +162,7 @@ function requireGo() {
 
 // --- libusb statique --------------------------------------------------------
 
-async function buildStaticLibusb(work, extraEnv) {
+async function buildStaticLibusb(work, extraEnv, extraConfigure = []) {
   const tarball = join(work, `libusb-${LIBUSB_VERSION}.tar.bz2`);
   console.log(`Telechargement de libusb ${LIBUSB_VERSION}`);
   const res = await fetch(LIBUSB_URL, { headers: { "User-Agent": "copiteur-build-mtp" } });
@@ -183,6 +191,7 @@ async function buildStaticLibusb(work, extraEnv) {
       "--disable-dependency-tracking",
       `--prefix=${prefix}`,
       ...(process.platform === "linux" ? ["--disable-udev"] : []),
+      ...extraConfigure,
     ],
     { cwd: src, env },
   );
@@ -248,8 +257,17 @@ function goBuild(go, out, env, cacheDir) {
 
 // --- modes ------------------------------------------------------------------
 
+// Architecture visee (noms clang / Go) d'apres le triple macOS.
+const MAC_ARCH = {
+  "aarch64-apple-darwin": { clang: "arm64", go: "arm64" },
+  "x86_64-apple-darwin": { clang: "x86_64", go: "amd64" },
+};
+
 async function buildMac() {
-  const triple = hostTriple();
+  const triple = targetArg || hostTriple();
+  const arch = MAC_ARCH[triple];
+  if (!arch) die(`cible macOS non geree : ${triple}`);
+  const archFlag = `-arch ${arch.clang}`;
   mkdirSync(BIN_DIR, { recursive: true });
   const out = join(BIN_DIR, `copiteur-mtp-${triple}`);
   if (existsSync(out) && !force) {
@@ -259,11 +277,17 @@ async function buildMac() {
   const go = requireGo();
   const work = mkdtempSync(join(tmpdir(), "copiteur-mtp-build-"));
   try {
+    // `-arch` partout (libusb, cgo, edition de liens) : sans lui, clang
+    // compile pour l'hote et la liaison d'une autre architecture echoue.
     const macEnv = {
       MACOSX_DEPLOYMENT_TARGET: MACOS_MIN,
-      CFLAGS: `-O2 -mmacosx-version-min=${MACOS_MIN}`,
+      CC: `clang ${archFlag}`,
+      CFLAGS: `-O2 ${archFlag} -mmacosx-version-min=${MACOS_MIN}`,
+      LDFLAGS: archFlag,
     };
-    const prefix = await buildStaticLibusb(work, macEnv);
+    const prefix = await buildStaticLibusb(work, macEnv, [
+      `--host=${arch.clang === "arm64" ? "aarch64" : "x86_64"}-apple-darwin`,
+    ]);
     const shim = writePkgConfigShim(work, prefix, [
       "-lobjc",
       "-framework IOKit",
@@ -274,16 +298,24 @@ async function buildMac() {
     goBuild(go, out, {
       CGO_ENABLED: "1",
       GOOS: "darwin",
-      GOARCH: process.arch === "arm64" ? "arm64" : "amd64",
+      GOARCH: arch.go,
+      CC: `clang ${archFlag}`,
       PKG_CONFIG: shim,
       MACOSX_DEPLOYMENT_TARGET: MACOS_MIN,
-      CGO_CFLAGS: `-O2 -mmacosx-version-min=${MACOS_MIN}`,
-      CGO_LDFLAGS: `-mmacosx-version-min=${MACOS_MIN}`,
+      CGO_CFLAGS: `-O2 ${archFlag} -mmacosx-version-min=${MACOS_MIN}`,
+      CGO_LDFLAGS: `${archFlag} -mmacosx-version-min=${MACOS_MIN}`,
     }, join(work, "gocache"));
     // Verification : aucune libusb dynamique referencee.
     const deps = capture("otool", ["-L", out]);
     if (deps === null) die("otool -L a echoue");
     console.log(deps.trim());
+    // Verification : bonne architecture (une cross-compilation ratee
+    // produirait silencieusement un binaire de l'hote).
+    const info = capture("lipo", ["-archs", out]);
+    if (info === null || info.trim() !== arch.clang) {
+      rmSync(out, { force: true });
+      die(`architecture inattendue : ${info?.trim()} (attendu ${arch.clang})`);
+    }
     if (/libusb/i.test(deps)) {
       rmSync(out, { force: true });
       die("le binaire reference une libusb dynamique (attendu : libusb statique)");
