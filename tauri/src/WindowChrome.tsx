@@ -27,6 +27,10 @@ export function ConnectSheet({
   setUser,
   setPass,
   setPort,
+  pinOn,
+  setPinOn,
+  pin,
+  setPin,
   connecting,
   error,
   onConnect,
@@ -43,6 +47,11 @@ export function ConnectSheet({
   setUser: (v: string) => void;
   setPass: (v: string) => void;
   setPort: (v: string) => void;
+  // Protection par code PIN (cf. PinDialog) : case + code de 4 a 8 chiffres.
+  pinOn: boolean;
+  setPinOn: (v: boolean) => void;
+  pin: string;
+  setPin: (v: string) => void;
   connecting: boolean;
   error: string;
   onConnect: () => void;
@@ -53,8 +62,10 @@ export function ConnectSheet({
   useEffect(() => {
     first.current?.focus();
   }, []);
+  const pinValid = !pinOn || /^\d{4,8}$/.test(pin);
+  const ready = !!host.trim() && !!user.trim() && pinValid;
   const submit = () => {
-    if (host.trim() && user.trim()) onConnect();
+    if (ready) onConnect();
   };
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") submit();
@@ -88,13 +99,33 @@ export function ConnectSheet({
           <input className="sheet-field sheet-port" value={port} onChange={(e) => setPort(e.target.value)} spellCheck={false} placeholder="22" />
           <label className="sheet-label">{t("app.conn.name")}</label>
           <input className="sheet-field" value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} />
+          <label className="sheet-label">{t("chrome.conn.pin")}</label>
+          <div className="sheet-pin">
+            <label className="modal-check">
+              <input type="checkbox" checked={pinOn} onChange={(e) => setPinOn(e.target.checked)} />
+              {t("chrome.conn.pinProtect")}
+            </label>
+            {pinOn && (
+              <input
+                className="sheet-field sheet-pin-field"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={8}
+                value={pin}
+                onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+                placeholder={t("chrome.conn.pinPlaceholder")}
+              />
+            )}
+          </div>
         </div>
+        {pinOn && <div className="modal-hint sheet-pin-hint">{t("chrome.conn.pinHint")}</div>}
         {error && <div className="sheet-error">{error}</div>}
         <div className="modal-actions">
           <button className="btn-ghost" onClick={onClose}>
             {t("common.cancel")}
           </button>
-          <button className="btn-accent" disabled={!host.trim() || !user.trim()} onClick={submit}>
+          <button className="btn-accent" disabled={!ready} onClick={submit}>
             {connecting ? t("app.conn.connecting") : t("app.conn.connect")}
           </button>
         </div>

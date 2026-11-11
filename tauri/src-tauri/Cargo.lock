@@ -678,6 +678,7 @@ dependencies = [
 name = "copiteur"
 version = "1.4.1"
 dependencies = [
+ "argon2",
  "getrandom 0.3.4",
  "keyring",
  "objc2",

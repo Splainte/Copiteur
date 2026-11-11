@@ -312,6 +312,8 @@ pub fn run() {
             engine::save_server,
             engine::delete_server,
             engine::rename_server,
+            engine::unlock_server,
+            engine::lock_server,
             engine::open_with,
             engine::hidden_names,
             engine::open_cache_dir,

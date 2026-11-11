@@ -32,8 +32,9 @@ serde_json = "1"
 # Client HTTP pour parler a l'API RC locale de rclone (rcd). Pas de TLS :
 # on ne tape que http://127.0.0.1 => on desactive les features par defaut.
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
-# Deja tire par Tauri ; on n'active que `time` pour temporiser les retries RC.
-tokio = { version = "1", features = ["time"] }
+# Deja tire par Tauri : `time` pour temporiser les retries RC, `sync` pour le
+# verrou des ecritures de serveurs.json (cf. engine.rs).
+tokio = { version = "1", features = ["time", "sync"] }
 # Entropie systeme : secret de l'API RC, tire au hasard a chaque lancement.
 getrandom = "0.3"
 
@@ -46,6 +47,9 @@ russh = { version = "0.64", default-features = false, features = ["ring", "rsa"]
 
 # Chiffrement des mots de passe memorises (cf. vault.rs). Deja tire par russh.
 ring = "0.17"
+# Code PIN des serveurs proteges (cf. vault.rs) : derivation lente et gourmande
+# en memoire, pour qu'essayer tous les codes coute cher. Deja tire par russh.
+argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
 
 # Cle de chiffrement des mots de passe dans le trousseau du systeme.
 [target.'cfg(target_os = "windows")'.dependencies]

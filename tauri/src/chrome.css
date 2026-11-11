@@ -815,6 +815,39 @@
 .sheet-rename {
   width: 100%;
 }
+.sheet-pin {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+.sheet-pin .modal-check {
+  margin: 0;
+  font-size: 13px;
+  color: var(--cp-text);
+}
+.sheet-pin-field {
+  width: 130px;
+  letter-spacing: 0.2em;
+}
+.sheet-pin-field:placeholder-shown {
+  letter-spacing: normal;
+}
+.sheet-pin-hint {
+  margin-top: 10px;
+}
+/* Boite « Code PIN » : un seul champ, centre, en grands points. */
+.modal-pin {
+  width: min(340px, 90vw);
+}
+.pin-field {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  text-align: center;
+  font-size: 18px;
+  letter-spacing: 0.4em;
+}
 .sheet-error {
   margin-top: 14px;
   padding: 8px 10px;

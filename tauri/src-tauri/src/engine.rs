@@ -541,6 +541,12 @@ pub struct Server {
     // pour rester compatible avec les serveurs.json ecrits avant ce champ.
     #[serde(default, rename = "startDir")]
     pub start_dir: String,
+    // Protege par un code PIN : `pass` arrive alors VIDE au front, qui doit
+    // demander le code (`unlock_server`). Sortie seulement : en entree, le
+    // backend l'ignore et se fie a ce qui est sur le disque (un front qui
+    // renverrait `false` ne doit pas pouvoir faire sauter la protection).
+    #[serde(default)]
+    pub locked: bool,
 }
 
 fn servers_path(app: &AppHandle) -> PathBuf {
@@ -555,6 +561,9 @@ fn servers_path(app: &AppHandle) -> PathBuf {
 // Forme SUR LE DISQUE d'un serveur : le mot de passe y est chiffre (`passEnc`,
 // cf. vault.rs). `pass` en clair n'existe plus que dans les fichiers ecrits par
 // les anciennes versions, convertis a la premiere lecture.
+// Serveur protege par un code PIN : `pinSalt` non vide, et `passEnc` est alors
+// chiffre avec la cle du PIN (vault::pin_key), pas avec celle du trousseau.
+// `pinFails` / `pinUntil` : essais rates d'affilee et fin de l'attente imposee.
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct StoredServer {
     label: String,
@@ -567,6 +576,69 @@ struct StoredServer {
     port: String,
     #[serde(default, rename = "startDir")]
     start_dir: String,
+    #[serde(default, rename = "pinSalt", skip_serializing_if = "String::is_empty")]
+    pin_salt: String,
+    // Empreinte de la cle du trousseau (vault::vault_tag) : distingue « mauvais
+    // code » de « trousseau reinitialise ».
+    #[serde(default, rename = "pinVault", skip_serializing_if = "String::is_empty")]
+    pin_vault: String,
+    #[serde(default, rename = "pinFails", skip_serializing_if = "is_zero")]
+    pin_fails: u32,
+    #[serde(default, rename = "pinUntil", skip_serializing_if = "is_zero")]
+    pin_until: u64,
+}
+
+fn is_zero<T: Default + PartialEq>(n: &T) -> bool {
+    *n == T::default()
+}
+
+impl StoredServer {
+    fn locked(&self) -> bool {
+        !self.pin_salt.is_empty()
+    }
+    /// Entree disque d'un serveur : champs descriptifs repris de `s`, le reste
+    /// (mot de passe, verrou) vide — a completer par l'appelant (`..`).
+    fn base(s: &Server) -> Self {
+        StoredServer {
+            label: s.label.clone(),
+            host: s.host.clone(),
+            user: s.user.clone(),
+            port: s.port.clone(),
+            start_dir: s.start_dir.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+// Toute lecture-modification-ecriture de `serveurs.json` passe par ce verrou :
+// la derivation du PIN dure ~0,3 s, et deux commandes concurrentes (connexion
+// d'un autre serveur, essai de code, renommage…) s'ecraseraient sinon l'une
+// l'autre. Il sert AUSSI de limitation : les essais de code sont traites un par
+// un, chacun voit le compteur d'echecs laisse par le precedent.
+static SERVERS_IO: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+// Cles des serveurs proteges deverrouilles pendant ce lancement (par label),
+// avec le sel qu'elles servent : elles permettent de rechiffrer un mot de
+// passe modifie sans redemander le code, et ne valent que pour CE sel. Effacees
+// a la deconnexion (`lock_server`). Jamais ecrites sur le disque.
+static PIN_KEYS: std::sync::Mutex<std::collections::BTreeMap<String, (String, [u8; 32])>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// Cle de session d'un serveur, seulement si elle correspond a son sel actuel.
+fn pin_key_get(label: &str, salt: &str) -> Option<[u8; 32]> {
+    let g = PIN_KEYS.lock().unwrap_or_else(|p| p.into_inner());
+    g.get(label).filter(|(s, _)| s == salt).map(|(_, k)| *k)
+}
+fn pin_key_set(label: &str, k: Option<(String, [u8; 32])>) {
+    let mut g = PIN_KEYS.lock().unwrap_or_else(|p| p.into_inner());
+    match k {
+        Some(k) => {
+            g.insert(label.to_string(), k);
+        }
+        None => {
+            g.remove(label);
+        }
+    }
 }
 
 fn config_dir(app: &AppHandle) -> PathBuf {
@@ -603,35 +675,28 @@ fn vault_key(app: &AppHandle) -> Option<[u8; 32]> {
     }
 }
 
-fn read_servers(app: &AppHandle) -> Vec<Server> {
-    let stored = read_stored(app);
-    if stored.is_empty() {
-        return Vec::new();
-    }
-    let key = vault_key(app);
-    let list: Vec<Server> = stored
+// Liste envoyee au front : mots de passe dechiffres, SAUF ceux des serveurs
+// proteges par un code (vides, `locked`).
+fn public_list(stored: &[StoredServer], key: Option<&[u8; 32]>) -> Vec<Server> {
+    stored
         .iter()
         .map(|s| Server {
             label: s.label.clone(),
             host: s.host.clone(),
             user: s.user.clone(),
-            pass: if !s.pass_enc.is_empty() {
-                key.as_ref()
-                    .and_then(|k| crate::vault::decrypt(k, &s.pass_enc))
+            pass: if s.locked() {
+                String::new()
+            } else if !s.pass_enc.is_empty() {
+                key.and_then(|k| crate::vault::decrypt(k, &s.pass_enc))
                     .unwrap_or_default()
             } else {
                 s.pass.clone()
             },
             port: s.port.clone(),
             start_dir: s.start_dir.clone(),
+            locked: s.locked(),
         })
-        .collect();
-    // Conversion d'un fichier d'une ancienne version : des mots de passe en
-    // clair et un trousseau disponible -> on reecrit tout de suite chiffre.
-    if key.is_some() && stored.iter().any(|s| !s.pass.is_empty()) {
-        write_servers(app, &list);
-    }
-    list
+        .collect()
 }
 
 // Ecriture ATOMIQUE. `fs::write` tronque le fichier a zero AVANT d'ecrire : un
@@ -653,53 +718,16 @@ fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Forme disque d'une liste de serveurs. Avec une cle : mots de passe chiffres.
-/// Sans cle (trousseau refuse) : on ne PERD rien — un serveur dont on n'a pas
-/// pu dechiffrer le mot de passe garde son ancien `passEnc` ; un mot de passe
-/// tape pendant cette session reste en clair, faute de mieux, jusqu'a la
-/// prochaine ecriture avec cle.
-fn to_stored(
-    list: &[Server],
-    key: Option<&[u8; 32]>,
-    previous: &[StoredServer],
-) -> Result<Vec<StoredServer>, String> {
-    list.iter()
-        .map(|s| {
-            let (pass, pass_enc) = match key {
-                Some(k) if !s.pass.is_empty() => (String::new(), crate::vault::encrypt(k, &s.pass)?),
-                Some(_) => (String::new(), String::new()),
-                None => {
-                    let kept = previous
-                        .iter()
-                        .find(|p| p.label == s.label && s.pass.is_empty())
-                        .map(|p| p.pass_enc.clone())
-                        .unwrap_or_default();
-                    (s.pass.clone(), kept)
-                }
-            };
-            Ok(StoredServer {
-                label: s.label.clone(),
-                host: s.host.clone(),
-                user: s.user.clone(),
-                pass,
-                pass_enc,
-                port: s.port.clone(),
-                start_dir: s.start_dir.clone(),
-            })
-        })
-        .collect()
-}
-
 // Un echec d'enregistrement ne doit pas etre silencieux : sinon l'utilisateur
 // croit son serveur memorise et le retrouve disparu au redemarrage, sans le
 // moindre indice. On previent le front, qui le journalise.
-fn write_servers(app: &AppHandle, list: &[Server]) {
-    let key = vault_key(app);
-    let previous = if key.is_none() { read_stored(app) } else { Vec::new() };
-    let res = to_stored(list, key.as_ref(), &previous)
-        .and_then(|stored| serde_json::to_string_pretty(&stored).map_err(|e| e.to_string()))
+// On ecrit TOUJOURS la forme disque telle quelle : les entrees protegees (dont
+// on ne connait pas forcement le mot de passe) sont recopiees sans y toucher.
+fn write_stored(app: &AppHandle, list: &[StoredServer]) -> Result<(), String> {
+    let res = serde_json::to_string_pretty(list)
+        .map_err(|e| e.to_string())
         .and_then(|json| write_atomic(&servers_path(app), &json).map_err(|e| e.to_string()));
-    if let Err(e) = res {
+    if let Err(e) = &res {
         let _ = app.emit(
             "copiteur://backend-error",
             if crate::i18n::en() {
@@ -709,6 +737,39 @@ fn write_servers(app: &AppHandle, list: &[Server]) {
             },
         );
     }
+    res
+}
+
+// Forme disque d'un serveur NON protege. Avec une cle : mot de passe chiffre.
+// Sans cle (trousseau refuse) : on ne PERD rien — un serveur dont on n'a pas pu
+// dechiffrer le mot de passe garde son ancien `passEnc` ; un mot de passe tape
+// pendant cette session reste en clair, faute de mieux, jusqu'a la prochaine
+// ecriture avec cle.
+fn plain_entry(
+    s: &Server,
+    key: Option<&[u8; 32]>,
+    prev: Option<&StoredServer>,
+) -> Result<StoredServer, String> {
+    let (pass, pass_enc) = match key {
+        Some(k) if !s.pass.is_empty() => (String::new(), crate::vault::encrypt(k, &s.pass)?),
+        Some(_) => (String::new(), String::new()),
+        None => {
+            let kept = prev
+                .filter(|p| s.pass.is_empty() && !p.locked())
+                .map(|p| p.pass_enc.clone())
+                .unwrap_or_default();
+            (s.pass.clone(), kept)
+        }
+    };
+    Ok(StoredServer {
+        pass,
+        pass_enc,
+        ..StoredServer::base(s)
+    })
+}
+
+fn err_text(fr: &str, en: &str) -> String {
+    if crate::i18n::en() { en.to_string() } else { fr.to_string() }
 }
 
 // Commandes `async` : le premier acces au trousseau peut afficher une demande
@@ -716,28 +777,253 @@ fn write_servers(app: &AppHandle, list: &[Server]) {
 // thread principal et figerait la fenetre le temps de la reponse.
 #[tauri::command]
 pub async fn list_servers(app: AppHandle) -> Vec<Server> {
-    read_servers(&app)
+    let _io = SERVERS_IO.lock().await;
+    let mut stored = read_stored(&app);
+    if stored.is_empty() {
+        return Vec::new();
+    }
+    let key = vault_key(&app);
+    // Conversion d'un fichier d'une ancienne version : des mots de passe en
+    // clair et un trousseau disponible -> on reecrit tout de suite chiffre.
+    if let Some(k) = key.as_ref() {
+        let mut changed = false;
+        for s in stored.iter_mut().filter(|s| !s.pass.is_empty() && !s.locked()) {
+            if let Ok(enc) = crate::vault::encrypt(k, &s.pass) {
+                s.pass_enc = enc;
+                s.pass.clear();
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = write_stored(&app, &stored);
+        }
+    }
+    public_list(&stored, key.as_ref())
 }
 
-// Ajoute ou met a jour (par label) un serveur memorise.
+/// Ajoute ou met a jour (par label) un serveur memorise.
+///
+/// `pin` : `None` = protection inchangee ; `Some("")` = la retirer ;
+/// `Some(code)` = proteger par ce code (ou le changer). Retirer ou changer le
+/// code d'un serveur deja protege exige qu'il ait ete deverrouille pendant ce
+/// lancement (sinon n'importe qui devant l'app pourrait le retirer).
 #[tauri::command]
-pub async fn save_server(app: AppHandle, server: Server) -> Vec<Server> {
-    let mut list = read_servers(&app);
-    if let Some(existing) = list.iter_mut().find(|s| s.label == server.label) {
-        *existing = server;
-    } else {
-        list.push(server);
+pub async fn save_server(
+    app: AppHandle,
+    server: Server,
+    pin: Option<String>,
+) -> Result<Vec<Server>, String> {
+    let _io = SERVERS_IO.lock().await;
+    let mut stored = read_stored(&app);
+    let key = vault_key(&app);
+    let idx = stored.iter().position(|s| s.label == server.label);
+    let prev = idx.map(|i| stored[i].clone());
+    let was_locked = prev.as_ref().is_some_and(StoredServer::locked);
+    let session = prev
+        .as_ref()
+        .filter(|p| p.locked())
+        .and_then(|p| pin_key_get(&server.label, &p.pin_salt));
+    if was_locked && pin.is_some() && session.is_none() {
+        return Err(err_text(
+            "Déverrouillez d'abord ce serveur avec son code PIN.",
+            "Unlock this server with its PIN first.",
+        ));
     }
-    write_servers(&app, &list);
-    list
+    // Cle de session a poser UNE FOIS l'ecriture reussie (sinon elle ne
+    // correspondrait pas a ce qui est sur le disque).
+    let mut new_session: Option<Option<(String, [u8; 32])>> = None;
+    let entry = match pin.as_deref() {
+        Some(code) if !code.is_empty() => {
+            if !crate::vault::pin_ok(code) {
+                return Err(err_text(
+                    "Le code PIN doit compter 4 à 8 chiffres.",
+                    "The PIN must be 4 to 8 digits.",
+                ));
+            }
+            let Some(vk) = key else {
+                return Err(err_text(
+                    "Trousseau du système inaccessible : impossible de poser un code PIN.",
+                    "System keychain unavailable: cannot set a PIN.",
+                ));
+            };
+            let salt = crate::vault::fresh_salt()?;
+            let (code, salt2) = (code.to_string(), salt.clone());
+            let pk = tauri::async_runtime::spawn_blocking(move || crate::vault::pin_key(&vk, &code, &salt2))
+                .await
+                .map_err(|e| e.to_string())??;
+            new_session = Some(Some((salt.clone(), pk)));
+            StoredServer {
+                pass_enc: crate::vault::encrypt(&pk, &server.pass)?,
+                pin_vault: crate::vault::vault_tag(&vk, &salt),
+                pin_salt: salt,
+                ..StoredServer::base(&server)
+            }
+        }
+        // Protection retiree (ou jamais posee) : chiffrement normal.
+        Some(_) => {
+            new_session = Some(None);
+            plain_entry(&server, key.as_ref(), prev.as_ref())?
+        }
+        None if was_locked => {
+            let p = prev.clone().unwrap_or_default();
+            match session {
+                // Deverrouille : tout peut changer, mot de passe rechiffre
+                // (il a pu changer) avec la cle de CE sel.
+                Some(pk) => StoredServer {
+                    pass_enc: if server.pass.is_empty() {
+                        p.pass_enc.clone()
+                    } else {
+                        crate::vault::encrypt(&pk, &server.pass)?
+                    },
+                    ..StoredServer::base(&server)
+                }
+                .with_lock_of(&p),
+                // Encore verrouille : seul le dossier de depart peut changer.
+                // Surtout pas l'hote — sinon on enverrait le vrai mot de passe
+                // a un autre serveur au prochain deverrouillage.
+                None => StoredServer {
+                    start_dir: server.start_dir.clone(),
+                    ..p
+                },
+            }
+        }
+        None => plain_entry(&server, key.as_ref(), prev.as_ref())?,
+    };
+    match idx {
+        Some(i) => stored[i] = entry,
+        None => stored.push(entry),
+    }
+    write_stored(&app, &stored)?;
+    if let Some(ns) = new_session {
+        pin_key_set(&server.label, ns);
+    }
+    Ok(public_list(&stored, key.as_ref()))
+}
+
+impl StoredServer {
+    /// Reprend le verrou (sel, empreinte, compteur) de `p`.
+    fn with_lock_of(self, p: &StoredServer) -> Self {
+        StoredServer {
+            pin_salt: p.pin_salt.clone(),
+            pin_vault: p.pin_vault.clone(),
+            pin_fails: p.pin_fails,
+            pin_until: p.pin_until,
+            ..self
+        }
+    }
+}
+
+/// Oublie la cle de session d'un serveur (deconnexion) : il faudra de nouveau
+/// son code pour l'ouvrir, le modifier ou retirer sa protection.
+#[tauri::command]
+pub fn lock_server(label: String) {
+    pin_key_set(&label, None);
+}
+
+/// Refus de `unlock_server`, lu par le front.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PinError {
+    /// Mauvais code ; `left` essais avant d'avoir a patienter (0 = la
+    /// prochaine erreur impose une attente).
+    Wrong { left: u32 },
+    /// Trop d'echecs : reessayer dans `secs` secondes.
+    Wait { secs: u64 },
+    Other { msg: String },
+}
+
+/// Essais libres avant la premiere attente, puis attente doublee a chaque
+/// nouvel echec (30 s, 1 min, 2 min… plafonnee a 1 h).
+const PIN_FREE_TRIES: u32 = 5;
+
+fn pin_wait_secs(fails: u32) -> u64 {
+    if fails < PIN_FREE_TRIES {
+        return 0;
+    }
+    let n = (fails - PIN_FREE_TRIES).min(7);
+    (30u64 << n).min(3600)
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Deverrouille un serveur protege : renvoie son mot de passe si le code est
+/// bon. Les echecs sont comptes SUR LE DISQUE (relancer l'app ne remet pas le
+/// compteur a zero).
+#[tauri::command]
+pub async fn unlock_server(app: AppHandle, label: String, pin: String) -> Result<String, PinError> {
+    let other = |msg: String| PinError::Other { msg };
+    // Un essai a la fois (cf. SERVERS_IO) : chacun voit l'attente et le
+    // compteur laisses par le precedent.
+    let _io = SERVERS_IO.lock().await;
+    let mut stored = read_stored(&app);
+    let Some(idx) = stored.iter().position(|s| s.label == label) else {
+        return Err(other(err_text("Serveur introuvable.", "Server not found.")));
+    };
+    let key = vault_key(&app).ok_or_else(|| {
+        other(err_text("Trousseau du système inaccessible.", "System keychain unavailable."))
+    })?;
+    let s = stored[idx].clone();
+    if !s.locked() {
+        return Ok(public_list(&[s], Some(&key)).remove(0).pass);
+    }
+    if !s.pin_vault.is_empty() && s.pin_vault != crate::vault::vault_tag(&key, &s.pin_salt) {
+        return Err(other(err_text(
+            "La clé du trousseau a changé depuis la pose du code : le mot de passe ne peut plus être déchiffré. Oubliez ce serveur et ajoutez-le de nouveau.",
+            "The keychain key changed since the PIN was set: the password can no longer be decrypted. Forget this server and add it again.",
+        )));
+    }
+    let now = now_secs();
+    if s.pin_until > now {
+        // Borne : une horloge qui a recule ne doit pas allonger l'attente
+        // au-dela de celle prevue pour ce nombre d'echecs.
+        return Err(PinError::Wait {
+            secs: (s.pin_until - now).min(pin_wait_secs(s.pin_fails).max(1)),
+        });
+    }
+    let salt = s.pin_salt.clone();
+    let pk = tauri::async_runtime::spawn_blocking(move || crate::vault::pin_key(&key, &pin, &salt))
+        .await
+        .map_err(|e| other(e.to_string()))?
+        .map_err(other)?;
+    let cur = &mut stored[idx];
+    match crate::vault::decrypt(&pk, &s.pass_enc) {
+        Some(p) => {
+            if cur.pin_fails != 0 || cur.pin_until != 0 {
+                cur.pin_fails = 0;
+                cur.pin_until = 0;
+                let _ = write_stored(&app, &stored);
+            }
+            pin_key_set(&label, Some((s.pin_salt.clone(), pk)));
+            Ok(p)
+        }
+        None => {
+            cur.pin_fails = cur.pin_fails.saturating_add(1);
+            let wait = pin_wait_secs(cur.pin_fails);
+            cur.pin_until = if wait > 0 { now + wait } else { 0 };
+            let fails = cur.pin_fails;
+            let _ = write_stored(&app, &stored);
+            Err(if wait > 0 {
+                PinError::Wait { secs: wait }
+            } else {
+                PinError::Wrong { left: PIN_FREE_TRIES - fails }
+            })
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn delete_server(app: AppHandle, label: String) -> Vec<Server> {
-    let mut list = read_servers(&app);
-    list.retain(|s| s.label != label);
-    write_servers(&app, &list);
-    list
+    let _io = SERVERS_IO.lock().await;
+    let mut stored = read_stored(&app);
+    stored.retain(|s| s.label != label);
+    pin_key_set(&label, None);
+    let _ = write_stored(&app, &stored);
+    public_list(&stored, vault_key(&app).as_ref())
 }
 
 // Renomme un serveur memorise (change son `label`, qui sert aussi de cle). Le
@@ -747,17 +1033,66 @@ pub async fn delete_server(app: AppHandle, label: String) -> Vec<Server> {
 #[tauri::command]
 pub async fn rename_server(app: AppHandle, old_label: String, new_label: String) -> Vec<Server> {
     let new_label = new_label.trim().to_string();
-    let mut list = read_servers(&app);
-    let taken = list
+    let _io = SERVERS_IO.lock().await;
+    let mut stored = read_stored(&app);
+    let taken = stored
         .iter()
         .any(|s| s.label != old_label && s.label == new_label);
     if !new_label.is_empty() && !taken {
-        if let Some(s) = list.iter_mut().find(|s| s.label == old_label) {
-            s.label = new_label;
+        if let Some(s) = stored.iter_mut().find(|s| s.label == old_label) {
+            s.label = new_label.clone();
+            if let Some(k) = pin_key_get(&old_label, &s.pin_salt) {
+                pin_key_set(&old_label, None);
+                pin_key_set(&new_label, Some((s.pin_salt.clone(), k)));
+            }
         }
-        write_servers(&app, &list);
+        let _ = write_stored(&app, &stored);
     }
-    list
+    public_list(&stored, vault_key(&app).as_ref())
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+
+    #[test]
+    fn attente_progressive() {
+        assert_eq!(pin_wait_secs(4), 0);
+        assert_eq!(pin_wait_secs(5), 30);
+        assert_eq!(pin_wait_secs(6), 60);
+        assert_eq!(pin_wait_secs(11), 1920);
+        assert_eq!(pin_wait_secs(12), 3600);
+        assert_eq!(pin_wait_secs(500), 3600);
+    }
+
+    #[test]
+    fn mot_de_passe_protege_jamais_envoye() {
+        let k = [7u8; 32];
+        let locked = StoredServer {
+            label: "nas".into(),
+            pass_enc: crate::vault::encrypt(&[9u8; 32], "secret").unwrap(),
+            pin_salt: "00".repeat(16),
+            ..Default::default()
+        };
+        let open = StoredServer {
+            label: "autre".into(),
+            pass_enc: crate::vault::encrypt(&k, "ouvert").unwrap(),
+            ..Default::default()
+        };
+        let l = public_list(&[locked, open], Some(&k));
+        assert!(l[0].locked && l[0].pass.is_empty());
+        assert!(!l[1].locked && l[1].pass == "ouvert");
+    }
+
+    #[test]
+    fn ancien_fichier_sans_pin() {
+        let s: StoredServer =
+            serde_json::from_str(r#"{"label":"a","host":"h","user":"u","passEnc":"v1:00","port":"22"}"#).unwrap();
+        assert!(!s.locked() && s.pin_fails == 0);
+        // Les champs PIN vides ne sont pas ecrits.
+        let j = serde_json::to_string(&s).unwrap();
+        assert!(!j.contains("pin"));
+    }
 }
 
 // ------------------------------------------------------------------
@@ -955,7 +1290,14 @@ mod open_tests {
             pass: pass.into(),
             port: "22".into(),
             start_dir: String::new(),
+            locked: false,
         }
+    }
+
+    fn to_stored(list: &[Server], key: Option<&[u8; 32]>, prev: &[StoredServer]) -> Result<Vec<StoredServer>, String> {
+        list.iter()
+            .map(|s| plain_entry(s, key, prev.iter().find(|p| p.label == s.label)))
+            .collect()
     }
 
     /// Avec une cle : aucun mot de passe en clair sur le disque, et il se relit.
@@ -992,6 +1334,15 @@ mod open_tests {
         let stored = to_stored(&[srv("nas", ""), srv("neuf", "tape")], None, &previous).unwrap();
         assert_eq!(stored[0].pass_enc, "v1:abcd");
         assert_eq!(stored[1].pass, "tape");
+        // Un ancien chiffre PROTEGE par PIN n'est jamais recopie dans une entree
+        // ordinaire (il serait illisible avec la cle du trousseau).
+        let verrouille = vec![StoredServer {
+            label: "nas".into(),
+            pass_enc: "v1:abcd".into(),
+            pin_salt: "00".into(),
+            ..Default::default()
+        }];
+        assert!(to_stored(&[srv("nas", "")], None, &verrouille).unwrap()[0].pass_enc.is_empty());
     }
 
     #[test]

@@ -47,6 +47,7 @@ import { UiIcon } from "./icons";
 import { t, tn, tx, useLang } from "./i18n";
 import { FirstRunLanguage } from "./i18n/LanguagePicker";
 import { ConnectSheet, MorphButton, WinTitleBar } from "./WindowChrome";
+import { PinDialog } from "./PinDialog";
 import { SourcePicker, type SourceMenuItem } from "./SourcePicker";
 import { useMacChrome, type MenuEntry as MacMenuEntry } from "./macChrome";
 import "./chrome.css";
@@ -288,6 +289,19 @@ export default function App() {
   // connexion le montre a cote des 4 autres champs ; en modification, il garde
   // le nom du serveur, qui est donc mis a jour au lieu d'etre duplique.
   const [name, setName] = useState("");
+  // Code PIN de la feuille : case « demander un code » + le code. En
+  // modification d'un serveur protege, pre-remplis avec le code qui vient de
+  // le deverrouiller.
+  const [pinOn, setPinOn] = useState(false);
+  const [sheetPin, setSheetPin] = useState("");
+  // Etat du code a l'ouverture de « Modifier… » : s'il n'a pas bouge, on
+  // n'envoie rien (sinon le backend refait la derivation lente pour rien).
+  const sheetPinOrig = useRef<{ label: string; on: boolean; pin: string } | null>(null);
+  // Demande de code PIN en cours (ouvrir ou modifier un serveur protege).
+  const [pinAsk, setPinAsk] = useState<{
+    label: string;
+    onOk: (pass: string, pin: string) => void;
+  } | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [showSettings, setShowSettings] = useState(false);
@@ -515,6 +529,7 @@ export default function App() {
     !!renameAsk ||
     closeAsk ||
     !!hostKeyAsk ||
+    !!pinAsk ||
     !!editAsk ||
     !!conflictAsk ||
     !!dmgMount ||
@@ -738,7 +753,15 @@ export default function App() {
   // `fromSheet` : connexion lancee par la feuille (nouveau serveur, ou serveur
   // modifie) — le panneau ne bascule qu'une fois connecte ; d'ici la, la
   // feuille montre l'attente et l'erreur, et le panneau garde ce qu'il affichait.
-  const connectServer = async (s: Server, pane: PaneId, force = false, fromSheet = false) => {
+  // `pin` (feuille seulement) : protection a enregistrer avec le serveur — ""
+  // = aucune, un code = proteger par ce code. Hors feuille : inchangee.
+  const connectServer = async (
+    s: Server,
+    pane: PaneId,
+    force = false,
+    fromSheet = false,
+    pin: string | null = null,
+  ) => {
     const label = s.label;
     if (!fromSheet) {
       setPaneSrc(pane, { kind: "server", label });
@@ -871,10 +894,18 @@ export default function App() {
       }
       logEvent("info", "connexion", t("app.log.connected", { target: `${u}@${h}:${pt}` }));
       // Enregistre / met a jour le serveur (label = nom donne, ou user@host).
-      const saved = await invoke<Server[]>("save_server", {
-        server: { label, host: h, user: u, pass: p, port: pt, startDir: memStart },
-      });
-      setServers(saved);
+      // A part : un refus d'enregistrer (code PIN) ne doit pas faire passer
+      // pour ratee une connexion qui, elle, a reussi.
+      try {
+        const saved = await invoke<Server[]>("save_server", {
+          server: { label, host: h, user: u, pass: p, port: pt, startDir: memStart },
+          pin: fromSheet ? pin : null,
+        });
+        setServers(saved);
+      } catch (e) {
+        setNotice(String(e));
+        logEvent("error", "connexion", String(e));
+      }
     } catch (e) {
       // Une tentative plus recente a pris la main : on se tait, c'est elle qui
       // decide desormais (ne pas ecraser son resultat avec notre echec).
@@ -884,11 +915,26 @@ export default function App() {
     }
   };
 
+  // Ouvre un serveur memorise. Protege par un code PIN : on le demande, sauf
+  // si sa connexion de ce lancement est encore la (son mot de passe est alors
+  // deja connu : une reconnexion apres une coupure ne redemande rien).
+  const openServer = (s: Server, pane: PaneId, force: boolean) => {
+    const c = connsRef.current[s.label];
+    if (!s.locked) return void connectServer(s, pane, force);
+    if (c) return void connectServer({ ...s, pass: c.server.pass }, pane, force);
+    setPinAsk({
+      label: s.label,
+      onOk: (pass) => {
+        setPinAsk(null);
+        connectServer({ ...s, pass }, pane, force);
+      },
+    });
+  };
   // Ouvre un serveur memorise dans un panneau (selecteur de source). Une
   // connexion en echec est retentee.
   const pickServer = (s: Server, pane: PaneId) => {
     const c = connsRef.current[s.label];
-    connectServer(s, pane, !!c && c.state === "error");
+    openServer(s, pane, !!c && c.state === "error");
   };
   const deleteServer = (label: string) => {
     invoke<Server[]>("delete_server", { label }).then(setServers).catch(() => {});
@@ -986,6 +1032,8 @@ export default function App() {
       return false;
     }
     connSeq.current[label] = (connSeq.current[label] ?? 0) + 1;
+    // Serveur protege : son code sera redemande a la prochaine ouverture.
+    invoke("lock_server", { label }).catch(() => {});
     setConns((cur) => {
       if (!cur[label]) return cur;
       const n = { ...cur };
@@ -1030,23 +1078,45 @@ export default function App() {
     setUser("");
     setPass("");
     setPort("");
+    setPinOn(false);
+    setSheetPin("");
+    sheetPinOrig.current = null;
     setSheetPane(pane);
     setSheetLabel(null);
     setConnectSheet("new");
   };
   // Rouvre la feuille sur un serveur (mot de passe change, autre port…). Garder
   // le meme nom met a jour le serveur memorise au lieu d'en creer un autre.
+  // Serveur protege : son code d'abord (la feuille montre le mot de passe et
+  // permet de retirer la protection).
   const editConnection = (label: string, pane: PaneId) => {
     const s = servers.find((x) => x.label === label);
     if (!s) return;
-    setHost(s.host);
-    setUser(s.user);
-    setPass(s.pass);
-    setPort(s.port);
-    setName(s.label);
-    setSheetPane(pane);
-    setSheetLabel(null);
-    setConnectSheet("edit");
+    const fill = (pw: string, pin: string) => {
+      setHost(s.host);
+      setUser(s.user);
+      setPass(pw);
+      setPort(s.port);
+      setName(s.label);
+      setPinOn(!!s.locked);
+      setSheetPin(pin);
+      sheetPinOrig.current = { label: s.label, on: !!s.locked, pin };
+      setSheetPane(pane);
+      setSheetLabel(null);
+      setConnectSheet("edit");
+    };
+    if (!s.locked) return fill(s.pass, "");
+    setPinAsk({
+      label,
+      onOk: (pw, pin) => {
+        setPinAsk(null);
+        fill(pw, pin);
+      },
+    });
+  };
+  const pinUnchanged = (label: string) => {
+    const o = sheetPinOrig.current;
+    return !!o && o.label === label && o.on === pinOn && (!pinOn || o.pin === sheetPin);
   };
   // « Se connecter » dans la feuille : nom facultatif (sinon « user@host »).
   const connectFromSheet = () => {
@@ -1064,6 +1134,7 @@ export default function App() {
       sheetPane,
       true,
       true,
+      pinUnchanged(label) ? null : pinOn ? sheetPin : "",
     );
   };
   const sheetConn = sheetLabel ? conns[sheetLabel] : undefined;
@@ -2509,7 +2580,7 @@ export default function App() {
             ? paneMsg(t("app.src.serverGone", { name: s.label }))
             : paneMsg(c?.state === "error" ? c.err : t("app.src.notConnected", { name: s.label }), {
                 label: c?.state === "error" ? t("common.retry") : t("app.conn.connect"),
-                run: () => connectServer(saved, pane, true),
+                run: () => openServer(saved, pane, true),
               });
       return { loc, enabled: false, epoch: c?.epoch ?? 0, placeholder, busy: c?.state === "connecting", icon: "server" };
     }
@@ -2591,7 +2662,9 @@ export default function App() {
             ? t("app.src.connected")
             : c?.state === "connecting"
               ? t("chrome.conn.connecting")
-              : undefined,
+              : sv.locked
+                ? t("app.src.pin")
+                : undefined,
         checked: cur.kind === "server" && cur.label === sv.label,
       });
     }
@@ -3043,6 +3116,15 @@ export default function App() {
         </div>
       )}
 
+      {pinAsk && (
+        <PinDialog
+          key={pinAsk.label}
+          label={pinAsk.label}
+          onCancel={() => setPinAsk(null)}
+          onOk={pinAsk.onOk}
+        />
+      )}
+
       {/* macOS : l'app tourne depuis son .dmg monte, pas encore installee. */}
       {dmgMount && (
         <div className="modal-backdrop">
@@ -3166,6 +3248,10 @@ export default function App() {
           setHost={setHost}
           setUser={setUser}
           setPass={setPass}
+          pinOn={pinOn}
+          setPinOn={setPinOn}
+          pin={sheetPin}
+          setPin={setSheetPin}
           setPort={setPort}
           connecting={sheetConn?.state === "connecting"}
           error={sheetConn?.state === "error" ? sheetConn.err : ""}
