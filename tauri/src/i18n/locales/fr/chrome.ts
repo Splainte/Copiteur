@@ -14,6 +14,10 @@ export default {
   "chrome.conn.forget": "Oublier ce serveur",
   "chrome.conn.disconnect": "Se déconnecter",
   "chrome.conn.busy": "Transferts en cours : la déconnexion attendra leur fin.",
+  "chrome.conn.pin": "Code PIN",
+  "chrome.conn.pinProtect": "Protéger par un code",
+  "chrome.conn.pinPlaceholder": "4 à 8 chiffres",
+  "chrome.conn.pinHint": "Demandé à chaque connexion (et pour modifier le serveur). Code oublié : oubliez le serveur, puis ajoutez-le de nouveau avec son mot de passe.",
 
   "chrome.pane.yourMac": "Ton Mac",
   "chrome.rename.title": "Renommer le serveur",

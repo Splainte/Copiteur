@@ -14,6 +14,10 @@ export default {
   "chrome.conn.forget": "Forget this server",
   "chrome.conn.disconnect": "Disconnect",
   "chrome.conn.busy": "Transfers running: disconnecting will wait for them to finish.",
+  "chrome.conn.pin": "PIN",
+  "chrome.conn.pinProtect": "Protect with a PIN",
+  "chrome.conn.pinPlaceholder": "4 to 8 digits",
+  "chrome.conn.pinHint": "Asked at every connection (and to edit the server). Forgot it: forget the server, then add it again with its password.",
 
   "chrome.pane.yourMac": "Your Mac",
   "chrome.rename.title": "Rename server",

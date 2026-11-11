@@ -104,6 +104,55 @@ pub fn key(config_dir: &Path) -> Result<[u8; 32], String> {
         .clone()
 }
 
+// ------------------------------------------------------------------
+//  Code PIN d'un serveur
+//
+//  Le mot de passe d'un serveur protege n'est PAS chiffre avec la seule cle du
+//  trousseau (que l'app lit sans rien demander) mais avec une cle qui exige
+//  AUSSI le code : Argon2id(PIN, sel) melange par HMAC a la cle du trousseau.
+//  - sans le code, l'app elle-meme ne peut pas le dechiffrer : le front ne le
+//    recoit qu'apres le bon PIN ;
+//  - le fichier seul ne suffit pas a essayer les codes hors ligne : il faut
+//    aussi la cle du trousseau ;
+//  - chaque essai coute ~0,3 s et 64 Mio (Argon2id), et l'app espace les
+//    essais apres plusieurs echecs (cf. engine.rs).
+//  Un code de 4 a 8 chiffres reste un verrou contre l'usage de la session par
+//  quelqu'un d'autre, pas un coffre-fort contre un attaquant qui a deja le
+//  trousseau ET le fichier.
+// ------------------------------------------------------------------
+
+/// Un PIN valable : 4 a 8 chiffres.
+pub fn pin_ok(pin: &str) -> bool {
+    (4..=8).contains(&pin.len()) && pin.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Sel aleatoire d'un PIN (16 octets, en hexa dans `serveurs.json`).
+pub fn fresh_salt() -> Result<String, String> {
+    let mut s = [0u8; 16];
+    getrandom::fill(&mut s).map_err(|e| e.to_string())?;
+    Ok(to_hex(&s))
+}
+
+/// Cle d'un serveur protege. Lente EXPRES (Argon2id 64 Mio, 3 passes) : a
+/// appeler hors du thread principal.
+pub fn pin_key(vault: &[u8; 32], pin: &str, salt_hex: &str) -> Result<[u8; 32], String> {
+    use argon2::{Algorithm, Argon2, Params, Version};
+    let salt = from_hex(salt_hex).ok_or("sel illisible")?;
+    let params = Params::new(64 * 1024, 3, 1, Some(32)).map_err(|e| e.to_string())?;
+    let mut slow = [0u8; 32];
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+        .hash_password_into(pin.as_bytes(), &salt, &mut slow)
+        .map_err(|e| e.to_string())?;
+    let mac = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, vault);
+    let mut ctx = ring::hmac::Context::with_key(&mac);
+    ctx.update(b"copiteur-pin-v1");
+    ctx.update(&slow);
+    let tag = ctx.sign();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(tag.as_ref());
+    Ok(out)
+}
+
 fn to_hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -170,6 +219,25 @@ mod tests {
         assert_eq!(decrypt(&k, &abime), None);
         assert_eq!(decrypt(&k, "v1:zz"), None);
         assert_eq!(decrypt(&k, "clair"), None);
+    }
+
+    #[test]
+    fn pin() {
+        assert!(pin_ok("1234") && pin_ok("12345678"));
+        assert!(!pin_ok("123") && !pin_ok("123456789") && !pin_ok("12a4") && !pin_ok("١٢٣٤"));
+        let v = fresh_key().unwrap();
+        let sel = fresh_salt().unwrap();
+        let k = pin_key(&v, "4821", &sel).unwrap();
+        // Meme code, meme sel, meme trousseau : meme cle.
+        assert_eq!(k, pin_key(&v, "4821", &sel).unwrap());
+        let e = encrypt(&k, "secret").unwrap();
+        assert_eq!(decrypt(&k, &e).as_deref(), Some("secret"));
+        // Mauvais code, autre sel, autre trousseau : rien.
+        assert_eq!(decrypt(&pin_key(&v, "4822", &sel).unwrap(), &e), None);
+        assert_eq!(decrypt(&pin_key(&v, "4821", &fresh_salt().unwrap()).unwrap(), &e), None);
+        assert_eq!(decrypt(&pin_key(&fresh_key().unwrap(), "4821", &sel).unwrap(), &e), None);
+        // La cle du trousseau seule n'ouvre pas un mot de passe protege.
+        assert_eq!(decrypt(&v, &e), None);
     }
 
     #[cfg(unix)]

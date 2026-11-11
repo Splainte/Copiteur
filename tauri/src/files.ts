@@ -90,6 +90,9 @@ export type Server = {
   // Dossier de depart memorise : chemin ABSOLU sur le serveur ("/share/…").
   // Absent/"" = pas de dossier de depart. Optionnel pour compat anciens serveurs.
   startDir?: string;
+  // Protege par un code PIN : `pass` arrive alors VIDE, il faut le demander
+  // (PinDialog -> `unlock_server`). Renvoye par le backend, jamais lu par lui.
+  locked?: boolean;
 };
 
 // Un telephone Android branche en USB (macOS), tel que le decrit le backend
