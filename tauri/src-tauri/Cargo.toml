@@ -1,6 +1,6 @@
 [package]
 name = "copiteur"
-version = "1.5.0"
+version = "1.5.1"
 description = "Copiteur — client de transfert de fichiers natif (rclone)"
 authors = ["Splainte"]
 edition = "2021"
