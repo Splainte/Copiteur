@@ -25,7 +25,6 @@ import {
   isUploadXfer,
   touchesPhone,
   PANES,
-  otherPane,
   type Loc,
   type PaneId,
   type PaneBus,
@@ -360,12 +359,11 @@ export default function App() {
   const clipboard = useRef<Payload | null>(null);
   const busyRef = useRef(false);
 
-  // Donner le focus a un volet DESELECTIONNE l'autre : une seule selection
-  // active a la fois. Sans ca, cliquer dans le volet distant en gardant une
-  // selection dans le volet local laissait les deux selections vivantes.
-  // Le garde `active !== side` evite de vider l'autre a chaque clic interne.
+  // Donner le focus a un volet NE TOUCHE PAS a la selection de l'autre : on
+  // selectionne a gauche, on va naviguer a droite jusqu'au bon dossier, et la
+  // selection de gauche est toujours la (affichee en gris, panneau inactif).
+  // Les raccourcis (copier, coller, supprimer…) visent le panneau actif.
   const focusPane = (pane: PaneId) => {
-    if (active !== pane) panes.current[otherPane(pane)].clearSelection();
     setActive(pane);
   };
   busyRef.current = xfers.some((x) => !isFinal(x));
