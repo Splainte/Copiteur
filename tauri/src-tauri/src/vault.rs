@@ -153,6 +153,18 @@ pub fn pin_key(vault: &[u8; 32], pin: &str, salt_hex: &str) -> Result<[u8; 32], 
     Ok(out)
 }
 
+/// Empreinte de la cle du trousseau pour un sel donne (`pinVault` sur le
+/// disque). Si le trousseau a ete reinitialise, elle ne correspond plus : on
+/// le dit, au lieu de compter le BON code comme un mauvais. Ne revele rien du
+/// PIN ni de la cle.
+pub fn vault_tag(vault: &[u8; 32], salt_hex: &str) -> String {
+    let mac = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, vault);
+    let mut ctx = ring::hmac::Context::with_key(&mac);
+    ctx.update(b"copiteur-vault-check-v1");
+    ctx.update(salt_hex.as_bytes());
+    to_hex(&ctx.sign().as_ref()[..8])
+}
+
 fn to_hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -238,6 +250,9 @@ mod tests {
         assert_eq!(decrypt(&pin_key(&fresh_key().unwrap(), "4821", &sel).unwrap(), &e), None);
         // La cle du trousseau seule n'ouvre pas un mot de passe protege.
         assert_eq!(decrypt(&v, &e), None);
+        // Empreinte du trousseau : stable, et differente pour un autre trousseau.
+        assert_eq!(vault_tag(&v, &sel), vault_tag(&v, &sel));
+        assert_ne!(vault_tag(&v, &sel), vault_tag(&fresh_key().unwrap(), &sel));
     }
 
     #[cfg(unix)]

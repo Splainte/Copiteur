@@ -294,6 +294,9 @@ export default function App() {
   // le deverrouiller.
   const [pinOn, setPinOn] = useState(false);
   const [sheetPin, setSheetPin] = useState("");
+  // Etat du code a l'ouverture de « Modifier… » : s'il n'a pas bouge, on
+  // n'envoie rien (sinon le backend refait la derivation lente pour rien).
+  const sheetPinOrig = useRef<{ label: string; on: boolean; pin: string } | null>(null);
   // Demande de code PIN en cours (ouvrir ou modifier un serveur protege).
   const [pinAsk, setPinAsk] = useState<{
     label: string;
@@ -1029,6 +1032,8 @@ export default function App() {
       return false;
     }
     connSeq.current[label] = (connSeq.current[label] ?? 0) + 1;
+    // Serveur protege : son code sera redemande a la prochaine ouverture.
+    invoke("lock_server", { label }).catch(() => {});
     setConns((cur) => {
       if (!cur[label]) return cur;
       const n = { ...cur };
@@ -1075,6 +1080,7 @@ export default function App() {
     setPort("");
     setPinOn(false);
     setSheetPin("");
+    sheetPinOrig.current = null;
     setSheetPane(pane);
     setSheetLabel(null);
     setConnectSheet("new");
@@ -1094,6 +1100,7 @@ export default function App() {
       setName(s.label);
       setPinOn(!!s.locked);
       setSheetPin(pin);
+      sheetPinOrig.current = { label: s.label, on: !!s.locked, pin };
       setSheetPane(pane);
       setSheetLabel(null);
       setConnectSheet("edit");
@@ -1106,6 +1113,10 @@ export default function App() {
         fill(pw, pin);
       },
     });
+  };
+  const pinUnchanged = (label: string) => {
+    const o = sheetPinOrig.current;
+    return !!o && o.label === label && o.on === pinOn && (!pinOn || o.pin === sheetPin);
   };
   // « Se connecter » dans la feuille : nom facultatif (sinon « user@host »).
   const connectFromSheet = () => {
@@ -1123,7 +1134,7 @@ export default function App() {
       sheetPane,
       true,
       true,
-      pinOn ? sheetPin : "",
+      pinUnchanged(label) ? null : pinOn ? sheetPin : "",
     );
   };
   const sheetConn = sheetLabel ? conns[sheetLabel] : undefined;
